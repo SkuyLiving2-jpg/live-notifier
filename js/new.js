@@ -6,7 +6,12 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const IDN_API_URL = "https://api.idn.app/graphql";
 const POLL_INTERVAL_MS = 30000;
-const CACHE_FILE = path.join(__dirname, "..", "active-lives-cache.json");
+
+// CACHE_DIR bisa di-override lewat environment variable (misalnya diarahkan
+// ke mount point Railway Volume) biar cache-nya tahan lintas redeploy juga.
+// Kalau nggak diset, default-nya folder data/ di root project.
+const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, "..", "data");
+const CACHE_FILE = path.join(CACHE_DIR, "active-lives-cache.json");
 
 if (!DISCORD_WEBHOOK_URL) {
   console.error("DISCORD_WEBHOOK_URL belum diset di environment variable. Bot berhenti.");
@@ -34,6 +39,7 @@ function loadActiveLives() {
 
 function saveActiveLives() {
   try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
     fs.writeFileSync(CACHE_FILE, JSON.stringify(Object.fromEntries(activeLives), null, 2));
   } catch (error) {
     console.error("Gagal nyimpen cache ke file:", error.message);
