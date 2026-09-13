@@ -1,0 +1,13 @@
+{
+  "name": "jkt48-idn-live-notifier",
+  "version": "1.0.0",
+  "description": "Bot polling IDN Live untuk kirim notifikasi Discord saat member JKT48 mulai/selesai live",
+  "main": "js/new.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node js/new.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
