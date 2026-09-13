@@ -1,8 +1,12 @@
-require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") });
+const fs = require("fs");
+const path = require("path");
+
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const IDN_API_URL = "https://api.idn.app/graphql";
 const POLL_INTERVAL_MS = 30000;
+const CACHE_FILE = path.join(__dirname, "..", "active-lives-cache.json");
 
 if (!DISCORD_WEBHOOK_URL) {
   console.error("DISCORD_WEBHOOK_URL belum diset di environment variable. Bot berhenti.");
@@ -16,7 +20,27 @@ const JKT48_USERNAME_WHITELIST = [
 ];
 
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug }
-const activeLives = new Map();
+// Disimpan juga ke file (CACHE_FILE) biar kalau proses restart (crash, atau
+// container-nya di-restart), bot nggak ngirim ulang notif "mulai live" buat
+// member yang sebenernya udah live dari sebelum restart.
+function loadActiveLives() {
+  try {
+    const raw = fs.readFileSync(CACHE_FILE, "utf-8");
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch (error) {
+    return new Map();
+  }
+}
+
+function saveActiveLives() {
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(Object.fromEntries(activeLives), null, 2));
+  } catch (error) {
+    console.error("Gagal nyimpen cache ke file:", error.message);
+  }
+}
+
+const activeLives = loadActiveLives();
 
 function isJkt48Member(creator) {
   if (!creator) return false;
@@ -75,6 +99,7 @@ async function checkLiveMembers() {
         const terkirim = await sendDiscordNotif(live.creator.name, live.creator.username, live.slug, "start");
         if (terkirim) {
           activeLives.set(username, { name: live.creator.name, username, slug: live.slug });
+          saveActiveLives();
         }
         // kalau gagal kirim, username sengaja nggak ditambahin
         // biar dicoba lagi di polling berikutnya
@@ -87,6 +112,7 @@ async function checkLiveMembers() {
         const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end");
         if (terkirim) {
           activeLives.delete(username);
+          saveActiveLives();
         }
         // kalau gagal kirim, sengaja nggak dihapus dari cache
         // biar dicoba lagi di polling berikutnya
