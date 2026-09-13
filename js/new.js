@@ -400,14 +400,22 @@ function getSortedActiveLives() {
   return [...activeLives.values()].sort((a, b) => new Date(a.liveAt) - new Date(b.liveAt));
 }
 
+// Di bawah 30 menit dianggap "baru live", 30 menit ke atas "udah live".
+const NEW_LIVE_THRESHOLD_MS = 30 * 60000;
+
+function describeElapsed(ms) {
+  const prefix = ms < NEW_LIVE_THRESHOLD_MS ? "baru live" : "udah live";
+  return `${prefix} ${formatDuration(ms)}`;
+}
+
 function replyListLive() {
   const sorted = getSortedActiveLives();
   if (sorted.length === 0) return "Cok, lagi nggak ada member JKT48 yang live nih.";
 
   const lines = sorted.map((entry, i) => {
-    const elapsed = formatDuration(Date.now() - new Date(entry.liveAt).getTime());
+    const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
     const viewText = entry.viewCount != null ? ` | 👁️ ${entry.viewCount}` : "";
-    return `${i + 1}. **${entry.name}** - udah live ${elapsed}${viewText}`;
+    return `${i + 1}. **${entry.name}** - ${elapsedText}${viewText}`;
   });
 
   return `Cok, ini yang lagi live (urut dari paling lama):\n${lines.join("\n")}`;
@@ -417,8 +425,8 @@ function replyLongestLive() {
   const sorted = getSortedActiveLives();
   if (sorted.length === 0) return "Cok, lagi nggak ada yang live.";
   const longest = sorted[0];
-  const elapsed = formatDuration(Date.now() - new Date(longest.liveAt).getTime());
-  return `Yang paling lama live sekarang: **${longest.name}**, udah ${elapsed}.`;
+  const elapsedText = describeElapsed(Date.now() - new Date(longest.liveAt).getTime());
+  return `Yang paling lama live sekarang: **${longest.name}**, ${elapsedText}.`;
 }
 
 function replyBotStatus() {
@@ -426,9 +434,9 @@ function replyBotStatus() {
 }
 
 function replySpecificMember(entry) {
-  const elapsed = formatDuration(Date.now() - new Date(entry.liveAt).getTime());
+  const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
   const liveUrl = `https://idn.app/${entry.username}/live/${entry.slug}`;
-  return `**${entry.name}** lagi live, udah ${elapsed}. ${liveUrl}`;
+  return `**${entry.name}** lagi live, ${elapsedText}. ${liveUrl}`;
 }
 
 function replyHelp() {
