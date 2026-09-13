@@ -24,6 +24,25 @@ const JKT48_USERNAME_WHITELIST = [
   // "username_idn_member",
 ];
 
+// Member prioritas: notifikasinya dibikin jauh lebih flashy/urgent (embed +
+// opsional mention) dibanding member JKT48 lain. Diurutkan dari yang paling
+// emergency ke bawah - urutan ini nentuin intensitas warna & tone pesannya.
+const PRIORITY_MEMBERS = [
+  { rank: 1, keyword: "nala", label: "NALA", color: 0xff0000, sirens: "🚨🔥🚨" },
+  { rank: 2, keyword: "levi", label: "LEVI", color: 0xff8c00, sirens: "🚨⚡🚨" },
+  { rank: 3, keyword: "lily", label: "LILY", color: 0xffd700, sirens: "🚨✨🚨" },
+];
+
+// ID user Discord yang mau di-mention khusus buat notif prioritas (opsional).
+// Cara dapetinnya: di Discord, aktifin Developer Mode di Settings > Advanced,
+// terus klik kanan nama kamu sendiri > Copy User ID.
+const PRIORITY_PING_USER_ID = process.env.PRIORITY_PING_USER_ID || "";
+
+function getPriorityConfig(memberName, username) {
+  const text = `${memberName || ""} ${username || ""}`.toLowerCase();
+  return PRIORITY_MEMBERS.find((p) => text.includes(p.keyword)) || null;
+}
+
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug }
 // Disimpan juga ke file (CACHE_FILE) biar kalau proses restart (crash, atau
 // container-nya di-restart), bot nggak ngirim ulang notif "mulai live" buat
@@ -129,16 +148,54 @@ async function checkLiveMembers() {
   }
 }
 
+function buildNormalPayload(memberName, liveUrl, status) {
+  return status === "end"
+    ? { content: `✅ **${memberName}** udah selesai live di IDN Live.` }
+    : { content: `🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}` };
+}
+
+function buildPriorityPayload(memberName, liveUrl, status, priority) {
+  const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
+
+  if (status === "end") {
+    return {
+      content: `${mention}${priority.sirens} Live prioritas **#${priority.rank} ${priority.label}** udah selesai.`,
+      embeds: [
+        {
+          title: `${priority.label} sudah selesai live`,
+          description: memberName,
+          color: priority.color,
+          url: liveUrl,
+        },
+      ],
+    };
+  }
+
+  return {
+    content: `${mention}${priority.sirens.repeat(2)} **JANGAN SAMPE KETINGGALAN!** ${priority.sirens.repeat(2)}`,
+    embeds: [
+      {
+        title: `⚡ PRIORITAS #${priority.rank}: ${priority.label} LIVE SEKARANG! ⚡`,
+        description: `**${memberName}** baru aja mulai live di IDN Live.\n\n[🔴 **TONTON SEKARANG**](${liveUrl})`,
+        url: liveUrl,
+        color: priority.color,
+        footer: { text: "IDN Live Priority Alert" },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
 async function sendDiscordNotif(memberName, username, slug, status = "start") {
   // Tanpa "www" biar konsisten sama link yang di-generate tombol Share di
   // app IDN sendiri (lebih besar kemungkinan ke-handle sebagai App
   // Link/Universal Link, alias langsung buka app di HP kalau appnya
   // udah ke-install, bukan buka browser).
   const liveUrl = `https://idn.app/${username}/live/${slug}`;
-  const payload =
-    status === "end"
-      ? { content: `✅ **${memberName}** udah selesai live di IDN Live.` }
-      : { content: `🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}` };
+  const priority = getPriorityConfig(memberName, username);
+  const payload = priority
+    ? buildPriorityPayload(memberName, liveUrl, status, priority)
+    : buildNormalPayload(memberName, liveUrl, status);
 
   try {
     const response = await fetch(DISCORD_WEBHOOK_URL, {
