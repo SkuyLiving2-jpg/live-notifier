@@ -108,8 +108,8 @@ function recordLiveDuration(username, durationMs) {
   saveDurationHistory(history);
 }
 
-function getAverageDuration(username) {
-  const list = loadDurationHistory()[username] || [];
+function getAverageDuration(durationHistory, username) {
+  const list = durationHistory[username] || [];
   if (list.length === 0) return null;
   return list.reduce((total, ms) => total + ms, 0) / list.length;
 }
@@ -186,6 +186,9 @@ async function checkLiveMembers() {
   try {
     const currentLives = await fetchAllLivestreams();
     const currentLiveUsernames = new Set();
+    // Dibaca sekali per siklus polling (bukan sekali per member yang live)
+    // biar nggak buka file yang sama berkali-kali kalau lagi banyak yang live.
+    const durationHistory = loadDurationHistory();
 
     for (const live of currentLives) {
       const username = live?.creator?.username;
@@ -215,7 +218,7 @@ async function checkLiveMembers() {
         // "kemungkinan mendekati akhir" (cuma buat member prioritas)
         const entry = activeLives.get(username);
         entry.viewCount = live.view_count;
-        await maybeAlertEndingSoon(entry);
+        await maybeAlertEndingSoon(entry, durationHistory);
       }
     }
 
@@ -315,13 +318,13 @@ async function sendDiscordNotif(memberName, username, slug, status = "start") {
 // dibanding rata-rata durasi live orang itu sebelumnya (atau ambang default
 // kalau belum ada riwayat). Bisa aja meleset - dipicu sekali doang per sesi
 // live biar nggak spam.
-async function maybeAlertEndingSoon(entry) {
+async function maybeAlertEndingSoon(entry, durationHistory) {
   const priority = getPriorityConfig(entry.name, entry.username);
   if (!priority) return; // heuristik ini cuma buat 3 member prioritas
   if (entry.endingSoonAlerted || !entry.liveAt) return;
 
   const elapsedMs = Date.now() - new Date(entry.liveAt).getTime();
-  const avgMs = getAverageDuration(entry.username);
+  const avgMs = getAverageDuration(durationHistory, entry.username);
   const thresholdMs = avgMs ? avgMs * 0.8 : DEFAULT_ENDING_SOON_THRESHOLD_MS;
 
   if (elapsedMs >= thresholdMs) {
