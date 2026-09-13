@@ -130,7 +130,11 @@ async function checkLiveMembers() {
 }
 
 async function sendDiscordNotif(memberName, username, slug, status = "start") {
-  const liveUrl = `https://www.idn.app/${username}/live/${slug}`;
+  // Tanpa "www" biar konsisten sama link yang di-generate tombol Share di
+  // app IDN sendiri (lebih besar kemungkinan ke-handle sebagai App
+  // Link/Universal Link, alias langsung buka app di HP kalau appnya
+  // udah ke-install, bukan buka browser).
+  const liveUrl = `https://idn.app/${username}/live/${slug}`;
   const payload =
     status === "end"
       ? { content: `✅ **${memberName}** udah selesai live di IDN Live.` }
