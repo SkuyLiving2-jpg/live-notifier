@@ -1,11 +1,18 @@
 const fs = require("fs");
 const path = require("path");
+const { requireSignedRequest } = require("./security");
 
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const IDN_API_URL = "https://api.idn.app/graphql";
 const POLL_INTERVAL_MS = 30000;
+
+// Secret buat sistem signature (API_KEY + HMAC-SHA256) yang ngelindungin
+// endpoint API kita dari akses sembarangan - dipakai kalau nanti nambah
+// endpoint yang nyajiin data (bukan buat health-check, itu sengaja tetap
+// publik biar Railway/UptimeRobot bisa akses tanpa signature).
+const API_SECRET = process.env.API_SECRET || "";
 
 // CACHE_DIR bisa di-override lewat environment variable (misalnya diarahkan
 // ke mount point Railway Volume) biar cache-nya tahan lintas redeploy juga.
@@ -377,13 +384,46 @@ async function pollLoop() {
   setTimeout(pollLoop, POLL_INTERVAL_MS);
 }
 
+// Endpoint contoh yang dilindungi signature - nunjukkin data internal bot
+// yang lebih detail dibanding health-check publik. Pola ini yang dipake
+// kalau nanti nambah endpoint lain yang nyajiin data beneran.
+function handleProtectedStatus(req, res) {
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      status: "ok",
+      uptimeSeconds: Math.floor(process.uptime()),
+      activeLivesCount: activeLives.size,
+      activeLives: [...activeLives.values()].map((entry) => ({
+        name: entry.name,
+        username: entry.username,
+        liveAt: entry.liveAt,
+      })),
+    }),
+  );
+}
+
 // Railway (dan platform hosting sejenis) ngecek apakah service "sehat" dengan
 // nunggu ada port yang kebuka. Bot ini murni background process tanpa server
 // HTTP, jadi tanpa ini Railway bisa nganggep container-nya nggak sehat dan
 // restart terus-menerus. Server kecil ini cuma buat "ngasih tanda hidup".
+//
+// /api/status sengaja dipisah dan dilindungi signature - health-check di "/"
+// TETAP publik tanpa signature, karena Railway & UptimeRobot manggil itu
+// tanpa tahu cara nge-sign request.
 const PORT = process.env.PORT || 3000;
 require("http")
   .createServer((req, res) => {
+    if (req.url === "/api/status") {
+      if (!API_SECRET) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "API_SECRET belum diset di server" }));
+        return;
+      }
+      requireSignedRequest(API_SECRET, handleProtectedStatus)(req, res);
+      return;
+    }
+
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("JKT48 IDN Live notifier is running.\n");
   })
