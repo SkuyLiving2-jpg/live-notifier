@@ -129,10 +129,16 @@ function isJkt48Member(creator) {
   return text.includes("jkt48");
 }
 
-async function checkLiveMembers() {
+// getLivestreams IDN itu di-paging (halaman 1 cuma nampilin ~12 live
+// teratas). Kalo cuma ambil halaman pertama, live yang penontonnya sedikit
+// (biasanya yang lebih baru mulai) bisa nangkring di halaman 2+ dan nggak
+// pernah kedeteksi. Jadi kita ambil terus tiap halaman sampai kosong.
+const MAX_LIVESTREAM_PAGES = 20; // jaga-jaga biar nggak infinite loop
+
+async function fetchAllLivestreams() {
   const query = `
-    query GetLivestreams {
-      getLivestreams {
+    query GetLivestreams($page: Int) {
+      getLivestreams(page: $page) {
         creator {
           username
           name
@@ -146,26 +152,39 @@ async function checkLiveMembers() {
     }
   `;
 
-  try {
+  const allLives = [];
+
+  for (let page = 1; page <= MAX_LIVESTREAM_PAGES; page++) {
     const response = await fetch(IDN_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, variables: { page } }),
     });
 
     if (!response.ok) {
-      throw new Error(`IDN API balikin status ${response.status}`);
+      throw new Error(`IDN API balikin status ${response.status} (halaman ${page})`);
     }
 
     const result = await response.json();
 
     if (result.errors) {
-      throw new Error(`GraphQL error: ${JSON.stringify(result.errors)}`);
+      throw new Error(`GraphQL error (halaman ${page}): ${JSON.stringify(result.errors)}`);
     }
 
-    const currentLives = result?.data?.getLivestreams || [];
+    const lives = result?.data?.getLivestreams || [];
+    if (lives.length === 0) break; // udah abis halamannya
+
+    allLives.push(...lives);
+  }
+
+  return allLives;
+}
+
+async function checkLiveMembers() {
+  try {
+    const currentLives = await fetchAllLivestreams();
     const currentLiveUsernames = new Set();
 
     for (const live of currentLives) {
