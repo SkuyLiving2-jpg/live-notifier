@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const IDN_API_URL = "https://api.idn.app/graphql";
 const POLL_INTERVAL_MS = 30000;
