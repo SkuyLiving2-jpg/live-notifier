@@ -164,5 +164,19 @@ async function pollLoop() {
   setTimeout(pollLoop, POLL_INTERVAL_MS);
 }
 
+// Railway (dan platform hosting sejenis) ngecek apakah service "sehat" dengan
+// nunggu ada port yang kebuka. Bot ini murni background process tanpa server
+// HTTP, jadi tanpa ini Railway bisa nganggep container-nya nggak sehat dan
+// restart terus-menerus. Server kecil ini cuma buat "ngasih tanda hidup".
+const PORT = process.env.PORT || 3000;
+require("http")
+  .createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("JKT48 IDN Live notifier is running.\n");
+  })
+  .listen(PORT, () => {
+    console.log(`Health check server listening on port ${PORT}`);
+  });
+
 console.log("Bot notifikasi IDN Live jalan...");
 pollLoop();
