@@ -435,6 +435,22 @@ require("http")
 // siapa aja?"). Pesan yang nggak nyebut salah satu kata ini bakal diabaikan,
 // biar bot nggak ikut respon ke obrolan biasa di channel.
 const CHAT_WAKE_WORDS = ["cok"];
+// Kata-kata yang nunjukkin pesannya kemungkinan nanya soal live, walau nggak
+// nyebut "cok" sama sekali (misal "siapa yang live?"). Supaya nggak ke-trigger
+// tiap kali kata "live" muncul di obrolan biasa, ini cuma dianggap "nanya ke
+// bot" kalau ada tanda tanya atau kata tanya juga di pesannya.
+const TOPIC_WORDS = ["live"];
+const QUESTION_HINTS = ["?", "siapa", "apa", "gimana", "kapan", "berapa"];
+
+function getGreeting() {
+  const hourWIB = Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jakarta", hour: "numeric", hour12: false }).format(new Date()),
+  );
+  if (hourWIB >= 4 && hourWIB < 11) return "pagi";
+  if (hourWIB >= 11 && hourWIB < 15) return "siang";
+  if (hourWIB >= 15 && hourWIB < 18) return "sore";
+  return "malam";
+}
 
 function getSortedActiveLives() {
   return [...activeLives.values()].sort((a, b) => new Date(a.liveAt) - new Date(b.liveAt));
@@ -489,10 +505,28 @@ function replyHelp() {
   ].join("\n");
 }
 
+// Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
+// pertanyaan yang udah dikenali - dikasih menu daripada bot diem aja.
+function replyFallbackMenu() {
+  const ownerContact = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}>` : "owner channel ini";
+  return [
+    `Halo, selamat ${getGreeting()}! Apa yang ingin kamu tanyakan?`,
+    "1. Siapa saja yang masih live?",
+    "2. Status live sekarang",
+    "3. Siapa yang paling lama live per hari ini?",
+    "4. Apakah <nama member> masih live?",
+    "",
+    `Kalau ada pertanyaan lain, silakan hubungi ${ownerContact}.`,
+  ].join("\n");
+}
+
 function buildChatReply(rawContent) {
   const text = (rawContent || "").toLowerCase();
-  const isAddressedToBot = CHAT_WAKE_WORDS.some((w) => text.includes(w));
-  if (!isAddressedToBot) return null;
+  const mentionsBot = CHAT_WAKE_WORDS.some((w) => text.includes(w));
+  const looksLikeLiveQuestion =
+    TOPIC_WORDS.some((w) => text.includes(w)) && QUESTION_HINTS.some((w) => text.includes(w));
+
+  if (!mentionsBot && !looksLikeLiveQuestion) return null;
 
   if (text.includes("live") && (text.includes("paling lama") || text.includes("udah lama"))) {
     return replyLongestLive();
@@ -516,7 +550,9 @@ function buildChatReply(rawContent) {
     }
   }
 
-  return null;
+  // Nyebut bot/nanya soal live tapi nggak match pola yang dikenal -> kasih
+  // menu daripada diem aja.
+  return replyFallbackMenu();
 }
 
 // Fitur tanya-jawab ini opsional - kalau DISCORD_BOT_TOKEN nggak diset,
