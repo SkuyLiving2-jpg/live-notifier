@@ -26,6 +26,13 @@ const DURATION_HISTORY_FILE = path.join(CACHE_DIR, "live-duration-history.json")
 // diset, notifikasi tetap jalan normal, cuma fitur tanya-jawabnya mati.
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
 
+// Opsional - ID channel Discord tempat bot boleh lebih "agresif" balas
+// (hampir semua pesan yang gak dikenali dibalas menu options, gak perlu
+// nyebut "cok"/"live"). Channel lain tetap butuh wake word biar gak ganggu
+// obrolan biasa. Cara dapetin ID channel: Developer Mode di Discord Settings
+// > Advanced, terus klik kanan nama channel-nya > Copy Channel ID.
+const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID || "";
+
 // Perkiraan "kemungkinan mendekati akhir" buat member prioritas dipicu kalau
 // durasi live udah ngelewatin ambang ini (kalau belum ada riwayat durasi
 // buat member itu). Bisa di-override lewat env var, satuannya menit.
@@ -520,9 +527,11 @@ function replyFallbackMenu() {
   ].join("\n");
 }
 
-function buildChatReply(rawContent) {
+function buildChatReply(rawContent, isBotChannel = false) {
   const text = (rawContent || "").toLowerCase();
-  const mentionsBot = CHAT_WAKE_WORDS.some((w) => text.includes(w));
+  // Di channel khusus bot, hampir semua pesan dianggap "ditujukan ke bot" -
+  // gak perlu nyebut "cok" atau "live" dulu.
+  const mentionsBot = isBotChannel || CHAT_WAKE_WORDS.some((w) => text.includes(w));
   const looksLikeLiveQuestion =
     TOPIC_WORDS.some((w) => text.includes(w)) && QUESTION_HINTS.some((w) => text.includes(w));
 
@@ -570,7 +579,8 @@ if (DISCORD_BOT_TOKEN) {
   chatClient.on("messageCreate", async (message) => {
     try {
       if (message.author.bot) return;
-      const reply = buildChatReply(message.content);
+      const isBotChannel = Boolean(BOT_CHANNEL_ID) && message.channel.id === BOT_CHANNEL_ID;
+      const reply = buildChatReply(message.content, isBotChannel);
       if (reply) await message.reply(reply);
     } catch (error) {
       console.error("Gagal balas chat:", error.message);
