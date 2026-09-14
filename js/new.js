@@ -139,8 +139,12 @@ function isJkt48Member(creator) {
   if (!creator) return false;
   if (JKT48_USERNAME_WHITELIST.includes(creator.username)) return true;
 
-  const text = `${creator.name || ""} ${creator.bio_description || ""}`.toLowerCase();
-  return text.includes("jkt48");
+  // Semua akun IDN resmi member JKT48 konsisten pakai username berawalan
+  // "jkt48_" (misal jkt48_levi, jkt48_nala). Sebelumnya kode ini nge-cek
+  // apakah kata "jkt48" muncul di bio profil - itu rapuh, soalnya akun fans
+  // atau reaction channel juga sering nyebut "JKT48" di bio mereka padahal
+  // bukan member asli, jadi nembus filter dan ikut kekirim notifikasi.
+  return typeof creator.username === "string" && creator.username.toLowerCase().startsWith("jkt48_");
 }
 
 // getLivestreams IDN itu di-paging (halaman 1 cuma nampilin ~12 live
@@ -502,6 +506,28 @@ function replySpecificMember(entry) {
   return `**${entry.name}** lagi live, ${elapsedText}. ${liveUrl}`;
 }
 
+function replyMemberNotFound(fragment) {
+  return `Cok, nggak nemu member "${fragment}" yang lagi live. Coba cek ejaannya, atau tanya "cok siapa yang live" buat liat daftarnya.`;
+}
+
+// Nama akun IDN biasanya "Nala JKT48" atau "Piya | Karafuru Idol Group" -
+// yang orang beneran ketik biasanya cuma nama depannya ("Nala", "Piya"),
+// bukan nama lengkap persis. Jadi cocokin ke kata pertama dari nama-nya,
+// bukan nyari nama lengkap sebagai substring persis (itu penyebab bug-nya).
+function findMemberByNameFragment(fragment) {
+  const needle = (fragment || "").trim().toLowerCase();
+  if (!needle) return null;
+
+  for (const entry of activeLives.values()) {
+    if (!entry.name) continue;
+    const givenName = entry.name.split(/[\s|]+/)[0].toLowerCase();
+    if (givenName && (needle.includes(givenName) || givenName.includes(needle))) {
+      return entry;
+    }
+  }
+  return null;
+}
+
 function replyHelp() {
   return [
     "Cok bisa jawab ini:",
@@ -511,6 +537,13 @@ function replyHelp() {
     '- "cok <nama member> masih live?"',
   ].join("\n");
 }
+
+// Channel -> kapan terakhir menu fallback ditampilin di situ. Dipake biar
+// user bisa balas cukup ketik angkanya doang (1-4) abis menu-nya muncul -
+// tapi CUMA kalau menu-nya baru aja beneran ditampilin duluan, biar ketik
+// angka "mentah" tanpa konteks tetap nunjukkin menu-nya dulu (bukan nebak).
+const pendingMenuByChannel = new Map();
+const PENDING_MENU_TTL_MS = 3 * 60000;
 
 // Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
 // pertanyaan yang udah dikenali - dikasih menu daripada bot diem aja.
@@ -523,12 +556,41 @@ function replyFallbackMenu() {
     "3. Siapa yang paling lama live per hari ini?",
     "4. Apakah <nama member> masih live?",
     "",
+    '(Abis ini kamu bisa balas cukup ketik angkanya aja, misal "1" atau "4 Nala")',
+    "",
     `Kalau ada pertanyaan lain, silakan hubungi ${ownerContact}.`,
   ].join("\n");
 }
 
-function buildChatReply(rawContent, isBotChannel = false) {
-  const text = (rawContent || "").toLowerCase();
+function tryHandleMenuShortcut(text, channelId) {
+  if (!channelId) return null;
+
+  const shownAt = pendingMenuByChannel.get(channelId);
+  const isPending = shownAt && Date.now() - shownAt <= PENDING_MENU_TTL_MS;
+  if (!isPending) return null;
+
+  const match = text.match(/^([1-4])\s*(.*)$/);
+  if (!match) return null;
+
+  const [, choice, rest] = match;
+  pendingMenuByChannel.delete(channelId); // sekali pake abis itu clear
+
+  if (choice === "1") return replyListLive();
+  if (choice === "2") return replyBotStatus();
+  if (choice === "3") return replyLongestLive();
+
+  // choice === "4"
+  if (!rest) return 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".';
+  const found = findMemberByNameFragment(rest);
+  return found ? replySpecificMember(found) : replyMemberNotFound(rest);
+}
+
+function buildChatReply(rawContent, { isBotChannel = false, channelId = null } = {}) {
+  const text = (rawContent || "").toLowerCase().trim();
+
+  const shortcutReply = tryHandleMenuShortcut(text, channelId);
+  if (shortcutReply) return shortcutReply;
+
   // Di channel khusus bot, hampir semua pesan dianggap "ditujukan ke bot" -
   // gak perlu nyebut "cok" atau "live" dulu.
   const mentionsBot = isBotChannel || CHAT_WAKE_WORDS.some((w) => text.includes(w));
@@ -553,14 +615,14 @@ function buildChatReply(rawContent, isBotChannel = false) {
     return replyHelp();
   }
 
-  for (const entry of activeLives.values()) {
-    if (entry.name && text.includes(entry.name.toLowerCase()) && text.includes("live")) {
-      return replySpecificMember(entry);
-    }
+  const matchedMember = findMemberByNameFragment(text);
+  if (matchedMember) {
+    return replySpecificMember(matchedMember);
   }
 
   // Nyebut bot/nanya soal live tapi nggak match pola yang dikenal -> kasih
-  // menu daripada diem aja.
+  // menu daripada diem aja, dan inget channel ini abis dikasih menu.
+  if (channelId) pendingMenuByChannel.set(channelId, Date.now());
   return replyFallbackMenu();
 }
 
@@ -580,7 +642,7 @@ if (DISCORD_BOT_TOKEN) {
     try {
       if (message.author.bot) return;
       const isBotChannel = Boolean(BOT_CHANNEL_ID) && message.channel.id === BOT_CHANNEL_ID;
-      const reply = buildChatReply(message.content, isBotChannel);
+      const reply = buildChatReply(message.content, { isBotChannel, channelId: message.channel.id });
       if (reply) await message.reply(reply);
     } catch (error) {
       console.error("Gagal balas chat:", error.message);
