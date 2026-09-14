@@ -60,12 +60,75 @@ const PRIORITY_MEMBERS = [
 
 // ID user Discord yang mau di-mention khusus buat notif prioritas (opsional).
 // Cara dapetinnya: di Discord, aktifin Developer Mode di Settings > Advanced,
-// terus klik kanan nama kamu sendiri > Copy User ID.
+// terus klik kanan nama kamu sendiri > Copy User ID. ID yang sama ini juga
+// dipake buat nentuin siapa "owner" yang boleh kelola daftar prioritas lewat chat.
 const PRIORITY_PING_USER_ID = process.env.PRIORITY_PING_USER_ID || "";
+
+// Fitur: owner bisa nambah/hapus member prioritas lewat chat ("cok tambah
+// prioritas <nama>") tanpa perlu ubah kode. Yang custom disimpen di file
+// terpisah dari 3 bawaan (Nala/Levi/Lily), jadi ketiga itu nggak bisa
+// kehapus via chat. Di-cache di memori biar nggak baca file berkali-kali
+// tiap kali dicek (sama kayak fix performa riwayat durasi sebelumnya).
+const CUSTOM_PRIORITY_FILE = path.join(CACHE_DIR, "custom-priority.json");
+const PRIORITY_COLOR_PALETTE = [0x1abc9c, 0x9b59b6, 0x3498db, 0x2ecc71, 0xe91e63];
+let customPriorityCache = null;
+
+function loadCustomPriorityMembers() {
+  if (customPriorityCache === null) {
+    try {
+      customPriorityCache = JSON.parse(fs.readFileSync(CUSTOM_PRIORITY_FILE, "utf-8"));
+    } catch (error) {
+      customPriorityCache = [];
+    }
+  }
+  return customPriorityCache;
+}
+
+function saveCustomPriorityMembers(list) {
+  customPriorityCache = list;
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(CUSTOM_PRIORITY_FILE, JSON.stringify(list, null, 2));
+  } catch (error) {
+    console.error("Gagal nyimpen daftar prioritas custom:", error.message);
+  }
+}
+
+function getAllPriorityMembers() {
+  return [...PRIORITY_MEMBERS, ...loadCustomPriorityMembers()];
+}
+
+function addCustomPriorityMember(rawKeyword) {
+  const keyword = (rawKeyword || "").trim().toLowerCase();
+  if (!keyword) return { ok: false, reason: "empty" };
+
+  const all = getAllPriorityMembers();
+  if (all.some((p) => p.keyword === keyword)) return { ok: false, reason: "exists" };
+
+  const custom = loadCustomPriorityMembers();
+  custom.push({
+    rank: all.length + 1,
+    keyword,
+    label: keyword.toUpperCase(),
+    color: PRIORITY_COLOR_PALETTE[custom.length % PRIORITY_COLOR_PALETTE.length],
+    sirens: "🚨💥🚨",
+  });
+  saveCustomPriorityMembers(custom);
+  return { ok: true };
+}
+
+function removeCustomPriorityMember(rawKeyword) {
+  const keyword = (rawKeyword || "").trim().toLowerCase();
+  const custom = loadCustomPriorityMembers();
+  const filtered = custom.filter((p) => p.keyword !== keyword);
+  if (filtered.length === custom.length) return { ok: false, reason: "not_found" };
+  saveCustomPriorityMembers(filtered);
+  return { ok: true };
+}
 
 function getPriorityConfig(memberName, username) {
   const text = `${memberName || ""} ${username || ""}`.toLowerCase();
-  return PRIORITY_MEMBERS.find((p) => text.includes(p.keyword)) || null;
+  return getAllPriorityMembers().find((p) => text.includes(p.keyword)) || null;
 }
 
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug }
@@ -114,10 +177,13 @@ function saveDurationHistory(history) {
   }
 }
 
-function recordLiveDuration(username, durationMs) {
+// Tiap entry nyimpen { name, durationMs, at } - nama-nya kepake buat fitur
+// stats & pengumuman rekor, biar bisa nyari riwayat orang yang LAGI NGGAK
+// live (activeLives udah kehapus begitu dia selesai live).
+function recordLiveDuration(username, name, durationMs) {
   const history = loadDurationHistory();
   const list = history[username] || [];
-  list.push(durationMs);
+  list.push({ name, durationMs, at: new Date().toISOString() });
   history[username] = list.slice(-10);
   saveDurationHistory(history);
 }
@@ -125,7 +191,31 @@ function recordLiveDuration(username, durationMs) {
 function getAverageDuration(durationHistory, username) {
   const list = durationHistory[username] || [];
   if (list.length === 0) return null;
-  return list.reduce((total, ms) => total + ms, 0) / list.length;
+  return list.reduce((total, item) => total + item.durationMs, 0) / list.length;
+}
+
+// Rekor durasi live TERLAMA sebelum live yang baru aja selesai ini (buat
+// bandingin apakah ini rekor baru). Return null kalau belum ada riwayat.
+function getPreviousMaxDuration(durationHistory, username) {
+  const list = durationHistory[username] || [];
+  if (list.length === 0) return null;
+  return Math.max(...list.map((item) => item.durationMs));
+}
+
+function findDurationHistoryByNameFragment(fragment) {
+  const needle = (fragment || "").trim().toLowerCase();
+  if (!needle) return null;
+
+  const history = loadDurationHistory();
+  for (const [username, entries] of Object.entries(history)) {
+    if (entries.length === 0) continue;
+    const displayName = entries[entries.length - 1].name || username;
+    const givenName = displayName.split(/[\s|]+/)[0].toLowerCase();
+    if (givenName && (needle.includes(givenName) || givenName.includes(needle))) {
+      return { username, displayName, entries };
+    }
+  }
+  return null;
 }
 
 function formatDuration(ms) {
@@ -133,6 +223,108 @@ function formatDuration(ms) {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return hours > 0 ? `${hours}j ${minutes}m` : `${minutes}m`;
+}
+
+// --- Rekap harian: sekali sehari, ringkasan siapa aja yang live hari itu ---
+const DAILY_LOG_FILE = path.join(CACHE_DIR, "daily-log.json");
+const DAILY_RECAP_HOUR = Number(process.env.DAILY_RECAP_HOUR) || 23; // jam WIB
+
+function getTodayWIB() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+}
+
+function getHourWIB() {
+  return Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jakarta", hour: "numeric", hour12: false }).format(new Date()),
+  );
+}
+
+function loadDailyLog() {
+  const today = getTodayWIB();
+  try {
+    const data = JSON.parse(fs.readFileSync(DAILY_LOG_FILE, "utf-8"));
+    if (data.date !== today) return { date: today, entries: [], recapSentDate: data.recapSentDate || null };
+    return data;
+  } catch (error) {
+    return { date: today, entries: [], recapSentDate: null };
+  }
+}
+
+function saveDailyLog(log) {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(DAILY_LOG_FILE, JSON.stringify(log, null, 2));
+  } catch (error) {
+    console.error("Gagal nyimpen log harian:", error.message);
+  }
+}
+
+function recordDailyEntry(name, durationMs) {
+  const log = loadDailyLog();
+  log.entries.push({ name, durationMs });
+  saveDailyLog(log);
+}
+
+async function maybeSendDailyRecap() {
+  if (getHourWIB() < DAILY_RECAP_HOUR) return;
+
+  const log = loadDailyLog();
+  if (log.recapSentDate === log.date) return; // udah kekirim hari ini
+
+  if (log.entries.length > 0) {
+    const totalLives = log.entries.length;
+    const totalDurationMs = log.entries.reduce((sum, e) => sum + e.durationMs, 0);
+    const longest = log.entries.reduce((max, e) => (e.durationMs > max.durationMs ? e : max), log.entries[0]);
+    const uniqueMembers = new Set(log.entries.map((e) => e.name)).size;
+
+    const payload = {
+      content: [
+        `📋 **Rekap live hari ini (${log.date})**`,
+        `Total live: ${totalLives}x dari ${uniqueMembers} member`,
+        `Total durasi gabungan: ${formatDuration(totalDurationMs)}`,
+        `Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
+      ].join("\n"),
+    };
+
+    try {
+      const response = await fetch(DISCORD_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`Discord webhook balikin status ${response.status}`);
+      console.log("Rekap harian terkirim");
+    } catch (error) {
+      console.error("Gagal ngirim rekap harian:", error.message);
+    }
+  }
+
+  log.recapSentDate = log.date;
+  saveDailyLog(log);
+}
+
+// Selebrasi kalau live yang baru aja selesai itu rekor durasi TERLAMA buat
+// member itu (dibanding riwayat sebelumnya). Dicek SEBELUM live barusan
+// dicatet ke riwayat, biar dibandingin ke rekor LAMA-nya, bukan diri sendiri.
+async function maybeAnnounceNewRecord(username, memberName, durationMs, durationHistory) {
+  const previousMax = getPreviousMaxDuration(durationHistory, username);
+  if (previousMax === null || durationMs <= previousMax) return;
+
+  const payload = {
+    content: `🏆 **${memberName}** baru aja pecahin rekor durasi live-nya sendiri! Sebelumnya paling lama ${formatDuration(previousMax)}, sekarang ${formatDuration(durationMs)} 🎉`,
+  };
+
+  try {
+    const response = await fetch(DISCORD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`Discord webhook balikin status ${response.status}`);
+    console.log(`Notif rekor baru terkirim untuk ${memberName}`);
+  } catch (error) {
+    console.error("Gagal ngirim notif rekor:", error.message);
+  }
 }
 
 function isJkt48Member(creator) {
@@ -247,7 +439,9 @@ async function checkLiveMembers() {
         if (terkirim) {
           if (memberData.liveAt) {
             const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
-            recordLiveDuration(username, durationMs);
+            await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
+            recordLiveDuration(username, memberData.name, durationMs);
+            recordDailyEntry(memberData.name, durationMs);
           }
           activeLives.delete(username);
           saveActiveLives();
@@ -256,6 +450,8 @@ async function checkLiveMembers() {
         // biar dicoba lagi di polling berikutnya
       }
     }
+
+    await maybeSendDailyRecap();
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);
   }
@@ -535,7 +731,48 @@ function replyHelp() {
     '- "cok siapa yang paling lama live?"',
     '- "cok status"',
     '- "cok <nama member> masih live?"',
+    '- "cok stats <nama member>" - statistik durasi live-nya',
+    '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
   ].join("\n");
+}
+
+function replyMemberStats(fragment) {
+  const found = findDurationHistoryByNameFragment(fragment);
+  if (!found || found.entries.length === 0) {
+    return `Cok, belum ada data riwayat live buat "${fragment.trim()}".`;
+  }
+
+  const durations = found.entries.map((e) => e.durationMs);
+  const total = durations.reduce((a, b) => a + b, 0);
+  const avg = total / durations.length;
+  const max = Math.max(...durations);
+
+  return [
+    `📊 Statistik **${found.displayName}** (${durations.length} live terakhir yang ke-track):`,
+    `- Rata-rata durasi: ${formatDuration(avg)}`,
+    `- Rekor terlama: ${formatDuration(max)}`,
+  ].join("\n");
+}
+
+function isOwner(authorId) {
+  return Boolean(PRIORITY_PING_USER_ID) && authorId === PRIORITY_PING_USER_ID;
+}
+
+function handleAddPriority(nameFragment, authorId) {
+  if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ubah daftar prioritas.";
+  const name = nameFragment.trim();
+  const result = addCustomPriorityMember(name);
+  if (!result.ok && result.reason === "exists") return `"${name}" udah ada di daftar prioritas.`;
+  if (!result.ok) return "Gagal nambahin, coba lagi.";
+  return `✅ "${name}" ditambahin ke daftar prioritas, notif live-nya bakal jadi flashy sekarang.`;
+}
+
+function handleRemovePriority(nameFragment, authorId) {
+  if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ubah daftar prioritas.";
+  const name = nameFragment.trim();
+  const result = removeCustomPriorityMember(name);
+  if (!result.ok) return `"${name}" nggak ketemu di daftar prioritas custom (Nala/Levi/Lily nggak bisa dihapus lewat chat).`;
+  return `✅ "${name}" dihapus dari daftar prioritas.`;
 }
 
 // Channel -> kapan terakhir menu fallback ditampilin di situ. Dipake biar
@@ -585,7 +822,7 @@ function tryHandleMenuShortcut(text, channelId) {
   return found ? replySpecificMember(found) : replyMemberNotFound(rest);
 }
 
-function buildChatReply(rawContent, { isBotChannel = false, channelId = null } = {}) {
+function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
 
   const shortcutReply = tryHandleMenuShortcut(text, channelId);
@@ -598,6 +835,21 @@ function buildChatReply(rawContent, { isBotChannel = false, channelId = null } =
     TOPIC_WORDS.some((w) => text.includes(w)) && QUESTION_HINTS.some((w) => text.includes(w));
 
   if (!mentionsBot && !looksLikeLiveQuestion) return null;
+
+  const addPriorityMatch = text.match(/tambah(?:in)?\s+prioritas\s+(.+)/);
+  if (addPriorityMatch) {
+    return handleAddPriority(addPriorityMatch[1], authorId);
+  }
+
+  const removePriorityMatch = text.match(/hapus\s+prioritas\s+(.+)/);
+  if (removePriorityMatch) {
+    return handleRemovePriority(removePriorityMatch[1], authorId);
+  }
+
+  const statsMatch = text.match(/stat(?:s|istik)\s+(.+)/);
+  if (statsMatch) {
+    return replyMemberStats(statsMatch[1]);
+  }
 
   if (text.includes("live") && (text.includes("paling lama") || text.includes("udah lama"))) {
     return replyLongestLive();
@@ -642,7 +894,11 @@ if (DISCORD_BOT_TOKEN) {
     try {
       if (message.author.bot) return;
       const isBotChannel = Boolean(BOT_CHANNEL_ID) && message.channel.id === BOT_CHANNEL_ID;
-      const reply = buildChatReply(message.content, { isBotChannel, channelId: message.channel.id });
+      const reply = buildChatReply(message.content, {
+        isBotChannel,
+        channelId: message.channel.id,
+        authorId: message.author.id,
+      });
       if (reply) await message.reply(reply);
     } catch (error) {
       console.error("Gagal balas chat:", error.message);
