@@ -101,6 +101,11 @@ function getAllPriorityMembers() {
 function addCustomPriorityMember(rawKeyword) {
   const keyword = (rawKeyword || "").trim().toLowerCase();
   if (!keyword) return { ok: false, reason: "empty" };
+  // Keyword pendek (1-2 huruf) matching-nya pakai text.includes() di
+  // getPriorityConfig - itu bisa nyantol ke nama/username siapa aja yang
+  // kebetulan ngandung huruf itu. Sama kelas bug kayak yang di pencarian
+  // nama member, jadi dicegah dari sumbernya.
+  if (keyword.length < 3) return { ok: false, reason: "too_short" };
 
   const all = getAllPriorityMembers();
   if (all.some((p) => p.keyword === keyword)) return { ok: false, reason: "exists" };
@@ -129,6 +134,75 @@ function removeCustomPriorityMember(rawKeyword) {
 function getPriorityConfig(memberName, username) {
   const text = `${memberName || ""} ${username || ""}`.toLowerCase();
   return getAllPriorityMembers().find((p) => text.includes(p.keyword)) || null;
+}
+
+// Fitur: SIAPA AJA (bukan cuma owner) bisa "cok ingetin <nama>" buat di-tag
+// pribadi tiap kali member itu mulai live - beda dari 3 member prioritas yang
+// hardcoded, ini per-user dan bisa buat member manapun. Disimpen keyword ->
+// daftar user ID yang subscribe, cache di memori kayak custom-priority.
+const SUBSCRIPTIONS_FILE = path.join(CACHE_DIR, "subscriptions.json");
+let subscriptionsCache = null;
+
+function loadSubscriptions() {
+  if (subscriptionsCache === null) {
+    try {
+      subscriptionsCache = JSON.parse(fs.readFileSync(SUBSCRIPTIONS_FILE, "utf-8"));
+    } catch (error) {
+      subscriptionsCache = {};
+    }
+  }
+  return subscriptionsCache;
+}
+
+function saveSubscriptions(map) {
+  subscriptionsCache = map;
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(map, null, 2));
+  } catch (error) {
+    console.error("Gagal nyimpen daftar subscription:", error.message);
+  }
+}
+
+function addSubscription(rawKeyword, userId) {
+  const keyword = (rawKeyword || "").trim().toLowerCase();
+  if (!keyword) return { ok: false, reason: "empty" };
+  if (keyword.length < 3) return { ok: false, reason: "too_short" };
+
+  const subs = loadSubscriptions();
+  const list = subs[keyword] || [];
+  if (list.includes(userId)) return { ok: false, reason: "already" };
+
+  list.push(userId);
+  subs[keyword] = list;
+  saveSubscriptions(subs);
+  return { ok: true };
+}
+
+function removeSubscription(rawKeyword, userId) {
+  const keyword = (rawKeyword || "").trim().toLowerCase();
+  const subs = loadSubscriptions();
+  const list = subs[keyword] || [];
+  const filtered = list.filter((id) => id !== userId);
+  if (filtered.length === list.length) return { ok: false, reason: "not_found" };
+
+  if (filtered.length === 0) delete subs[keyword];
+  else subs[keyword] = filtered;
+  saveSubscriptions(subs);
+  return { ok: true };
+}
+
+// User yang udah di-mention lewat PRIORITY_PING_USER_ID sengaja di-exclude
+// di sini biar nggak dobel tag di notif member prioritas.
+function getSubscribersFor(memberName, username) {
+  const text = `${memberName || ""} ${username || ""}`.toLowerCase();
+  const subs = loadSubscriptions();
+  const ids = new Set();
+  for (const [keyword, list] of Object.entries(subs)) {
+    if (text.includes(keyword)) list.forEach((id) => ids.add(id));
+  }
+  ids.delete(PRIORITY_PING_USER_ID);
+  return [...ids];
 }
 
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug }
@@ -241,6 +315,15 @@ function formatDuration(ms) {
   return hours > 0 ? `${hours}j ${minutes}m` : `${minutes}m`;
 }
 
+function formatRelativeTime(date) {
+  const diffMin = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+  if (diffMin < 60) return `${diffMin} menit lalu`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} jam lalu`;
+  const diffDay = Math.floor(diffHour / 24);
+  return `${diffDay} hari lalu`;
+}
+
 // --- Rekap harian: sekali sehari, ringkasan siapa aja yang live hari itu ---
 const DAILY_LOG_FILE = path.join(CACHE_DIR, "daily-log.json");
 const DAILY_RECAP_HOUR = Number(process.env.DAILY_RECAP_HOUR) || 23; // jam WIB
@@ -343,6 +426,73 @@ async function maybeAnnounceNewRecord(username, memberName, durationMs, duration
   }
 }
 
+// "Party Mode": momen 2+ member prioritas (Nala/Levi/Lily/custom) live
+// BARENGAN itu momen langka & seru - pantes dikasih alert khusus di luar
+// notif "mulai live" biasa-biasa tiap orang. Dipanggil abis notif "start"
+// buat member prioritas berhasil kekirim, jadi otomatis nge-refresh ("Nala &
+// Levi" -> "Nala & Levi & Lily") tiap kali ada tambahan anggota partynya.
+async function maybePartyModeAlert() {
+  const liveNow = [...activeLives.values()].filter((entry) => getPriorityConfig(entry.name, entry.username));
+  if (liveNow.length < 2) return;
+
+  const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
+  const names = liveNow.map((entry) => `**${entry.name}**`).join(" & ");
+
+  const payload = {
+    content: `${mention}🎉🔥 **PARTY MODE AKTIF!** 🔥🎉\n${liveNow.length} member prioritas live BARENGAN: ${names}!\nSaatnya split-screen! 📱📱`,
+  };
+
+  try {
+    const response = await fetch(DISCORD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`Discord webhook balikin status ${response.status}`);
+    console.log("Party Mode alert terkirim");
+  } catch (error) {
+    console.error("Gagal ngirim Party Mode alert:", error.message);
+  }
+}
+
+// Ambang jumlah penonton buat alert "tembus milestone" - sekali per ambang
+// per sesi live (dicatet di entry.alertedMilestones), berlaku buat SEMUA
+// member JKT48 (bukan cuma prioritas), soalnya lonjakan penonton itu sinyal
+// bagus buat ikutan nonton siapapun membernya.
+const VIEWER_MILESTONES = [1000, 5000, 10000, 20000, 50000];
+
+async function maybeAlertViewerMilestone(entry) {
+  if (entry.viewCount == null) return;
+  entry.alertedMilestones = entry.alertedMilestones || [];
+
+  for (const milestone of VIEWER_MILESTONES) {
+    if (entry.viewCount >= milestone && !entry.alertedMilestones.includes(milestone)) {
+      entry.alertedMilestones.push(milestone);
+      saveActiveLives();
+      await sendViewerMilestoneAlert(entry, milestone);
+    }
+  }
+}
+
+async function sendViewerMilestoneAlert(entry, milestone) {
+  const liveUrl = `https://idn.app/${entry.username}/live/${entry.slug}`;
+  const payload = {
+    content: `🎯 **${entry.name}** baru aja tembus **${milestone.toLocaleString("id-ID")} penonton**! 👀🔥\n${liveUrl}`,
+  };
+
+  try {
+    const response = await fetch(DISCORD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`Discord webhook balikin status ${response.status}`);
+    console.log(`Milestone ${milestone} penonton terkirim untuk ${entry.name}`);
+  } catch (error) {
+    console.error("Gagal ngirim alert milestone penonton:", error.message);
+  }
+}
+
 function isJkt48Member(creator) {
   if (!creator) return false;
   if (JKT48_USERNAME_WHITELIST.includes(creator.username)) return true;
@@ -434,17 +584,23 @@ async function checkLiveMembers() {
             liveAt: live.live_at,
             viewCount: live.view_count,
             endingSoonAlerted: false,
+            alertedMilestones: [],
           });
           saveActiveLives();
+          if (getPriorityConfig(live.creator.name, live.creator.username)) {
+            await maybePartyModeAlert();
+          }
         }
         // kalau gagal kirim, username sengaja nggak ditambahin
         // biar dicoba lagi di polling berikutnya
       } else {
         // udah live dari sebelumnya - update data terbaru & cek heuristik
-        // "kemungkinan mendekati akhir" (cuma buat member prioritas)
+        // "kemungkinan mendekati akhir" (cuma buat member prioritas) + cek
+        // milestone jumlah penonton (buat semua member JKT48)
         const entry = activeLives.get(username);
         entry.viewCount = live.view_count;
         await maybeAlertEndingSoon(entry, durationHistory);
+        await maybeAlertViewerMilestone(entry);
       }
     }
 
@@ -521,6 +677,14 @@ async function sendDiscordNotif(memberName, username, slug, status = "start") {
   const payload = priority
     ? buildPriorityPayload(memberName, liveUrl, status, priority)
     : buildNormalPayload(memberName, liveUrl, status);
+
+  if (status === "start") {
+    const subscriberIds = getSubscribersFor(memberName, username);
+    if (subscriberIds.length > 0) {
+      const mentions = subscriberIds.map((id) => `<@${id}>`).join(" ");
+      payload.content = `${payload.content}\n${mentions} kamu subscribe notif buat member ini!`;
+    }
+  }
 
   try {
     const response = await fetch(DISCORD_WEBHOOK_URL, {
@@ -748,6 +912,8 @@ function replyHelp() {
     '- "cok status"',
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
+    '- "cok ingetin <nama member>" - kamu di-tag pribadi kalau dia mulai live',
+    '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
   ].join("\n");
 }
@@ -779,6 +945,7 @@ function handleAddPriority(nameFragment, authorId) {
   const name = nameFragment.trim();
   const result = addCustomPriorityMember(name);
   if (!result.ok && result.reason === "exists") return `"${name}" udah ada di daftar prioritas.`;
+  if (!result.ok && result.reason === "too_short") return "Nama/keyword-nya kependekan, minimal 3 huruf ya.";
   if (!result.ok) return "Gagal nambahin, coba lagi.";
   return `✅ "${name}" ditambahin ke daftar prioritas, notif live-nya bakal jadi flashy sekarang.`;
 }
@@ -789,6 +956,24 @@ function handleRemovePriority(nameFragment, authorId) {
   const result = removeCustomPriorityMember(name);
   if (!result.ok) return `"${name}" nggak ketemu di daftar prioritas custom (Nala/Levi/Lily nggak bisa dihapus lewat chat).`;
   return `✅ "${name}" dihapus dari daftar prioritas.`;
+}
+
+// Beda dari priority list (khusus owner), subscribe ini SIAPA AJA boleh -
+// personal reminder buat di-tag pas member manapun mulai live.
+function handleSubscribe(rawName, authorId) {
+  const name = rawName.trim().replace(/\s+live\??$/, "").trim();
+  const result = addSubscription(name, authorId);
+  if (!result.ok && result.reason === "too_short") return "Nama membernya kependekan, minimal 3 huruf ya.";
+  if (!result.ok && result.reason === "already") return `Kamu udah subscribe notif buat "${name}" kok.`;
+  if (!result.ok) return "Gagal subscribe, coba lagi.";
+  return `🔔 Sip, kamu bakal di-tag tiap kali "${name}" mulai live!`;
+}
+
+function handleUnsubscribe(rawName, authorId) {
+  const name = rawName.trim().replace(/\s+live\??$/, "").trim();
+  const result = removeSubscription(name, authorId);
+  if (!result.ok) return `Kamu belum subscribe "${name}".`;
+  return `🔕 Oke, notif buat "${name}" dimatiin.`;
 }
 
 // Channel -> kapan terakhir menu fallback ditampilin di situ. Dipake biar
@@ -822,17 +1007,24 @@ function tryHandleMenuShortcut(text, channelId) {
   const isPending = shownAt && Date.now() - shownAt <= PENDING_MENU_TTL_MS;
   if (!isPending) return null;
 
-  const match = text.match(/^([1-4])\s*(.*)$/);
-  if (!match) return null;
+  // Sebelumnya /^([1-4])\s*(.*)$/ - itu match ke SEMUA pesan yang cuma
+  // DIAWALI angka 1-4 (mis. "10 menit lagi" ke-anggep pilih menu #1). Sekarang
+  // pilihan 1-3 harus persis satu karakter itu doang, dan pilihan 4 harus
+  // "4" doang atau "4 <spasi><nama>" - bukan asal awalan angka.
+  const bareChoice = text.match(/^([1-3])$/);
+  const choiceFour = text.match(/^4(?:\s+(.+))?$/);
+  if (!bareChoice && !choiceFour) return null;
 
-  const [, choice, rest] = match;
   pendingMenuByChannel.delete(channelId); // sekali pake abis itu clear
 
-  if (choice === "1") return replyListLive();
-  if (choice === "2") return replyBotStatus();
-  if (choice === "3") return replyLongestLive();
+  if (bareChoice) {
+    const choice = bareChoice[1];
+    if (choice === "1") return replyListLive();
+    if (choice === "2") return replyBotStatus();
+    return replyLongestLive(); // choice === "3"
+  }
 
-  // choice === "4"
+  const rest = (choiceFour[1] || "").trim();
   if (!rest) return 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".';
   const found = findMemberByNameFragment(rest);
   return found ? replySpecificMember(found) : replyMemberNotFound(rest);
@@ -862,6 +1054,18 @@ function buildChatReply(rawContent, { isBotChannel = false, channelId = null, au
     return handleRemovePriority(removePriorityMatch[1], authorId);
   }
 
+  // "berhenti ingetin" harus dicek DULUAN sebelum "ingetin" biasa, soalnya
+  // kalimatnya juga ngandung kata "ingetin" dan bakal ketangkep regex subscribe.
+  const unsubscribeMatch = text.match(/berhenti\s+ingetin(?:in)?\s+(?:kalau\s+|kalo\s+)?(.+)/);
+  if (unsubscribeMatch) {
+    return handleUnsubscribe(unsubscribeMatch[1], authorId);
+  }
+
+  const subscribeMatch = text.match(/ingetin(?:in)?\s+(?:kalau\s+|kalo\s+)?(.+)/);
+  if (subscribeMatch) {
+    return handleSubscribe(subscribeMatch[1], authorId);
+  }
+
   const statsMatch = text.match(/stat(?:s|istik)\s+(.+)/);
   if (statsMatch) {
     return replyMemberStats(statsMatch[1]);
@@ -886,6 +1090,16 @@ function buildChatReply(rawContent, { isBotChannel = false, channelId = null, au
   const matchedMember = findMemberByNameFragment(text);
   if (matchedMember) {
     return replySpecificMember(matchedMember);
+  }
+
+  // Nama-nya dikenalin tapi nggak lagi live sekarang - daripada bilang
+  // "nggak ketemu" doang (padahal membernya beneran ada), kasih tau kapan
+  // terakhir dia live berdasarkan riwayat durasi yang udah ke-track.
+  const historyMatch = findDurationHistoryByNameFragment(text);
+  if (historyMatch && historyMatch.entries.length > 0) {
+    const last = historyMatch.entries[historyMatch.entries.length - 1];
+    const lastAt = new Date(last.at);
+    return `Cok, **${historyMatch.displayName}** lagi nggak live sekarang. Terakhir live ${formatRelativeTime(lastAt)}, durasinya ${formatDuration(last.durationMs)}.`;
   }
 
   // Nyebut bot/nanya soal live tapi nggak match pola yang dikenal -> kasih
