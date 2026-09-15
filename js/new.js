@@ -202,6 +202,22 @@ function getPreviousMaxDuration(durationHistory, username) {
   return Math.max(...list.map((item) => item.durationMs));
 }
 
+// Cocokin fragment ke nama depan per KATA, bukan substring bebas - soalnya
+// substring bebas ("nama.includes(needle)") bikin huruf tunggal kayak "a"
+// ke-anggep cocok ke nama siapa aja yang kebetulan ada huruf "a"-nya (mis.
+// "Fahira"). Kata di needle harus PERSIS sama sama nama depannya, ATAU
+// minimal 3 huruf dan jadi prefix/typo-toleran dari nama depannya.
+function matchesNameFragment(needle, givenName) {
+  if (!needle || !givenName) return false;
+  const words = needle.split(/[^a-z0-9]+/).filter(Boolean);
+  return words.some((word) => {
+    if (word === givenName) return true;
+    if (word.length >= 3 && givenName.startsWith(word)) return true;
+    if (givenName.length >= 3 && word.startsWith(givenName)) return true;
+    return false;
+  });
+}
+
 function findDurationHistoryByNameFragment(fragment) {
   const needle = (fragment || "").trim().toLowerCase();
   if (!needle) return null;
@@ -211,7 +227,7 @@ function findDurationHistoryByNameFragment(fragment) {
     if (entries.length === 0) continue;
     const displayName = entries[entries.length - 1].name || username;
     const givenName = displayName.split(/[\s|]+/)[0].toLowerCase();
-    if (givenName && (needle.includes(givenName) || givenName.includes(needle))) {
+    if (matchesNameFragment(needle, givenName)) {
       return { username, displayName, entries };
     }
   }
@@ -717,7 +733,7 @@ function findMemberByNameFragment(fragment) {
   for (const entry of activeLives.values()) {
     if (!entry.name) continue;
     const givenName = entry.name.split(/[\s|]+/)[0].toLowerCase();
-    if (givenName && (needle.includes(givenName) || givenName.includes(needle))) {
+    if (matchesNameFragment(needle, givenName)) {
       return entry;
     }
   }
