@@ -5,7 +5,8 @@
   "main": "js/new.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node js/new.js"
+    "start": "node js/new.js",
+    "cek-gifter": "node scripts/cek-top-gifter.js"
   },
   "engines": {
     "node": ">=18"
