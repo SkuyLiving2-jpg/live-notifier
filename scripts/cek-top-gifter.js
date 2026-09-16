@@ -21,10 +21,78 @@
 
 const readline = require("readline");
 
+const IDN_API_URL = "https://api.idn.app/graphql";
+const MAX_LIVESTREAM_PAGES = 20;
+
 function extractSlug(input) {
   const trimmed = (input || "").trim();
   const match = trimmed.match(/\/live\/([^/?#]+)/);
   return match ? match[1] : trimmed;
+}
+
+// Sama kayak fetchAllLivestreams() di js/new.js - API publik IDN, nggak
+// butuh login. Dipakai buat nyusun daftar live JKT48 yang lagi aktif SEKARANG
+// biar user tinggal milih, nggak perlu copy-paste link manual lagi.
+async function fetchLiveJkt48Members() {
+  const query = `
+    query GetLivestreams($page: Int) {
+      getLivestreams(page: $page) {
+        creator { username name }
+        slug
+        view_count
+      }
+    }
+  `;
+
+  const all = [];
+  for (let page = 1; page <= MAX_LIVESTREAM_PAGES; page++) {
+    const res = await fetch(IDN_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables: { page } }),
+    });
+    if (!res.ok) throw new Error(`IDN API balikin status ${res.status} (halaman ${page})`);
+    const result = await res.json();
+    if (result.errors) throw new Error(`GraphQL error (halaman ${page}): ${JSON.stringify(result.errors)}`);
+    const lives = result?.data?.getLivestreams || [];
+    if (lives.length === 0) break;
+    all.push(...lives);
+  }
+
+  return all.filter((l) => typeof l?.creator?.username === "string" && l.creator.username.toLowerCase().startsWith("jkt48_"));
+}
+
+// Kalau lagi nggak ada yang live sama sekali -> kasih tau, berhenti.
+// Kalau cuma 1 -> langsung dipilih otomatis, nggak usah nanya.
+// Kalau 2+ -> tampilin daftarnya, biar user tinggal ketik nomornya.
+async function pickLiveSlug(prompter) {
+  console.log("Ngecek member JKT48 yang lagi live...");
+  const lives = await fetchLiveJkt48Members();
+
+  if (lives.length === 0) {
+    console.log("Nggak ada member JKT48 yang lagi live sekarang.");
+    return null;
+  }
+
+  if (lives.length === 1) {
+    const only = lives[0];
+    console.log(`Cuma ${only.creator.name} yang lagi live, langsung dicek ya.`);
+    return only.slug;
+  }
+
+  console.log("\nMember JKT48 yang lagi live sekarang:");
+  lives.forEach((l, i) => {
+    const viewText = l.view_count != null ? ` (👁️ ${l.view_count})` : "";
+    console.log(`${i + 1}. ${l.creator.name}${viewText}`);
+  });
+
+  const choice = await prompter.ask("\nMau cek top gifter live-nya siapa? (ketik nomornya): ");
+  const idx = Number(choice) - 1;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= lives.length) {
+    console.error(`Pilihan "${choice}" nggak valid.`);
+    return undefined; // sinyal error, beda dari null (memang nggak ada yang live)
+  }
+  return lives[idx].slug;
 }
 
 // rl.question() biasa NGGAK reliable buat nanya berturut-turut kalau semua
@@ -86,11 +154,22 @@ async function main() {
   const needsPrompt = !rawSlugOrUrl || !process.env.IDN_AUTH_TOKEN || !process.env.IDN_X_API_KEY;
   const prompter = needsPrompt ? createPrompter() : null;
 
-  const slugInput = rawSlugOrUrl || (await prompter.ask("Link/slug live IDN: "));
-  if (!slugInput) {
-    console.error("Link/slug live nggak boleh kosong.");
-    if (prompter) prompter.close();
-    process.exit(1);
+  let slug;
+  if (rawSlugOrUrl) {
+    // Link/slug dikasih langsung lewat argumen (misal buat live yang udah
+    // selesai, atau dipanggil non-interaktif) - lewatin daftar-live-otomatis.
+    slug = extractSlug(rawSlugOrUrl);
+  } else {
+    const picked = await pickLiveSlug(prompter);
+    if (picked === null) {
+      prompter.close();
+      return; // nggak ada yang live, bukan error
+    }
+    if (picked === undefined) {
+      prompter.close();
+      process.exit(1); // pilihan nggak valid
+    }
+    slug = picked;
   }
 
   const authToken = process.env.IDN_AUTH_TOKEN || (await prompter.ask("Paste Authorization (termasuk kata 'Bearer '): "));
@@ -107,7 +186,6 @@ async function main() {
     process.exit(1);
   }
 
-  const slug = extractSlug(slugInput);
   const n = Number(rawN) || 10;
 
   try {
