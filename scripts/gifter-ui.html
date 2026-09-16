@@ -87,11 +87,26 @@
   .error { color: #c53030; font-size: .85rem; }
   .loading { color: #888; }
   .empty { color: #888; }
+  details.hint summary { cursor: pointer; font-weight: 600; }
 </style>
 </head>
 <body>
   <h1>🏆 Cek Top Gifter IDN Live</h1>
   <p class="subtitle">Tool lokal - data cuma diambil pas kamu klik, nggak ada yang disimpen.</p>
+
+  <details class="hint">
+    <summary>💡 Males paste token tiap kali? Pasang extension auto-capture (sekali setup)</summary>
+    <p style="margin: 8px 0 4px">
+      1. Buka <code>chrome://extensions</code> (atau <code>edge://extensions</code>) &rarr; aktifin "Developer mode"
+      (pojok kanan atas) &rarr; klik "Load unpacked" &rarr; pilih folder <code>extension/</code> di project ini.<br>
+      2. Selesai - abis itu tiap kamu buka panel "Top Gifter" di live IDN seperti biasa, token-nya otomatis
+      ke-capture, dan waktu kamu klik member di halaman ini, hasilnya langsung muncul tanpa perlu paste manual.
+    </p>
+    <p style="margin: 4px 0 0; color: #888">
+      Extension ini cuma ngirim data ke <code>localhost:47821</code> (server lokal ini doang), nggak pernah ke
+      server lain manapun. Lihat isi <code>extension/background.js</code> kalau mau ngecek sendiri.
+    </p>
+  </details>
 
   <div id="step1">
     <p>Member JKT48 yang lagi live sekarang:</p>
@@ -102,7 +117,7 @@
     <button class="back" type="button" onclick="showStep(1)">&larr; kembali</button>
     <p>Cek top gifter buat <strong id="chosenName"></strong></p>
     <div class="hint">
-      Cara ambil Authorization &amp; X-Api-Key: buka live-nya di browser &rarr; tekan F12 &rarr; tab Network &rarr;
+      Cara ambil Authorization &amp; X-Api-Key manual: buka live-nya di browser &rarr; tekan F12 &rarr; tab Network &rarr;
       filter "Fetch/XHR" &rarr; buka panel Top Gifter di live-nya &rarr; cari request ke ".../top-gifter" &rarr;
       klik, buka tab Headers &rarr; copy nilai header Authorization (termasuk kata "Bearer ") dan X-Api-Key.
     </div>
@@ -158,7 +173,7 @@
           chosen = l;
           document.getElementById('chosenName').textContent = l.name;
           document.getElementById('step2Error').textContent = '';
-          showStep(2);
+          onMemberChosen();
         };
         el.appendChild(card);
       });
@@ -167,7 +182,25 @@
     }
   }
 
-  async function checkGifter() {
+  // Begitu member dipilih, cek dulu apa udah ada token yang ke-capture
+  // otomatis sama extension/. Kalau ada, langsung tembak hasilnya tanpa
+  // nampilin form paste manual. Kalau belum ada (atau ternyata udah
+  // kadaluarsa), baru minta paste manual kayak biasa.
+  async function onMemberChosen() {
+    try {
+      const res = await fetch('/api/captured');
+      const status = await res.json();
+      if (status.available) {
+        const ok = await fetchAndRenderResults(null, null);
+        if (ok) return;
+      }
+    } catch (e) {
+      // gagal ngecek status capture - nggak apa-apa, jatuh ke form manual
+    }
+    showStep(2);
+  }
+
+  function checkGifter() {
     const authToken = document.getElementById('authToken').value.trim();
     const apiKey = document.getElementById('apiKey').value.trim();
     const errEl = document.getElementById('step2Error');
@@ -178,11 +211,26 @@
       return;
     }
 
+    fetchAndRenderResults(authToken, apiKey).then(function (ok) {
+      if (!ok) errEl.textContent = lastFetchError;
+    });
+  }
+
+  let lastFetchError = '';
+
+  // authToken/apiKey null -> server dipaksa pakai token yang ke-capture
+  // otomatis. Return true kalau berhasil tampil, false kalau gagal (biar
+  // pemanggil bisa milih mau jatuh ke form manual atau nampilin errornya).
+  async function fetchAndRenderResults(authToken, apiKey) {
     try {
+      const payload = { slug: chosen.slug, n: 15 };
+      if (authToken) payload.authToken = authToken;
+      if (apiKey) payload.apiKey = apiKey;
+
       const res = await fetch('/api/top-gifter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug: chosen.slug, authToken: authToken, apiKey: apiKey, n: 15 }),
+        body: JSON.stringify(payload),
       });
       const body = await res.json();
       if (body.error) throw new Error(body.error);
@@ -222,8 +270,10 @@
         });
       }
       showStep(3);
+      return true;
     } catch (e) {
-      errEl.textContent = 'Gagal: ' + e.message;
+      lastFetchError = 'Gagal: ' + e.message;
+      return false;
     }
   }
 

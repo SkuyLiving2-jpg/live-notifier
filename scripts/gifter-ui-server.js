@@ -4,9 +4,10 @@
 // CORS. BUKAN bagian dari bot Discord yang jalan di Railway - jalan sendiri
 // pas kamu jalanin, mati begitu jendela terminal-nya ditutup.
 //
-// Authorization & X-Api-Key yang kamu isi di form cuma dipakai buat
-// nerusin 1 request ke API IDN, nggak pernah ditulis ke file atau disimpen
-// di server ini sama sekali.
+// Authorization & X-Api-Key yang kamu isi manual di form (atau yang
+// ke-capture otomatis dari extension/) CUMA disimpen di VARIABEL DI MEMORI
+// proses ini - nggak pernah ditulis ke file. Begitu jendela terminal ini
+// ditutup, semuanya ilang total.
 
 const http = require("http");
 const fs = require("fs");
@@ -18,6 +19,10 @@ const MAX_LIVESTREAM_PAGES = 20;
 const PORT = 47821;
 
 const HTML_PAGE = fs.readFileSync(path.join(__dirname, "gifter-ui.html"), "utf-8");
+
+// Diisi sama endpoint /api/capture (dipanggil extension/ tiap nyomot
+// header baru). Di memori doang, nggak pernah disave ke disk.
+let capturedCredential = null; // { authToken, apiKey, capturedAt }
 
 // Sama kayak fetchAllLivestreams() di js/new.js - API publik, nggak butuh login.
 async function fetchLiveJkt48Members() {
@@ -67,11 +72,29 @@ async function fetchTopGifter(slug, n, authToken, apiKey) {
 }
 
 function sendJson(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    // Extension service worker origin-nya "chrome-extension://..." (beda
+    // dari "http://localhost:47821"), jadi butuh CORS biar fetch-nya nggak
+    // diblokir. Server ini cuma bind ke 127.0.0.1 (nggak bisa diakses dari
+    // luar komputer ini sama sekali), jadi "*" di sini aman.
+    "Access-Control-Allow-Origin": "*",
+  });
   res.end(JSON.stringify(data));
 }
 
 const server = http.createServer((req, res) => {
+  if (req.method === "OPTIONS") {
+    // Preflight CORS dari extension.
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    });
+    res.end();
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(HTML_PAGE);
@@ -91,6 +114,49 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Dipanggil sama extension/ (background.js) tiap dia nyomot header baru
+  // dari request Top Gifter yang beneran dikirim browser kamu.
+  if (req.method === "POST" && req.url === "/api/capture") {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch (error) {
+        sendJson(res, 400, { error: "Body nggak valid." });
+        return;
+      }
+
+      const { authToken, apiKey } = parsed;
+      if (!authToken || !apiKey) {
+        sendJson(res, 400, { error: "authToken dan apiKey wajib diisi." });
+        return;
+      }
+
+      capturedCredential = { authToken, apiKey, capturedAt: Date.now() };
+      console.log(`Token ke-capture otomatis dari extension (${new Date().toLocaleTimeString("id-ID")})`);
+      sendJson(res, 200, { ok: true });
+    });
+    return;
+  }
+
+  // Dicek sama UI tiap user milih member - biar tau apa perlu nampilin
+  // form paste manual atau langsung tembak /api/top-gifter otomatis.
+  if (req.method === "GET" && req.url === "/api/captured") {
+    if (!capturedCredential) {
+      sendJson(res, 200, { available: false });
+      return;
+    }
+    sendJson(res, 200, {
+      available: true,
+      ageSeconds: Math.round((Date.now() - capturedCredential.capturedAt) / 1000),
+    });
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/api/top-gifter") {
     let body = "";
     req.on("data", (chunk) => {
@@ -105,7 +171,12 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      const { slug, authToken, apiKey, n } = parsed;
+      const { slug, n } = parsed;
+      // Kalau authToken/apiKey nggak dikirim dari form manual, coba pakai
+      // yang udah ke-capture otomatis dari extension.
+      const authToken = parsed.authToken || capturedCredential?.authToken;
+      const apiKey = parsed.apiKey || capturedCredential?.apiKey;
+
       if (!slug || !authToken || !apiKey) {
         sendJson(res, 400, { error: "slug, authToken, dan apiKey wajib diisi." });
         return;
