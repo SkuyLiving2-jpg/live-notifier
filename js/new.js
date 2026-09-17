@@ -268,6 +268,18 @@ function findGifterSnapshotByNameFragment(fragment) {
   return null;
 }
 
+// Dipake buat ngisi dropdown tombol opsi 9 - data gifter itu SNAPSHOT yang
+// independen dari status live (beda dari opsi 4 yang emang harus dari
+// activeLives), jadi daftar pilihannya juga harus dari member yang PUNYA
+// data snapshot, bukan dari member yang lagi live. Diurutkan dari yang
+// paling baru dicek, biar data terbaru nongol duluan di dropdown.
+function getSortedGifterSnapshotMembers() {
+  const { members } = loadGifterSnapshot();
+  return Object.entries(members)
+    .map(([username, data]) => ({ username, name: data.name, checkedAt: data.checkedAt }))
+    .sort((a, b) => new Date(b.checkedAt) - new Date(a.checkedAt));
+}
+
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug }
 // Disimpan juga ke file (CACHE_FILE) biar kalau proses restart (crash, atau
 // container-nya di-restart), bot nggak ngirim ulang notif "mulai live" buat
@@ -1423,15 +1435,7 @@ function replyMemberStats(fragment) {
 // nggak pernah manggil API top-gifter (butuh login pribadi) - datanya cuma
 // seakurat terakhir kali kamu jalanin "npm run cek-gifter" manual, jadi
 // selalu dikasih tau "dicek X lalu" biar orang gak salah kira ini real-time.
-function replyGifterSnapshot(fragment) {
-  const name = (fragment || "").trim();
-  if (!name) return 'Gifter siapa? Ketik nama membernya juga ya, misal "cok gifter kathrina".';
-
-  const found = findGifterSnapshotByNameFragment(name);
-  if (!found) {
-    return `Cok, belum ada data top gifter buat "${name}". Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu di komputernya biar ke-update.`;
-  }
-
+function formatGifterSnapshotReply(found) {
   const checkedText = formatRelativeTime(new Date(found.checkedAt));
   if (!found.gifters || found.gifters.length === 0) {
     return `Cok, **${found.name}** belum ada gifter di data terakhir (dicek ${checkedText}, bukan live real-time).`;
@@ -1443,6 +1447,30 @@ function replyGifterSnapshot(fragment) {
     .map((g, i) => `${medals[i] || `${i + 1}.`} ${g.name} - ${Number(g.total_gold).toLocaleString("id-ID")} Gold`);
 
   return [`🏆 **Top Gifter ${found.name}** (dicek ${checkedText}, BUKAN live real-time)`, ...lines].join("\n");
+}
+
+function replyGifterSnapshot(fragment) {
+  const name = (fragment || "").trim();
+  if (!name) return 'Gifter siapa? Ketik nama membernya juga ya, misal "cok gifter kathrina".';
+
+  const found = findGifterSnapshotByNameFragment(name);
+  if (!found) {
+    return `Cok, belum ada data top gifter buat "${name}". Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu di komputernya biar ke-update.`;
+  }
+  return formatGifterSnapshotReply(found);
+}
+
+// Dipake dari dropdown tombol (fallback_select:9) - beda dari replyGifterSnapshot
+// yang nyari lewat FRAGMEN nama (bisa ambigu kalau ada 2 member namanya mirip),
+// ini langsung ambil dari username yang UDAH PASTI dipilih user dari dropdown,
+// gak perlu nebak-nebak lagi.
+function replyGifterSnapshotByUsername(username) {
+  const { members } = loadGifterSnapshot();
+  const data = members[username];
+  if (!data) {
+    return `Cok, belum ada data top gifter buat member ini. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.`;
+  }
+  return formatGifterSnapshotReply({ username, ...data });
 }
 
 function isOwner(authorId) {
@@ -1492,11 +1520,20 @@ function handleUnsubscribe(rawName, authorId) {
   return `🔕 Oke, notif buat "${name}" dimatiin.`;
 }
 
-// Channel -> kapan terakhir menu fallback ditampilin di situ. Dipake biar
-// user bisa balas cukup ketik angkanya doang (1-4) abis menu-nya muncul -
-// tapi CUMA kalau menu-nya baru aja beneran ditampilin duluan, biar ketik
-// angka "mentah" tanpa konteks tetap nunjukkin menu-nya dulu (bukan nebak).
-const pendingMenuByChannel = new Map();
+// "channelId:authorId" -> kapan terakhir menu fallback ditampilin buat orang
+// itu. Dipake biar user bisa balas cukup ketik angkanya doang (1-9) abis
+// menu-nya muncul - tapi CUMA kalau menu-nya baru aja beneran ditampilin
+// duluan, biar ketik angka "mentah" tanpa konteks tetap nunjukkin menu-nya
+// dulu (bukan nebak).
+//
+// BUG SEBELUMNYA: ini di-key per CHANNEL doang (bukan per orang) - jadi di
+// channel rame, cuma orang PERTAMA yang bales angka abis menu muncul yang
+// kedetect; orang kedua yang bales angka sama malah dikasih menu dari awal
+// lagi (soalnya pending-nya udah "sekali pake" abis dipakai orang pertama).
+// Sekarang di-key bareng channel+author, sama pola-nya kayak pendingWatchConfirm/
+// pendingMemberPrompt/pendingRecapPage - tiap orang punya "menu barusan
+// ditampilin" sendiri-sendiri.
+const pendingMenuByAuthor = new Map();
 const PENDING_MENU_TTL_MS = 3 * 60000;
 
 // Tombol Discord buat tiap pilihan menu - custom_id-nya "fallback_menu:<N>",
@@ -1579,7 +1616,7 @@ async function resolveBareMenuChoice(choice, channelId, authorId) {
 
 // "channelId:authorId" -> { option: "4"|"9", at } - nunggu NAMA member abis
 // user milih opsi 4/9 tanpa langsung nyebut nama. BUG SEBELUMNYA: begitu
-// nanya "member yang mana?"/"gifter siapa?", pendingMenuByChannel keburu
+// nanya "member yang mana?"/"gifter siapa?", pendingMenuByAuthor keburu
 // ke-hapus (sekali pake abis itu clear) - jadi jawaban berikutnya (nama
 // doang, ATAU ulang "9 <nama>") gak dikenalin lagi sebagai lanjutan opsi
 // 4/9, malah nyasar ke router biasa (bisa salah ke-anggep command lain sama
@@ -1592,9 +1629,10 @@ function memberPromptQuestion(option) {
 }
 
 async function tryHandleMenuShortcut(text, channelId, authorId) {
-  if (!channelId) return null;
+  if (!channelId || !authorId) return null;
 
-  const shownAt = pendingMenuByChannel.get(channelId);
+  const key = `${channelId}:${authorId}`;
+  const shownAt = pendingMenuByAuthor.get(key);
   const isPending = shownAt && Date.now() - shownAt <= PENDING_MENU_TTL_MS;
   if (!isPending) return null;
 
@@ -1608,7 +1646,7 @@ async function tryHandleMenuShortcut(text, channelId, authorId) {
   const choiceNine = text.match(/^9(?:\s+(.+))?$/);
   if (!bareChoice && !choiceFour && !choiceNine) return null;
 
-  pendingMenuByChannel.delete(channelId); // sekali pake abis itu clear
+  pendingMenuByAuthor.delete(key); // sekali pake abis itu clear
 
   if (bareChoice) {
     return await resolveBareMenuChoice(bareChoice[1], channelId, authorId);
@@ -1655,7 +1693,11 @@ function tryHandleMemberPromptShortcut(text, channelId, authorId) {
 async function handleFallbackMenuButton(interaction) {
   const optionId = interaction.customId.split(":")[1];
 
-  if (optionId === "4" || optionId === "9") {
+  // Opsi 4 (cek member) HARUS dari activeLives (nanya "masih live gak?"
+  // cuma masuk akal buat yang emang lagi live). Opsi 9 (gifter) BEDA -
+  // datanya snapshot yang independen dari status live sekarang, jadi
+  // sumber dropdown-nya juga beda (lihat getSortedGifterSnapshotMembers).
+  if (optionId === "4") {
     const sorted = getSortedActiveLives();
     if (sorted.length === 0) {
       await interaction.reply({ content: "Cok, lagi nggak ada member JKT48 yang live nih.", ephemeral: true });
@@ -1663,14 +1705,32 @@ async function handleFallbackMenuButton(interaction) {
     }
 
     const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId(`fallback_select:${optionId}`)
+      .setCustomId("fallback_select:4")
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    const prompt = optionId === "4" ? "Mau cek member yang mana?" : "Mau cek top gifter member yang mana?";
     // Ephemeral (cuma keliatan yang mimic tombolnya) - ini baru langkah
     // milih, belum jawaban final, jadi gak perlu numpuk di channel publik.
-    await interaction.reply({ content: prompt, components: [row], ephemeral: true });
+    await interaction.reply({ content: "Mau cek member yang mana?", components: [row], ephemeral: true });
+    return;
+  }
+
+  if (optionId === "9") {
+    const sorted = getSortedGifterSnapshotMembers();
+    if (sorted.length === 0) {
+      await interaction.reply({
+        content: 'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId("fallback_select:9")
+      .setPlaceholder("Pilih member...")
+      .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+    await interaction.reply({ content: "Mau cek top gifter member yang mana?", components: [row], ephemeral: true });
     return;
   }
 
@@ -1685,22 +1745,25 @@ async function handleFallbackMenuButton(interaction) {
 async function handleFallbackMemberSelect(interaction) {
   const optionId = interaction.customId.split(":")[1];
   const username = interaction.values[0];
-  const entry = activeLives.get(username);
 
   if (optionId === "4") {
+    const entry = activeLives.get(username);
     const reply = entry ? startWatchConfirm(entry.name, interaction.channelId, interaction.user.id) : replyMemberNotFound(username);
     await interaction.reply(reply);
     return;
   }
 
-  await interaction.reply(replyGifterSnapshot(entry ? entry.name : username));
+  // username di sini dijamin ada di gifter-snapshot.json - langsung dari
+  // pilihan dropdown yang dibangun getSortedGifterSnapshotMembers(), bukan
+  // dari activeLives kayak sebelumnya.
+  await interaction.reply(replyGifterSnapshotByUsername(username));
 }
 
 // "channelId:authorId" -> { username, name, at } - nunggu jawaban y/n abis
-// user milih member lewat menu #4. Di-key per channel+author (beda dari
-// pendingMenuByChannel yang per-channel doang) soalnya ini nunggu jawaban
-// SATU ORANG spesifik - kalau cuma per-channel, jawaban "y" dari orang lain
-// di channel yang sama bisa nyangkut ke pertanyaan yang bukan buat dia.
+// user milih member lewat menu #4. Di-key per channel+author soalnya ini
+// nunggu jawaban SATU ORANG spesifik - kalau cuma per-channel, jawaban "y"
+// dari orang lain di channel yang sama bisa nyangkut ke pertanyaan yang
+// bukan buat dia.
 const pendingWatchConfirm = new Map();
 const PENDING_WATCH_CONFIRM_TTL_MS = 2 * 60000;
 const YES_PATTERN = /^(y|ya|iya|iyah|iy|yes|yup|yoi|oke|ok|gas|mau|boleh)$/i;
@@ -1873,8 +1936,8 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   }
 
   // Nyebut bot/nanya soal live tapi nggak match pola yang dikenal -> kasih
-  // menu daripada diem aja, dan inget channel ini abis dikasih menu.
-  if (channelId) pendingMenuByChannel.set(channelId, Date.now());
+  // menu daripada diem aja, dan inget orang ini abis dikasih menu.
+  if (channelId && authorId) pendingMenuByAuthor.set(`${channelId}:${authorId}`, Date.now());
   return replyFallbackMenu();
 }
 
