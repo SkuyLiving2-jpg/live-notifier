@@ -1389,6 +1389,7 @@ function replyFallbackMenu() {
     "6. Daftar member prioritas",
     "7. Reminder aku (siapa aja yang aku subscribe)",
     "8. Rekap live hari ini",
+    "9. Cek top gifter <nama member> (data terakhir dari 'npm run cek-gifter', bukan real-time)",
     "",
     '(Abis ini kamu bisa balas cukup ketik angkanya aja, misal "1" atau "4 Nala")',
     "",
@@ -1406,11 +1407,12 @@ async function tryHandleMenuShortcut(text, channelId, authorId) {
   // Sebelumnya /^([1-4])\s*(.*)$/ - itu match ke SEMUA pesan yang cuma
   // DIAWALI angka 1-4 (mis. "10 menit lagi" ke-anggep pilih menu #1). Sekarang
   // pilihan yang nggak butuh input tambahan (1-3, 5-8) harus persis SATU
-  // angka itu doang, dan pilihan 4 (butuh nama member) harus "4" doang atau
-  // "4 <spasi><nama>" - bukan asal awalan angka.
+  // angka itu doang, dan pilihan yang butuh nama member (4, 9) harus "4"/"9"
+  // doang atau "4 <spasi><nama>"/"9 <spasi><nama>" - bukan asal awalan angka.
   const bareChoice = text.match(/^([1-3]|[5-8])$/);
   const choiceFour = text.match(/^4(?:\s+(.+))?$/);
-  if (!bareChoice && !choiceFour) return null;
+  const choiceNine = text.match(/^9(?:\s+(.+))?$/);
+  if (!bareChoice && !choiceFour && !choiceNine) return null;
 
   pendingMenuByChannel.delete(channelId); // sekali pake abis itu clear
 
@@ -1433,9 +1435,15 @@ async function tryHandleMenuShortcut(text, channelId, authorId) {
     }
   }
 
-  const rest = (choiceFour[1] || "").trim();
-  if (!rest) return 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".';
-  return startWatchConfirm(rest, channelId, authorId);
+  if (choiceFour) {
+    const rest = (choiceFour[1] || "").trim();
+    if (!rest) return 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".';
+    return startWatchConfirm(rest, channelId, authorId);
+  }
+
+  const restNine = (choiceNine[1] || "").trim();
+  if (!restNine) return 'Gifter siapa? Ketik nama membernya juga ya, misal "9 Nala".';
+  return replyGifterSnapshot(restNine);
 }
 
 // "channelId:authorId" -> { username, name, at } - nunggu jawaban y/n abis
