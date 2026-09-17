@@ -505,7 +505,7 @@ function saveDailyLog(log) {
 // pas dia selesai sesi yang SAMA di-update (bukan bikin entry baru) biar
 // rekap bisa nunjukkin siapa aja yang live hari ini - baik yang udah selesai
 // maupun yang masih berlangsung.
-function recordLiveStartedToday(name, username, startedAtDate) {
+function recordLiveStartedToday(name, username, startedAtDate, peakViewCount = null) {
   const log = loadDailyLog();
   log.sessions.push({
     name,
@@ -513,11 +513,12 @@ function recordLiveStartedToday(name, username, startedAtDate) {
     startedAtUnix: Math.floor(startedAtDate.getTime() / 1000),
     endedAtUnix: null,
     durationMs: null,
+    peakViewCount,
   });
   saveDailyLog(log);
 }
 
-function recordLiveEndedToday(name, username, durationMs, endedAtDate) {
+function recordLiveEndedToday(name, username, durationMs, endedAtDate, peakViewCount = null) {
   const log = loadDailyLog();
   const endedAtUnix = Math.floor(endedAtDate.getTime() / 1000);
   // Cari sesi "masih live" TERAKHIR buat username ini - biasanya emang itu
@@ -527,12 +528,23 @@ function recordLiveEndedToday(name, username, durationMs, endedAtDate) {
   if (openSession) {
     openSession.endedAtUnix = endedAtUnix;
     openSession.durationMs = durationMs;
+    // Ambil peak TERBESAR antara yang kecatet pas mulai vs yang kekumpul
+    // sepanjang live-nya jalan, biar gak ketimpa turun kalau penontonnya
+    // sempet surut pas mau selesai.
+    openSession.peakViewCount = Math.max(openSession.peakViewCount ?? 0, peakViewCount ?? 0) || null;
   } else {
     // Sesi "mulai"-nya kelewat kecatet (mis. live-nya kepotong pergantian
     // hari WIB, atau bot baru restart tengah live) - tetep catet daripada
     // rekap kehilangan data, walau jam mulainya cuma perkiraan mundur dari
     // durasi yang kita tau.
-    log.sessions.push({ name, username, startedAtUnix: endedAtUnix - Math.round(durationMs / 1000), endedAtUnix, durationMs });
+    log.sessions.push({
+      name,
+      username,
+      startedAtUnix: endedAtUnix - Math.round(durationMs / 1000),
+      endedAtUnix,
+      durationMs,
+      peakViewCount,
+    });
   }
   saveDailyLog(log);
 }
@@ -758,12 +770,18 @@ async function checkLiveMembers() {
             slug: live.slug,
             liveAt: live.live_at,
             viewCount: live.view_count,
+            peakViewCount: live.view_count ?? null,
             imageUrl: live.image_url || null,
             endingSoonAlerted: false,
             alertedMilestones: [],
           });
           saveActiveLives();
-          recordLiveStartedToday(live.creator.name, live.creator.username, live.live_at ? new Date(live.live_at) : new Date());
+          recordLiveStartedToday(
+            live.creator.name,
+            live.creator.username,
+            live.live_at ? new Date(live.live_at) : new Date(),
+            live.view_count ?? null,
+          );
           if (getPriorityConfig(live.creator.name, live.creator.username)) {
             await maybePartyModeAlert();
           }
@@ -776,6 +794,9 @@ async function checkLiveMembers() {
         // milestone jumlah penonton (buat semua member JKT48)
         const entry = activeLives.get(username);
         entry.viewCount = live.view_count;
+        if (typeof live.view_count === "number") {
+          entry.peakViewCount = Math.max(entry.peakViewCount ?? 0, live.view_count);
+        }
         await maybeAlertEndingSoon(entry, durationHistory);
         await maybeAlertViewerMilestone(entry);
       }
@@ -790,7 +811,13 @@ async function checkLiveMembers() {
             const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
             await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
             recordLiveDuration(username, memberData.name, durationMs);
-            recordLiveEndedToday(memberData.name, memberData.username, durationMs, new Date());
+            recordLiveEndedToday(
+              memberData.name,
+              memberData.username,
+              durationMs,
+              new Date(),
+              memberData.peakViewCount ?? memberData.viewCount ?? null,
+            );
           }
           activeLives.delete(username);
           saveActiveLives();
@@ -1097,28 +1124,72 @@ function replyListLive() {
   return `Cok, ini yang lagi live (urut dari paling lama):\n${lines.join("\n")}`;
 }
 
+// Dulu cuma bandingin member yang LAGI live sekarang - jadi kalau ada yang
+// live 3 jam terus SELESAI, terus member lain baru mulai live 5 menit,
+// yang kesebut "paling lama" malah yang baru mulai itu (soalnya yang udah
+// selesai udah ilang dari activeLives). Sekarang gabungin durasi live yang
+// LAGI JALAN (activeLives) SAMA sesi yang UDAH SELESAI hari ini (daily log)
+// biar rekap-nya beneran akurat sepanjang hari, bukan cuma potret sesaat.
 function replyLongestLive() {
-  const sorted = getSortedActiveLives();
-  if (sorted.length === 0) return "Cok, lagi nggak ada yang live.";
-  const longest = sorted[0];
-  const elapsedText = describeElapsed(Date.now() - new Date(longest.liveAt).getTime());
-  return `Yang paling lama live sekarang: **${longest.name}**, ${elapsedText}.`;
+  const log = loadDailyLog();
+  const candidates = [];
+
+  for (const entry of activeLives.values()) {
+    candidates.push({
+      name: entry.name,
+      durationMs: Date.now() - new Date(entry.liveAt).getTime(),
+      isLive: true,
+    });
+  }
+  for (const session of log.sessions) {
+    if (session.endedAtUnix !== null) {
+      candidates.push({ name: session.name, durationMs: session.durationMs, isLive: false });
+    }
+  }
+
+  if (candidates.length === 0) return "Cok, belum ada data live hari ini.";
+
+  const longest = candidates.reduce((max, c) => (c.durationMs > max.durationMs ? c : max), candidates[0]);
+  const statusText = longest.isLive ? "masih live sekarang" : "udah selesai";
+  return `Paling lama live hari ini: **${longest.name}**, ${formatDuration(longest.durationMs)} (${statusText}).`;
 }
 
-// Beda sama replyLongestLive (durasi live) - ini urut berdasarkan JUMLAH
-// PENONTON, buat jawab "siapa yang paling rame ditonton sekarang".
+// Sama kayak replyLongestLive - dulu cuma liat viewCount member yang LAGI
+// live sekarang, jadi member yang tadi rame banget tapi udah selesai live
+// bakal ilang gitu aja dari ranking. Sekarang bandingin PUNCAK penonton
+// (peakViewCount, dicatet tiap polling selama live-nya jalan) dari live
+// yang lagi jalan MAUPUN yang udah selesai hari ini, terus ambil puncak
+// tertinggi per member (kalau dia live 2x hari ini, yang diitung yang
+// paling rame di antara keduanya).
 function replyTopViewers() {
-  const withViews = [...activeLives.values()].filter((e) => e.viewCount != null);
-  if (withViews.length === 0) return "Cok, lagi nggak ada data penonton buat live sekarang.";
+  const log = loadDailyLog();
+  const peakByUsername = new Map();
 
-  const sorted = [...withViews].sort((a, b) => b.viewCount - a.viewCount);
+  for (const session of log.sessions) {
+    if (session.peakViewCount == null) continue;
+    const prev = peakByUsername.get(session.username);
+    if (!prev || session.peakViewCount > prev.peak) {
+      peakByUsername.set(session.username, { name: session.name, peak: session.peakViewCount });
+    }
+  }
+  for (const entry of activeLives.values()) {
+    if (entry.peakViewCount == null) continue;
+    const prev = peakByUsername.get(entry.username);
+    if (!prev || entry.peakViewCount > prev.peak) {
+      peakByUsername.set(entry.username, { name: entry.name, peak: entry.peakViewCount });
+    }
+  }
+
+  if (peakByUsername.size === 0) return "Cok, belum ada data penonton buat hari ini.";
+
+  const sorted = [...peakByUsername.values()].sort((a, b) => b.peak - a.peak);
   const medals = ["🥇", "🥈", "🥉"];
   const lines = sorted.map((entry, i) => {
     const medal = medals[i] || `${i + 1}.`;
-    return `${medal} **${entry.name}** - 👁️ ${formatViewCount(entry.viewCount)}`;
+    return `${medal} **${entry.name}** - 👁️ ${formatViewCount(entry.peak)} (puncak)`;
   });
 
-  return `👀 Paling rame ditonton sekarang:\n${lines.join("\n")}`;
+  return `👀 Paling rame ditonton hari ini (puncak penonton):\n${lines.join("\n")}`;
 }
 
 function replyBotStatus() {
@@ -1159,8 +1230,8 @@ function replyHelp() {
   return [
     "Cok bisa jawab ini:",
     '- "cok ini yang masih live siapa aja?"',
-    '- "cok siapa yang paling lama live?"',
-    '- "cok siapa yang paling rame ditonton?"',
+    '- "cok siapa yang paling lama live hari ini?"',
+    '- "cok siapa yang paling rame ditonton hari ini?"',
     '- "cok status"',
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
@@ -1435,9 +1506,9 @@ function buildFallbackMenuComponents() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("fallback_menu:1").setLabel("1. Siapa yang live").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("fallback_menu:2").setLabel("2. Status bot").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("fallback_menu:3").setLabel("3. Paling lama live").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("fallback_menu:3").setLabel("3. Paling lama (hari ini)").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("fallback_menu:4").setLabel("4. Cek member").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("fallback_menu:5").setLabel("5. Paling rame ditonton").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("fallback_menu:5").setLabel("5. Paling rame (hari ini)").setStyle(ButtonStyle.Primary),
   );
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("fallback_menu:6").setLabel("6. Daftar prioritas").setStyle(ButtonStyle.Secondary),
@@ -1451,10 +1522,12 @@ function buildFallbackMenuComponents() {
 // Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
 // pertanyaan yang udah dikenali - dikasih menu daripada bot diem aja.
 //
-// CATATAN: pilihan #3 dulu teksnya "paling lama live PER HARI INI" - itu
-// SALAH, yang beneran dijalanin (replyLongestLive) itu ranking durasi live
-// yang LAGI AKTIF sekarang, bukan rekap harian (itu fiturnya "cok rekap
-// hari ini" / pilihan #8, beda). Dibenerin biar gak nyesetin ekspektasi.
+// CATATAN: pilihan #3 dan #5 sekarang beneran ngitung "hari ini" (gabungan
+// live yang lagi jalan + yang udah selesai, dari daily log), BUKAN cuma
+// snapshot siapa yang lagi live detik ini - liat replyLongestLive() dan
+// replyTopViewers(). Beda sama pilihan #8 ("cok rekap hari ini") yang
+// nampilin TABEL lengkap semua sesi, ini cuma nyebut satu yang paling
+// menonjol.
 //
 // Balikin OBJECT ({content, components}), bukan string doang - discord.js
 // nerima dua-duanya di message.reply(), jadi gak perlu ubah apa-apa di
@@ -1466,9 +1539,9 @@ function replyFallbackMenu() {
     `Halo, selamat ${getGreeting()}! Apa yang ingin kamu tanyakan?`,
     "1. Siapa saja yang masih live?",
     "2. Status live sekarang",
-    "3. Siapa yang paling lama live sekarang?",
+    "3. Siapa yang paling lama live hari ini?",
     "4. Apakah <nama member> masih live?",
-    "5. Siapa yang paling rame ditonton sekarang?",
+    "5. Siapa yang paling rame ditonton hari ini?",
     "6. Daftar member prioritas",
     "7. Reminder aku (siapa aja yang aku subscribe)",
     "8. Rekap live hari ini",
