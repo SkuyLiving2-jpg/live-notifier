@@ -697,6 +697,7 @@ async function fetchAllLivestreams() {
         slug
         live_at
         view_count
+        image_url
       }
     }
   `;
@@ -748,7 +749,7 @@ async function checkLiveMembers() {
 
       // Kirim notif cuma kalo member baru mulai live
       if (!activeLives.has(username)) {
-        const terkirim = await sendDiscordNotif(live.creator.name, live.creator.username, live.slug, "start");
+        const terkirim = await sendDiscordNotif(live.creator.name, live.creator.username, live.slug, "start", live.image_url);
         if (terkirim) {
           activeLives.set(username, {
             name: live.creator.name,
@@ -756,6 +757,7 @@ async function checkLiveMembers() {
             slug: live.slug,
             liveAt: live.live_at,
             viewCount: live.view_count,
+            imageUrl: live.image_url || null,
             endingSoonAlerted: false,
             alertedMilestones: [],
           });
@@ -781,7 +783,7 @@ async function checkLiveMembers() {
     // Kirim notif "sudah selesai" + bersihkan cache kalau member udah selesai live
     for (const [username, memberData] of activeLives) {
       if (!currentLiveUsernames.has(username)) {
-        const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end");
+        const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end", memberData.imageUrl);
         if (terkirim) {
           if (memberData.liveAt) {
             const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
@@ -809,7 +811,11 @@ function buildNormalPayload(memberName, liveUrl, status) {
     : { content: `🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}` };
 }
 
-function buildPriorityPayload(memberName, liveUrl, status, priority) {
+// imageUrl (thumbnail live dari IDN, field image_url di getLivestreams) cuma
+// dipasang buat notif PRIORITAS - biar makin flashy/eye-catching, sesuai
+// permintaan. Notif biasa (buildNormalPayload) sengaja dibiarin polos kayak
+// semula, biar bedanya sama prioritas makin kerasa.
+function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl) {
   const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
 
   if (status === "end") {
@@ -821,6 +827,7 @@ function buildPriorityPayload(memberName, liveUrl, status, priority) {
           description: memberName,
           color: priority.color,
           url: liveUrl,
+          ...(imageUrl ? { thumbnail: { url: imageUrl } } : {}),
         },
       ],
     };
@@ -836,12 +843,16 @@ function buildPriorityPayload(memberName, liveUrl, status, priority) {
         color: priority.color,
         footer: { text: "IDN Live Priority Alert" },
         timestamp: new Date().toISOString(),
+        // "image" (bukan "thumbnail") sengaja dipilih di sini - dia nampilin
+        // gambarnya BESAR di bawah embed, jauh lebih eye-catching buat notif
+        // "baru mulai live" yang emang tujuannya bikin orang langsung notice.
+        ...(imageUrl ? { image: { url: imageUrl } } : {}),
       },
     ],
   };
 }
 
-async function sendDiscordNotif(memberName, username, slug, status = "start") {
+async function sendDiscordNotif(memberName, username, slug, status = "start", imageUrl = null) {
   // Tanpa "www" biar konsisten sama link yang di-generate tombol Share di
   // app IDN sendiri (lebih besar kemungkinan ke-handle sebagai App
   // Link/Universal Link, alias langsung buka app di HP kalau appnya
@@ -849,7 +860,7 @@ async function sendDiscordNotif(memberName, username, slug, status = "start") {
   const liveUrl = `https://idn.app/${username}/live/${slug}`;
   const priority = getPriorityConfig(memberName, username);
   const payload = priority
-    ? buildPriorityPayload(memberName, liveUrl, status, priority)
+    ? buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl)
     : buildNormalPayload(memberName, liveUrl, status);
 
   if (status === "start") {
