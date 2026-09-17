@@ -64,12 +64,19 @@ const JKT48_USERNAME_WHITELIST = [
 ];
 
 // Member prioritas: notifikasinya dibikin jauh lebih flashy/urgent (embed +
-// opsional mention) dibanding member JKT48 lain. Diurutkan dari yang paling
-// emergency ke bawah - urutan ini nentuin intensitas warna & tone pesannya.
+// tombol link + opsional mention) dibanding member JKT48 lain. Diurutkan
+// dari yang paling emergency ke bawah - urutan ini nentuin intensitas warna
+// & tone pesannya.
+//
+// buttonLabel opsional - teks tombol "tonton sekarang" yang nempel di notif
+// "mulai live" (lihat buildPriorityPayload). Kalau nggak diisi, dipakein
+// default netral. Nala (#1, paling emergency) sengaja dikasih buttonLabel
+// custom yang lebih "mendesak" (ada tanda panah) biar kerasa beda urgensinya
+// dibanding Levi/Lily yang tetap prioritas tapi nggak se-emergency itu.
 const PRIORITY_MEMBERS = [
-  { rank: 1, keyword: "nala", label: "NALA", color: 0xff0000, sirens: "🚨🔥🚨" },
-  { rank: 2, keyword: "levi", label: "LEVI", color: 0xff8c00, sirens: "🚨⚡🚨" },
-  { rank: 3, keyword: "lily", label: "LILY", color: 0xffd700, sirens: "🚨✨🚨" },
+  { rank: 1, keyword: "nala", label: "NALA", color: 0x1abc9c, sirens: "🚨🔥🚨", buttonLabel: "➡️ GAS, INI LIVE PALING URGENT SEDUNIA! ➡️" },
+  { rank: 2, keyword: "levi", label: "LEVI", color: 0xff0000, sirens: "🚨⚡🚨" },
+  { rank: 3, keyword: "lily", label: "LILY", color: 0x3498db, sirens: "🚨✨🚨" },
 ];
 
 // ID user Discord yang mau di-mention khusus buat notif prioritas (opsional).
@@ -878,7 +885,10 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl) {
     embeds: [
       {
         title: `⚡ PRIORITAS #${priority.rank}: ${priority.label} LIVE SEKARANG! ⚡`,
-        description: `**${memberName}** baru aja mulai live di IDN Live.\n\n[🔴 **TONTON SEKARANG**](${liveUrl})`,
+        // Link "TONTON SEKARANG" dulu ditulis manual di sini - sekarang udah
+        // pindah jadi tombol beneran (components di bawah), jadi deskripsinya
+        // gak perlu nyebut link lagi, tinggal fokus ngasih tau siapa yang live.
+        description: `**${memberName}** baru aja mulai live di IDN Live.`,
         url: liveUrl,
         color: priority.color,
         footer: { text: "IDN Live Priority Alert" },
@@ -887,6 +897,26 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl) {
         // gambarnya BESAR di bawah embed, jauh lebih eye-catching buat notif
         // "baru mulai live" yang emang tujuannya bikin orang langsung notice.
         ...(imageUrl ? { image: { url: imageUrl } } : {}),
+      },
+    ],
+    // Tombol LINK (style 5) - klik langsung buka live-nya di browser/app,
+    // BEDA dari tombol menu fallback (fallback_menu:N) yang custom_id-nya
+    // perlu ditangkep interactionCreate. Tombol link gak butuh bot nunggu
+    // interaksi apa-apa sama sekali, jadi aman dikirim lewat webhook polos
+    // (bukan lewat bot client) kayak notif ini. Label-nya beda per member -
+    // lihat buttonLabel di PRIORITY_MEMBERS (Nala dikasih kesan lebih
+    // mendesak dibanding Levi/Lily).
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 5,
+            label: priority.buttonLabel || "🔴 Tonton Live Sekarang",
+            url: liveUrl,
+          },
+        ],
       },
     ],
   };
