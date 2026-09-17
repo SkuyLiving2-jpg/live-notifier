@@ -1245,7 +1245,7 @@ if (DISCORD_BOT_TOKEN) {
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   });
 
-  chatClient.once("ready", () => {
+  chatClient.once("clientReady", () => {
     console.log(`Bot tanya-jawab login sebagai ${chatClient.user.tag}`);
   });
 
