@@ -74,10 +74,37 @@ const JKT48_USERNAME_WHITELIST = [
 // custom yang lebih "mendesak" (ada tanda panah) biar kerasa beda urgensinya
 // dibanding Levi/Lily yang tetap prioritas tapi nggak se-emergency itu.
 //
-// endMessage opsional - kalau diisi, notif "SELESAI live" buat member itu
-// dikasih sentuhan khusus (embed field pesan + footer beda), biar keliatan
-// beda dari member prioritas lain yang notif selesainya tetep plain. Cuma
-// Nala yang dikasih ini sekarang - Levi/Lily sengaja dibiarin default.
+// endMessagePool opsional - kalau diisi, notif "SELESAI live" buat member
+// itu dikasih sentuhan khusus (embed field pesan + footer beda) yang
+// kalimatnya DIRACIK ACAK tiap kali (lihat generateEndMessage di bawah),
+// bukan 1 kalimat fixed yang keliatan robotic kalau dibaca berkali-kali.
+// Cuma Nala yang dikasih ini sekarang - Levi/Lily sengaja dibiarin default
+// (notif selesainya tetep plain).
+//
+// PENTING: kalimat-kalimat di pool ini teks generik gaya fan-idol yang
+// hangat/sweet, BUKAN hasil niru/nyontek gaya nulis Nala yang asli dari
+// media sosialnya - sengaja dibikin gitu, bukan ngarang-ngarang kalimat
+// yang seolah-olah beneran kata-kata pribadi dia.
+const NALA_END_MESSAGE_POOL = {
+  openers: ["Makasih banyak", "Terima kasih ya", "Makasih banget", "Big thanks buat kalian semua", "Thank you so much", "Makasih ya"],
+  bodies: [
+    "udah nemenin live aku hari ini",
+    "udah setia nontonin sampai akhir",
+    "buat semangat yang kalian kasih terus",
+    "buat semua chat dan gift-nya",
+    "karena kalian selalu ada buat aku",
+    "udah nemenin dari awal sampai selesai",
+  ],
+  closers: [
+    "Sampai jumpa di live berikutnya ya! 💚",
+    "Jaga kesehatan, sampai ketemu lagi! ✨",
+    "Love you all, sampai jumpa lagi~ 🥰",
+    "See you next live! 😊",
+    "Semoga hari kalian menyenangkan! 💫",
+    "Istirahat yang cukup ya, sampai jumpa lagi! 🌷",
+  ],
+};
+
 const PRIORITY_MEMBERS = [
   {
     rank: 1,
@@ -86,11 +113,24 @@ const PRIORITY_MEMBERS = [
     color: 0x1abc9c,
     sirens: "🚨🔥🚨",
     buttonLabel: "➡️ GAS, INI LIVE PALING URGENT SEDUNIA! ➡️",
-    endMessage: "Makasih banyak udah nemenin live hari ini! Sampai jumpa di live berikutnya ya 💚",
+    endMessagePool: NALA_END_MESSAGE_POOL,
   },
   { rank: 2, keyword: "levi", label: "LEVI", color: 0xff0000, sirens: "🚨⚡🚨" },
   { rank: 3, keyword: "lily", label: "LILY", color: 0x3498db, sirens: "🚨✨🚨" },
 ];
+
+// Pilih 1 fragmen acak dari opener/body/closer terus digabung jadi 1
+// kalimat utuh - kombinasinya jauh lebih banyak (6x6x6 = 216 variasi) dari
+// jumlah baris yang ditulis, tanpa perlu nulis 216 kalimat lengkap manual.
+function pickRandom(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function generateEndMessage(priority) {
+  if (!priority.endMessagePool) return null;
+  const { openers, bodies, closers } = priority.endMessagePool;
+  return `${pickRandom(openers)}, ${pickRandom(bodies)}! ${pickRandom(closers)}`;
+}
 
 // ID user Discord yang mau di-mention khusus buat notif prioritas (opsional).
 // Cara dapetinnya: di Discord, aktifin Developer Mode di Settings > Advanced,
@@ -879,24 +919,26 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl) {
   const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
 
   if (status === "end") {
-    // endMessage (opsional, lihat PRIORITY_MEMBERS) - cuma diisi buat member
-    // yang emang mau dikasih sentuhan khusus di notif "selesai live"-nya
-    // (misal Nala). Kalau kosong, notif "selesai" tetap plain kayak
-    // Levi/Lily - jadi ini BUKAN template semua member prioritas, cuma
-    // yang di-opt-in lewat field itu.
+    // endMessagePool (opsional, lihat PRIORITY_MEMBERS) - cuma diisi buat
+    // member yang emang mau dikasih sentuhan khusus di notif "selesai
+    // live"-nya (misal Nala). Kalau kosong, notif "selesai" tetap plain
+    // kayak Levi/Lily - jadi ini BUKAN template semua member prioritas,
+    // cuma yang di-opt-in lewat field itu. Diracik ULANG (random) tiap kali
+    // fungsi ini dipanggil, jadi tiap live selesai kalimatnya beda-beda.
+    const endMessage = generateEndMessage(priority);
     return {
-      content: priority.endMessage
+      content: endMessage
         ? `${mention}${priority.sirens} Live prioritas **#${priority.rank} ${priority.label}** udah selesai. 💌`
         : `${mention}${priority.sirens} Live prioritas **#${priority.rank} ${priority.label}** udah selesai.`,
       embeds: [
         {
-          title: priority.endMessage ? `💚 ${priority.label} sudah selesai live - makasih ya!` : `${priority.label} sudah selesai live`,
+          title: endMessage ? `💚 ${priority.label} sudah selesai live - makasih ya!` : `${priority.label} sudah selesai live`,
           description: memberName,
           color: priority.color,
           url: liveUrl,
           ...(imageUrl ? { thumbnail: { url: imageUrl } } : {}),
-          ...(priority.endMessage
-            ? { fields: [{ name: `💌 Pesan dari ${priority.label}`, value: priority.endMessage }], footer: { text: "Sampai jumpa di live berikutnya!" } }
+          ...(endMessage
+            ? { fields: [{ name: `💌 Pesan dari ${priority.label}`, value: endMessage }], footer: { text: "Sampai jumpa di live berikutnya!" } }
             : {}),
         },
       ],
