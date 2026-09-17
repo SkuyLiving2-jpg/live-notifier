@@ -1194,18 +1194,22 @@ function replyMySubscriptions(authorId) {
 // gak pernah gagal total gara-gara sumber tambahan ini.
 // Discord ngerender fenced code block (```) monospace - dipake buat nyusun
 // tabel yang kolomnya rapi rata kiri-kanan, bukan cuma daftar baris teks.
-// Dibatesin MAX_ROWS biar sesi yang buanyak hari ini nggak numbrung ngelewatin
-// limit 2000 karakter per pesan Discord.
-const RECAP_TABLE_MAX_ROWS = 20;
+// Dipecah per PAGE_SIZE baris biar sesi yang buanyak hari ini nggak numbrung
+// ngelewatin limit 2000 karakter per pesan Discord - sebelumnya kelebihan
+// cuma di-buang diem-diem (cuma dikasih catetan "+N sesi lainnya"), sekarang
+// bisa diminta liat halaman berikutnya lewat "cok rekap" -> jawab "y".
+const RECAP_TABLE_PAGE_SIZE = 20;
 
-function buildRecapTable(sessions) {
+function buildRecapTablePage(sessions, page) {
   const sorted = [...sessions].sort((a, b) => a.startedAtUnix - b.startedAtUnix);
-  const shown = sorted.slice(-RECAP_TABLE_MAX_ROWS);
-  const omittedCount = sorted.length - shown.length;
+  const totalPages = Math.max(1, Math.ceil(sorted.length / RECAP_TABLE_PAGE_SIZE));
+  const clampedPage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = clampedPage * RECAP_TABLE_PAGE_SIZE;
+  const pageSessions = sorted.slice(start, start + RECAP_TABLE_PAGE_SIZE);
 
   const header = ["No", "Member", "Status", "Mulai", "Durasi"];
-  const rows = shown.map((s, i) => [
-    String(i + 1),
+  const rows = pageSessions.map((s, i) => [
+    String(start + i + 1),
     s.name,
     s.endedAtUnix !== null ? "Selesai" : "Live",
     formatClockWIB(new Date(s.startedAtUnix * 1000)),
@@ -1216,11 +1220,53 @@ function buildRecapTable(sessions) {
   const formatRow = (cols) => cols.map((c, i) => c.padEnd(widths[i])).join(" | ");
   const separator = widths.map((w) => "-".repeat(w)).join("-+-");
 
-  const lines = ["```", formatRow(header), separator, ...rows.map(formatRow), "```"];
-  if (omittedCount > 0) {
-    lines.push(`_(+${omittedCount} sesi lainnya lebih awal hari ini, gak ditampilin biar gak kepanjangan)_`);
+  const text = ["```", formatRow(header), separator, ...rows.map(formatRow), "```"].join("\n");
+  return { text, page: clampedPage, totalPages, hasMore: clampedPage < totalPages - 1 };
+}
+
+// "channelId:authorId" -> { nextPage, at } - nunggu jawaban y/n abis nunjukkin
+// 1 halaman tabel rekap yang masih ada lanjutannya. Sama pola-nya kayak
+// pendingWatchConfirm (di-key per orang, bukan per channel, biar jawaban
+// orang lain di channel yang sama gak nyasar ke halaman punya orang ini).
+const pendingRecapPage = new Map();
+const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
+
+function buildRecapPageBlock(sessions, page, channelId, authorId) {
+  const result = buildRecapTablePage(sessions, page);
+  const footer = result.hasMore
+    ? `_(Halaman ${result.page + 1}/${result.totalPages} - masih ada lagi, mau liat halaman berikutnya? Balas "y")_`
+    : `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir)_`;
+
+  if (result.hasMore && channelId && authorId) {
+    pendingRecapPage.set(`${channelId}:${authorId}`, { nextPage: result.page + 1, at: Date.now() });
   }
-  return lines.join("\n");
+
+  return `${result.text}\n${footer}`;
+}
+
+// Dicek di awal buildChatReply (sama pola kayak tryHandleWatchConfirmShortcut)
+// - jawaban "y"/"n" polos buat lanjut halaman rekap gak nyebut "cok"/"live",
+// jadi harus ditangkep sebelum gerbang wake-word.
+async function tryHandleRecapPageShortcut(text, channelId, authorId) {
+  if (!channelId || !authorId) return null;
+  const key = `${channelId}:${authorId}`;
+  const pending = pendingRecapPage.get(key);
+  if (!pending) return null;
+
+  if (Date.now() - pending.at > PENDING_RECAP_PAGE_TTL_MS) {
+    pendingRecapPage.delete(key);
+    return null;
+  }
+
+  const isYes = YES_PATTERN.test(text);
+  const isNo = NO_PATTERN.test(text);
+  if (!isYes && !isNo) return null;
+
+  pendingRecapPage.delete(key);
+  if (isNo) return "Oke, segitu aja ya.";
+
+  const log = loadDailyLog();
+  return buildRecapPageBlock(log.sessions, pending.nextPage, channelId, authorId);
 }
 
 // Dulu ini cuma baca log.entries (yang cuma keisi pas live SELESAI) - jadi
@@ -1228,7 +1274,7 @@ function buildRecapTable(sessions) {
 // live"-nya), balesannya "zonk" walau data-nya SEBENERNYA ada. Sekarang
 // pakai log.sessions yang kecatet dari notif "mulai" juga, jadi sesi yang
 // masih live pun ikut keliatan (statusnya "🔴 Live", durasi belum ada).
-async function replyTodayRecapSoFar() {
+async function replyTodayRecapSoFar(channelId, authorId) {
   const log = loadDailyLog();
   const sessions = log.sessions;
   const completed = sessions.filter((s) => s.endedAtUnix !== null);
@@ -1269,7 +1315,7 @@ async function replyTodayRecapSoFar() {
     );
   }
 
-  return [summaryLines.join("\n"), buildRecapTable(sessions)].join("\n") + missedNote;
+  return [summaryLines.join("\n"), buildRecapPageBlock(sessions, 0, channelId, authorId)].join("\n") + missedNote;
 }
 
 function replyMemberStats(fragment) {
@@ -1431,7 +1477,7 @@ async function tryHandleMenuShortcut(text, channelId, authorId) {
       case "7":
         return replyMySubscriptions(authorId);
       default:
-        return await replyTodayRecapSoFar(); // "8"
+        return await replyTodayRecapSoFar(channelId, authorId); // "8"
     }
   }
 
@@ -1512,6 +1558,11 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const watchConfirmReply = tryHandleWatchConfirmShortcut(text, channelId, authorId);
   if (watchConfirmReply) return watchConfirmReply;
 
+  // Dicek abis watchConfirm - kalau kebetulan dua-duanya lagi pending buat
+  // orang yang sama, jawaban "y"-nya kepake buat yang pertama diminta duluan.
+  const recapPageReply = await tryHandleRecapPageShortcut(text, channelId, authorId);
+  if (recapPageReply) return recapPageReply;
+
   const shortcutReply = await tryHandleMenuShortcut(text, channelId, authorId);
   if (shortcutReply) return shortcutReply;
 
@@ -1569,7 +1620,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   }
 
   if (containsWholeWord(text, "rekap")) {
-    return await replyTodayRecapSoFar();
+    return await replyTodayRecapSoFar(channelId, authorId);
   }
 
   const asksTopViewers =
