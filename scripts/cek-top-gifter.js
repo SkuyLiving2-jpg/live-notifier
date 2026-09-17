@@ -19,12 +19,25 @@
 //   $env:IDN_AUTH_TOKEN = "Bearer eyJ..."
 //   $env:IDN_X_API_KEY = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 //   node scripts/cek-top-gifter.js https://www.idn.app/jkt48_kathrina/live/yyyash-260916215907 10
+//
+// OPSIONAL: biar hasilnya juga bisa dijawab lewat chat Discord ("cok gifter
+// <nama>"), isi BOT_API_URL & API_SECRET di file .env (BUKAN dari IDN sama
+// sekali - ini URL bot kamu sendiri di Railway + secret yang sama kayak di
+// server-nya). Abis itu tiap kali mode interaktif berhasil cek gifter, HASIL
+// nya (bukan token IDN-nya) langsung dikirim ke bot lewat request yang
+// di-sign (lihat js/security.js) - kalau dua var itu kosong, fitur ini
+// cuma di-skip, semuanya tetap jalan normal kayak biasa (lokal doang).
 
 const readline = require("readline");
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+const { signPayload } = require("../js/security");
 
 const IDN_API_URL = "https://api.idn.app/graphql";
 const MAX_LIVESTREAM_PAGES = 20;
 const DEFAULT_TOP_N = 10;
+const BOT_API_URL = process.env.BOT_API_URL || "";
+const API_SECRET = process.env.API_SECRET || "";
 
 const c = {
   reset: "\x1b[0m",
@@ -146,6 +159,31 @@ function printGifterResults(gifters, liveName) {
   console.log();
 }
 
+// Ngirim HASIL cek (nama gifter + gold) ke bot Discord yang lagi jalan -
+// BUKAN token IDN-nya. Pake signPayload yang sama kayak yang dipake server
+// buat verifikasi (js/security.js), jadi endpoint-nya cuma nerima request
+// yang beneran dari kita, bukan sembarang orang yang nebak URL bot-nya.
+async function pushSnapshotToBot(username, name, gifters) {
+  const bodyString = JSON.stringify({ username, name, gifters });
+  const timestamp = Date.now().toString();
+  const signature = signPayload(API_SECRET, timestamp, bodyString);
+
+  const res = await fetch(`${BOT_API_URL.replace(/\/+$/, "")}/api/gifter-snapshot`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Api-Timestamp": timestamp,
+      "X-Api-Signature": signature,
+    },
+    body: bodyString,
+  });
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null);
+    throw new Error(`Bot balikin status ${res.status}: ${errBody ? JSON.stringify(errBody) : "(gak ada detail)"}`);
+  }
+}
+
 // Kalau lagi nggak ada yang live sama sekali -> null.
 // Kalau cuma 1 -> langsung dipilih otomatis, nggak usah nanya.
 // Kalau 2+ -> tampilin daftarnya, biar user tinggal ketik nomornya (atau
@@ -219,6 +257,10 @@ async function runInteractive() {
   let apiKey = process.env.IDN_X_API_KEY || null;
 
   console.log(`${c.bold}🏆 Cek Top Gifter IDN Live${c.reset}\n`);
+  const canPushToBot = Boolean(BOT_API_URL && API_SECRET);
+  if (!canPushToBot) {
+    console.log(`${c.dim}(Tip: isi BOT_API_URL & API_SECRET di .env biar hasilnya juga muncul di chat Discord lewat "cok gifter <nama>")${c.reset}\n`);
+  }
 
   if (!authToken || !apiKey) {
     const creds = await askCredentials(prompter);
@@ -254,6 +296,15 @@ async function runInteractive() {
     try {
       const gifters = (await fetchTopGifter(live.slug, DEFAULT_TOP_N, authToken, apiKey)).slice(0, DEFAULT_TOP_N);
       printGifterResults(gifters, live.creator.name);
+
+      if (canPushToBot) {
+        try {
+          await pushSnapshotToBot(live.creator.username, live.creator.name, gifters);
+          console.log(`${c.green}✓ Snapshot ke-update di Discord bot juga.${c.reset}\n`);
+        } catch (pushError) {
+          console.log(`${c.red}Gagal update ke Discord bot (data ini cuma keliatan di layar kamu): ${pushError.message}${c.reset}\n`);
+        }
+      }
     } catch (error) {
       if (error.isAuthError) {
         console.log(`${c.red}${error.message}${c.reset} Minta token baru ya.\n`);

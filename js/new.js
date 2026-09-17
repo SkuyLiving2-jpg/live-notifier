@@ -208,6 +208,52 @@ function getSubscribersFor(memberName, username) {
   return [...ids];
 }
 
+// Snapshot top-gifter: username -> { name, gifters, checkedAt }. Bot ini
+// SENDIRI nggak pernah manggil API top-gifter IDN (itu butuh login pribadi,
+// nggak cocok disimpen di server 24/7 - lihat scripts/cek-top-gifter.js).
+// File ini isinya cuma DIISI dari luar, lewat endpoint /api/gifter-snapshot
+// (POST, butuh signature) yang dipanggil scripts/cek-top-gifter.js abis
+// kamu cek manual di komputer sendiri. Jadi yang nyebrang ke bot cuma HASIL
+// datanya (nama gifter + gold), kredensialnya sendiri nggak pernah ke sini.
+const GIFTER_SNAPSHOT_FILE = path.join(CACHE_DIR, "gifter-snapshot.json");
+
+function loadGifterSnapshot() {
+  try {
+    const data = JSON.parse(fs.readFileSync(GIFTER_SNAPSHOT_FILE, "utf-8"));
+    data.members = data.members || {};
+    return data;
+  } catch (error) {
+    return { members: {} };
+  }
+}
+
+function saveGifterSnapshot(snapshot) {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(GIFTER_SNAPSHOT_FILE, JSON.stringify(snapshot, null, 2));
+  } catch (error) {
+    console.error("Gagal nyimpen snapshot gifter:", error.message);
+  }
+}
+
+// Sama logikanya kayak findMemberByNameFragment, tapi nyariin di snapshot
+// gifter (bukan di activeLives) - dipanggil member yang MASIH live maupun
+// yang udah kelar tetap bisa ketemu, soalnya ini data historis/snapshot.
+function findGifterSnapshotByNameFragment(fragment) {
+  const needle = (fragment || "").trim().toLowerCase();
+  if (!needle) return null;
+
+  const { members } = loadGifterSnapshot();
+  for (const [username, data] of Object.entries(members)) {
+    if (!data?.name) continue;
+    const givenName = data.name.split(/[\s|]+/)[0].toLowerCase();
+    if (matchesNameFragment(needle, givenName)) {
+      return { username, ...data };
+    }
+  }
+  return null;
+}
+
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug }
 // Disimpan juga ke file (CACHE_FILE) biar kalau proses restart (crash, atau
 // container-nya di-restart), bot nggak ngirim ulang notif "mulai live" buat
@@ -905,14 +951,51 @@ function handleProtectedStatus(req, res) {
   );
 }
 
+// Nerima snapshot top-gifter yang di-push dari scripts/cek-top-gifter.js
+// (jalan di komputer lokal siapapun yang megang akun IDN-nya). Body-nya
+// CUMA hasil (username, name, gifters) - nggak ada kredensial IDN sama
+// sekali yang lewat sini, jadi aman walau endpoint-nya "publik" (tetep
+// dilindungi signature, tapi isinya emang bukan rahasia).
+function handleGifterSnapshotUpload(req, res, body) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed, pakai POST" }));
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch (error) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body bukan JSON valid" }));
+    return;
+  }
+
+  const { username, name, gifters } = payload || {};
+  if (typeof username !== "string" || !username || typeof name !== "string" || !name || !Array.isArray(gifters)) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body harus punya username (string), name (string), dan gifters (array)" }));
+    return;
+  }
+
+  const snapshot = loadGifterSnapshot();
+  snapshot.members[username] = { name, gifters, checkedAt: new Date().toISOString() };
+  saveGifterSnapshot(snapshot);
+
+  console.log(`Snapshot gifter ke-update buat ${name} (${gifters.length} gifter)`);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, username, gifterCount: gifters.length }));
+}
+
 // Railway (dan platform hosting sejenis) ngecek apakah service "sehat" dengan
 // nunggu ada port yang kebuka. Bot ini murni background process tanpa server
 // HTTP, jadi tanpa ini Railway bisa nganggep container-nya nggak sehat dan
 // restart terus-menerus. Server kecil ini cuma buat "ngasih tanda hidup".
 //
-// /api/status sengaja dipisah dan dilindungi signature - health-check di "/"
-// TETAP publik tanpa signature, karena Railway & UptimeRobot manggil itu
-// tanpa tahu cara nge-sign request.
+// /api/status & /api/gifter-snapshot sengaja dipisah dan dilindungi
+// signature - health-check di "/" TETAP publik tanpa signature, karena
+// Railway & UptimeRobot manggil itu tanpa tahu cara nge-sign request.
 const PORT = process.env.PORT || 3000;
 require("http")
   .createServer((req, res) => {
@@ -923,6 +1006,16 @@ require("http")
         return;
       }
       requireSignedRequest(API_SECRET, handleProtectedStatus)(req, res);
+      return;
+    }
+
+    if (req.url === "/api/gifter-snapshot") {
+      if (!API_SECRET) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "API_SECRET belum diset di server" }));
+        return;
+      }
+      requireSignedRequest(API_SECRET, handleGifterSnapshotUpload)(req, res);
       return;
     }
 
@@ -1046,6 +1139,7 @@ function replyHelp() {
     '- "cok status"',
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
+    '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok daftar prioritas" - lihat member prioritas',
     '- "cok ingetin <nama member>" - kamu di-tag pribadi kalau dia mulai live',
@@ -1181,6 +1275,32 @@ function replyMemberStats(fragment) {
     `- Rata-rata durasi: ${formatDuration(avg)}`,
     `- Rekor terlama: ${formatDuration(max)}`,
   ].join("\n");
+}
+
+// PENTING: ini SNAPSHOT (foto sesaat), bukan live/real-time. Bot ini sendiri
+// nggak pernah manggil API top-gifter (butuh login pribadi) - datanya cuma
+// seakurat terakhir kali kamu jalanin "npm run cek-gifter" manual, jadi
+// selalu dikasih tau "dicek X lalu" biar orang gak salah kira ini real-time.
+function replyGifterSnapshot(fragment) {
+  const name = (fragment || "").trim();
+  if (!name) return 'Gifter siapa? Ketik nama membernya juga ya, misal "cok gifter kathrina".';
+
+  const found = findGifterSnapshotByNameFragment(name);
+  if (!found) {
+    return `Cok, belum ada data top gifter buat "${name}". Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu di komputernya biar ke-update.`;
+  }
+
+  const checkedText = formatRelativeTime(new Date(found.checkedAt));
+  if (!found.gifters || found.gifters.length === 0) {
+    return `Cok, **${found.name}** belum ada gifter di data terakhir (dicek ${checkedText}, bukan live real-time).`;
+  }
+
+  const medals = ["🥇", "🥈", "🥉"];
+  const lines = found.gifters
+    .slice(0, 10)
+    .map((g, i) => `${medals[i] || `${i + 1}.`} ${g.name} - ${Number(g.total_gold).toLocaleString("id-ID")} Gold`);
+
+  return [`🏆 **Top Gifter ${found.name}** (dicek ${checkedText}, BUKAN live real-time)`, ...lines].join("\n");
 }
 
 function isOwner(authorId) {
@@ -1416,6 +1536,11 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const statsMatch = text.match(/stat(?:s|istik)\s+(.+)/);
   if (statsMatch) {
     return replyMemberStats(statsMatch[1]);
+  }
+
+  const gifterMatch = text.match(/gifter\s+(.+)/);
+  if (gifterMatch) {
+    return replyGifterSnapshot(gifterMatch[1]);
   }
 
   if (containsWholeWord(text, "prioritas") && (containsWholeWord(text, "daftar") || containsWholeWord(text, "siapa") || containsWholeWord(text, "list"))) {
