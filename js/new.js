@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { requireSignedRequest } = require("./security");
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
 
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
@@ -1427,6 +1428,26 @@ function handleUnsubscribe(rawName, authorId) {
 const pendingMenuByChannel = new Map();
 const PENDING_MENU_TTL_MS = 3 * 60000;
 
+// Tombol Discord buat tiap pilihan menu - custom_id-nya "fallback_menu:<N>",
+// dibaca di handleFallbackMenuButton(). Discord batesin maksimal 5 tombol
+// per baris, jadi 9 pilihan dipecah jadi 2 baris (5 + 4).
+function buildFallbackMenuComponents() {
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("fallback_menu:1").setLabel("1. Siapa yang live").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("fallback_menu:2").setLabel("2. Status bot").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("fallback_menu:3").setLabel("3. Paling lama live").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("fallback_menu:4").setLabel("4. Cek member").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("fallback_menu:5").setLabel("5. Paling rame ditonton").setStyle(ButtonStyle.Primary),
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("fallback_menu:6").setLabel("6. Daftar prioritas").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("fallback_menu:7").setLabel("7. Reminder aku").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("fallback_menu:8").setLabel("8. Rekap hari ini").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("fallback_menu:9").setLabel("9. Cek top gifter").setStyle(ButtonStyle.Success),
+  );
+  return [row1, row2];
+}
+
 // Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
 // pertanyaan yang udah dikenali - dikasih menu daripada bot diem aja.
 //
@@ -1434,9 +1455,14 @@ const PENDING_MENU_TTL_MS = 3 * 60000;
 // SALAH, yang beneran dijalanin (replyLongestLive) itu ranking durasi live
 // yang LAGI AKTIF sekarang, bukan rekap harian (itu fiturnya "cok rekap
 // hari ini" / pilihan #8, beda). Dibenerin biar gak nyesetin ekspektasi.
+//
+// Balikin OBJECT ({content, components}), bukan string doang - discord.js
+// nerima dua-duanya di message.reply(), jadi gak perlu ubah apa-apa di
+// pemanggilnya. Nomor 1-9 ketik manual TETEP jalan (lewat tryHandleMenuShortcut)
+// - tombol ini cuma nambahin cara yang lebih gampang, bukan gantiin.
 function replyFallbackMenu() {
   const ownerContact = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}>` : "owner channel ini";
-  return [
+  const content = [
     `Halo, selamat ${getGreeting()}! Apa yang ingin kamu tanyakan?`,
     "1. Siapa saja yang masih live?",
     "2. Status live sekarang",
@@ -1448,10 +1474,48 @@ function replyFallbackMenu() {
     "8. Rekap live hari ini",
     "9. Cek top gifter <nama member> (data terakhir dari 'npm run cek-gifter', bukan real-time)",
     "",
-    '(Abis ini kamu bisa balas cukup ketik angkanya aja, misal "1" atau "4 Nala")',
+    'Klik tombol di bawah, atau balas cukup ketik angkanya aja (misal "1" atau "4 Nala")',
     "",
     `Kalau ada pertanyaan lain, silakan hubungi ${ownerContact}.`,
   ].join("\n");
+  return { content, components: buildFallbackMenuComponents() };
+}
+
+// Dipake bareng-bareng sama shortcut angka (chat teks) DAN tombol Discord -
+// biar switch-nya cuma ada di 1 tempat, gak didobelin.
+async function resolveBareMenuChoice(choice, channelId, authorId) {
+  switch (choice) {
+    case "1":
+      return replyListLive();
+    case "2":
+      return replyBotStatus();
+    case "3":
+      return replyLongestLive();
+    case "5":
+      return replyTopViewers();
+    case "6":
+      return replyPriorityList();
+    case "7":
+      return replyMySubscriptions(authorId);
+    case "8":
+      return await replyTodayRecapSoFar(channelId, authorId);
+    default:
+      return null;
+  }
+}
+
+// "channelId:authorId" -> { option: "4"|"9", at } - nunggu NAMA member abis
+// user milih opsi 4/9 tanpa langsung nyebut nama. BUG SEBELUMNYA: begitu
+// nanya "member yang mana?"/"gifter siapa?", pendingMenuByChannel keburu
+// ke-hapus (sekali pake abis itu clear) - jadi jawaban berikutnya (nama
+// doang, ATAU ulang "9 <nama>") gak dikenalin lagi sebagai lanjutan opsi
+// 4/9, malah nyasar ke router biasa (bisa salah ke-anggep command lain sama
+// sekali). Sekarang dicatet dulu opsi mana yang lagi nunggu nama.
+const pendingMemberPrompt = new Map();
+const PENDING_MEMBER_PROMPT_TTL_MS = 2 * 60000;
+
+function memberPromptQuestion(option) {
+  return option === "4" ? 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".' : 'Gifter siapa? Ketik nama membernya juga ya, misal "9 Nala".';
 }
 
 async function tryHandleMenuShortcut(text, channelId, authorId) {
@@ -1474,33 +1538,89 @@ async function tryHandleMenuShortcut(text, channelId, authorId) {
   pendingMenuByChannel.delete(channelId); // sekali pake abis itu clear
 
   if (bareChoice) {
-    switch (bareChoice[1]) {
-      case "1":
-        return replyListLive();
-      case "2":
-        return replyBotStatus();
-      case "3":
-        return replyLongestLive();
-      case "5":
-        return replyTopViewers();
-      case "6":
-        return replyPriorityList();
-      case "7":
-        return replyMySubscriptions(authorId);
-      default:
-        return await replyTodayRecapSoFar(channelId, authorId); // "8"
+    return await resolveBareMenuChoice(bareChoice[1], channelId, authorId);
+  }
+
+  const option = choiceFour ? "4" : "9";
+  const rest = ((choiceFour || choiceNine)[1] || "").trim();
+  if (!rest) {
+    if (authorId) pendingMemberPrompt.set(`${channelId}:${authorId}`, { option, at: Date.now() });
+    return memberPromptQuestion(option);
+  }
+  return option === "4" ? startWatchConfirm(rest, channelId, authorId) : replyGifterSnapshot(rest);
+}
+
+// Dicek di awal buildChatReply (pola sama kayak tryHandleWatchConfirmShortcut)
+// - jawaban nama polos ("nala") atau ulang command ("9 nala") gak nyebut
+// "cok"/"live" sama sekali, jadi harus ketangkep sebelum gerbang wake-word.
+function tryHandleMemberPromptShortcut(text, channelId, authorId) {
+  if (!channelId || !authorId) return null;
+  const key = `${channelId}:${authorId}`;
+  const pending = pendingMemberPrompt.get(key);
+  if (!pending) return null;
+
+  if (Date.now() - pending.at > PENDING_MEMBER_PROMPT_TTL_MS) {
+    pendingMemberPrompt.delete(key);
+    return null;
+  }
+
+  const trimmed = text.trim();
+  const isBareOptionRepeat = trimmed === pending.option; // ngetik ulang "9"/"4" doang, tanpa nama
+  const withoutPrefix = trimmed.replace(new RegExp(`^${pending.option}\\s+`), "").trim();
+  const name = isBareOptionRepeat ? "" : withoutPrefix || trimmed;
+
+  if (!name) return memberPromptQuestion(pending.option); // masih nunggu nama, pending TETEP hidup
+
+  pendingMemberPrompt.delete(key);
+  return pending.option === "4" ? startWatchConfirm(name, channelId, authorId) : replyGifterSnapshot(name);
+}
+
+// Diklik dari tombol replyFallbackMenu(). Pilihan 1/2/3/5/6/7/8 langsung
+// dijawab lewat resolveBareMenuChoice (fungsi sama yang dipake shortcut
+// angka). Pilihan 4/9 beda - butuh tau membernya SIAPA, jadi alih-alih nyuruh
+// ngetik nama manual, langsung dikasih dropdown isinya member yang lagi live.
+async function handleFallbackMenuButton(interaction) {
+  const optionId = interaction.customId.split(":")[1];
+
+  if (optionId === "4" || optionId === "9") {
+    const sorted = getSortedActiveLives();
+    if (sorted.length === 0) {
+      await interaction.reply({ content: "Cok, lagi nggak ada member JKT48 yang live nih.", ephemeral: true });
+      return;
     }
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId(`fallback_select:${optionId}`)
+      .setPlaceholder("Pilih member...")
+      .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
+    const row = new ActionRowBuilder().addComponents(selectMenu);
+    const prompt = optionId === "4" ? "Mau cek member yang mana?" : "Mau cek top gifter member yang mana?";
+    // Ephemeral (cuma keliatan yang mimic tombolnya) - ini baru langkah
+    // milih, belum jawaban final, jadi gak perlu numpuk di channel publik.
+    await interaction.reply({ content: prompt, components: [row], ephemeral: true });
+    return;
   }
 
-  if (choiceFour) {
-    const rest = (choiceFour[1] || "").trim();
-    if (!rest) return 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".';
-    return startWatchConfirm(rest, channelId, authorId);
+  const reply = await resolveBareMenuChoice(optionId, interaction.channelId, interaction.user.id);
+  if (reply) await interaction.reply(reply);
+}
+
+// Diklik abis milih member dari dropdown yang dimunculin handleFallbackMenuButton.
+// Jawaban FINAL ini sengaja PUBLIK (bukan ephemeral) - informasinya kayak
+// "siapa yang live"/"top gifter" itu kepake bareng, konsisten sama balesan
+// command teks yang emang keliatan semua orang di channel.
+async function handleFallbackMemberSelect(interaction) {
+  const optionId = interaction.customId.split(":")[1];
+  const username = interaction.values[0];
+  const entry = activeLives.get(username);
+
+  if (optionId === "4") {
+    const reply = entry ? startWatchConfirm(entry.name, interaction.channelId, interaction.user.id) : replyMemberNotFound(username);
+    await interaction.reply(reply);
+    return;
   }
 
-  const restNine = (choiceNine[1] || "").trim();
-  if (!restNine) return 'Gifter siapa? Ketik nama membernya juga ya, misal "9 Nala".';
-  return replyGifterSnapshot(restNine);
+  await interaction.reply(replyGifterSnapshot(entry ? entry.name : username));
 }
 
 // "channelId:authorId" -> { username, name, at } - nunggu jawaban y/n abis
@@ -1573,6 +1693,9 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // orang yang sama, jawaban "y"-nya kepake buat yang pertama diminta duluan.
   const recapPageReply = await tryHandleRecapPageShortcut(text, channelId, authorId);
   if (recapPageReply) return recapPageReply;
+
+  const memberPromptReply = tryHandleMemberPromptShortcut(text, channelId, authorId);
+  if (memberPromptReply) return memberPromptReply;
 
   const shortcutReply = await tryHandleMenuShortcut(text, channelId, authorId);
   if (shortcutReply) return shortcutReply;
@@ -1685,7 +1808,6 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 // Fitur tanya-jawab ini opsional - kalau DISCORD_BOT_TOKEN nggak diset,
 // notifikasi tetap jalan normal, cuma bot nggak bisa dichat.
 if (DISCORD_BOT_TOKEN) {
-  const { Client, GatewayIntentBits } = require("discord.js");
   const chatClient = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   });
@@ -1706,6 +1828,18 @@ if (DISCORD_BOT_TOKEN) {
       if (reply) await message.reply(reply);
     } catch (error) {
       console.error("Gagal balas chat:", error.message);
+    }
+  });
+
+  chatClient.on("interactionCreate", async (interaction) => {
+    try {
+      if (interaction.isButton() && interaction.customId.startsWith("fallback_menu:")) {
+        await handleFallbackMenuButton(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("fallback_select:")) {
+        await handleFallbackMemberSelect(interaction);
+      }
+    } catch (error) {
+      console.error("Gagal proses tombol/menu Discord:", error.message);
     }
   });
 
