@@ -14,10 +14,16 @@ const POLL_INTERVAL_MS = 30000;
 // publik biar Railway/UptimeRobot bisa akses tanpa signature).
 const API_SECRET = process.env.API_SECRET || "";
 
-// CACHE_DIR bisa di-override lewat environment variable (misalnya diarahkan
-// ke mount point Railway Volume) biar cache-nya tahan lintas redeploy juga.
-// Kalau nggak diset, default-nya folder data/ di root project.
-const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, "..", "data");
+// CACHE_DIR nentuin di mana semua file data (rekap, prioritas, subscription,
+// dll) disimpen. Urutan prioritas:
+//   1. CACHE_DIR - kalau mau nunjuk manual ke folder tertentu.
+//   2. RAILWAY_VOLUME_MOUNT_PATH - Railway ngisi ini OTOMATIS begitu kamu
+//      nempelin Volume ke service ini (gak perlu diisi manual sama sekali,
+//      cukup attach Volume-nya doang di dashboard Railway) - biar data-nya
+//      TAHAN lintas redeploy, bukan ke-reset tiap kali ada kode baru di-push.
+//   3. Kalau dua-duanya kosong (mis. lagi jalan di komputer lokal), fallback
+//      ke folder data/ di root project.
+const CACHE_DIR = process.env.CACHE_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, "..", "data");
 const CACHE_FILE = path.join(CACHE_DIR, "active-lives-cache.json");
 const DURATION_HISTORY_FILE = path.join(CACHE_DIR, "live-duration-history.json");
 
