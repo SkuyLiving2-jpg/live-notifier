@@ -24,6 +24,13 @@ const API_SECRET = process.env.API_SECRET || "";
 //   3. Kalau dua-duanya kosong (mis. lagi jalan di komputer lokal), fallback
 //      ke folder data/ di root project.
 const CACHE_DIR = process.env.CACHE_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, "..", "data");
+// Log ini sengaja dicetak paling awal pas boot - cara paling gampang buat
+// mastiin (lewat Deploy Logs di Railway) apakah data beneran kesimpen di
+// Volume yang persistent, atau diam-diam masih fallback ke folder lokal
+// yang bakal ke-reset tiap redeploy.
+console.log(
+  `CACHE_DIR aktif: ${CACHE_DIR} ${process.env.RAILWAY_VOLUME_MOUNT_PATH ? "(dari Railway Volume - persistent ✓)" : "(BUKAN dari Volume - bakal ke-reset tiap redeploy!)"}`,
+);
 const CACHE_FILE = path.join(CACHE_DIR, "active-lives-cache.json");
 const DURATION_HISTORY_FILE = path.join(CACHE_DIR, "live-duration-history.json");
 
