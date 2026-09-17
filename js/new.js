@@ -133,7 +133,7 @@ function removeCustomPriorityMember(rawKeyword) {
 
 function getPriorityConfig(memberName, username) {
   const text = `${memberName || ""} ${username || ""}`.toLowerCase();
-  return getAllPriorityMembers().find((p) => text.includes(p.keyword)) || null;
+  return getAllPriorityMembers().find((p) => containsWholeWord(text, p.keyword)) || null;
 }
 
 // Fitur: SIAPA AJA (bukan cuma owner) bisa "cok ingetin <nama>" buat di-tag
@@ -192,16 +192,19 @@ function removeSubscription(rawKeyword, userId) {
   return { ok: true };
 }
 
-// User yang udah di-mention lewat PRIORITY_PING_USER_ID sengaja di-exclude
-// di sini biar nggak dobel tag di notif member prioritas.
+// User yang udah di-mention lewat PRIORITY_PING_USER_ID di-exclude dari hasil
+// SUBSCRIPTIONnya kalau member ini kebetulan member prioritas juga - biar
+// nggak dobel tag di notifnya. Sebelumnya ini selalu ngehapus PRIORITY_PING_USER_ID
+// dari hasil apapun membernya - bug-nya, kalau si owner subscribe ke member
+// yang BUKAN prioritas, dia nggak akan pernah ke-tag walau udah subscribe.
 function getSubscribersFor(memberName, username) {
   const text = `${memberName || ""} ${username || ""}`.toLowerCase();
   const subs = loadSubscriptions();
   const ids = new Set();
   for (const [keyword, list] of Object.entries(subs)) {
-    if (text.includes(keyword)) list.forEach((id) => ids.add(id));
+    if (containsWholeWord(text, keyword)) list.forEach((id) => ids.add(id));
   }
-  ids.delete(PRIORITY_PING_USER_ID);
+  if (getPriorityConfig(memberName, username)) ids.delete(PRIORITY_PING_USER_ID);
   return [...ids];
 }
 
@@ -292,6 +295,20 @@ function matchesNameFragment(needle, givenName) {
   });
 }
 
+// Cek apakah `phrase` (bisa 1 kata atau beberapa kata, misal keyword custom
+// prioritas/subscription) muncul di `text` sebagai KATA/FRASE UTUH, bukan
+// nyempil di tengah kata lain. Sebelumnya beberapa tempat (getPriorityConfig,
+// getSubscribersFor, deteksi wake word "cok"/"live") pakai text.includes()
+// biasa - itu bug yang sama kelasnya kayak yang udah dibenerin di
+// matchesNameFragment: keyword "cok" ke-anggep nyantol ke "cokelat", keyword
+// "live" ke-anggep nyantol ke "delivery", keyword prioritas "lily" ke-anggep
+// nyantol ke member lain yang kebetulan namanya mengandung "lily" di tengah.
+function containsWholeWord(text, phrase) {
+  if (!text || !phrase) return false;
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(` ${text} `);
+}
+
 function findDurationHistoryByNameFragment(fragment) {
   const needle = (fragment || "").trim().toLowerCase();
   if (!needle) return null;
@@ -322,6 +339,14 @@ function formatRelativeTime(date) {
   if (diffHour < 24) return `${diffHour} jam lalu`;
   const diffDay = Math.floor(diffHour / 24);
   return `${diffDay} hari lalu`;
+}
+
+function formatViewCount(n) {
+  return Number(n).toLocaleString("id-ID");
+}
+
+function formatClockWIB(date) {
+  return `${new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }).format(date)} WIB`;
 }
 
 // --- Rekap harian: sekali sehari, ringkasan siapa aja yang live hari itu ---
@@ -857,7 +882,7 @@ function replyListLive() {
 
   const lines = sorted.map((entry, i) => {
     const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
-    const viewText = entry.viewCount != null ? ` | 👁️ ${entry.viewCount}` : "";
+    const viewText = entry.viewCount != null ? ` | 👁️ ${formatViewCount(entry.viewCount)}` : "";
     return `${i + 1}. **${entry.name}** - ${elapsedText}${viewText}`;
   });
 
@@ -872,14 +897,32 @@ function replyLongestLive() {
   return `Yang paling lama live sekarang: **${longest.name}**, ${elapsedText}.`;
 }
 
+// Beda sama replyLongestLive (durasi live) - ini urut berdasarkan JUMLAH
+// PENONTON, buat jawab "siapa yang paling rame ditonton sekarang".
+function replyTopViewers() {
+  const withViews = [...activeLives.values()].filter((e) => e.viewCount != null);
+  if (withViews.length === 0) return "Cok, lagi nggak ada data penonton buat live sekarang.";
+
+  const sorted = [...withViews].sort((a, b) => b.viewCount - a.viewCount);
+  const medals = ["🥇", "🥈", "🥉"];
+  const lines = sorted.map((entry, i) => {
+    const medal = medals[i] || `${i + 1}.`;
+    return `${medal} **${entry.name}** - 👁️ ${formatViewCount(entry.viewCount)}`;
+  });
+
+  return `👀 Paling rame ditonton sekarang:\n${lines.join("\n")}`;
+}
+
 function replyBotStatus() {
   return `✅ Bot jalan normal. Lagi mantau ${activeLives.size} member yang live sekarang.`;
 }
 
 function replySpecificMember(entry) {
   const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
+  const startText = entry.liveAt ? `, mulai jam ${formatClockWIB(new Date(entry.liveAt))}` : "";
+  const viewText = entry.viewCount != null ? ` | 👁️ ${formatViewCount(entry.viewCount)} penonton` : "";
   const liveUrl = `https://idn.app/${entry.username}/live/${entry.slug}`;
-  return `**${entry.name}** lagi live, ${elapsedText}. ${liveUrl}`;
+  return `**${entry.name}** lagi live, ${elapsedText}${startText}${viewText}. ${liveUrl}`;
 }
 
 function replyMemberNotFound(fragment) {
@@ -909,12 +952,63 @@ function replyHelp() {
     "Cok bisa jawab ini:",
     '- "cok ini yang masih live siapa aja?"',
     '- "cok siapa yang paling lama live?"',
+    '- "cok siapa yang paling rame ditonton?"',
     '- "cok status"',
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
+    '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
+    '- "cok daftar prioritas" - lihat member prioritas',
     '- "cok ingetin <nama member>" - kamu di-tag pribadi kalau dia mulai live',
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
+    '- "cok reminder aku" - lihat kamu subscribe reminder siapa aja',
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
+  ].join("\n");
+}
+
+// Daftar SEMUA member prioritas (bawaan Nala/Levi/Lily + custom yang
+// ditambahin owner lewat chat) - siapa aja boleh nanya ini, bukan cuma owner.
+function replyPriorityList() {
+  const all = getAllPriorityMembers().sort((a, b) => a.rank - b.rank);
+  if (all.length === 0) return "Cok, belum ada member prioritas yang diset.";
+  const lines = all.map((p) => `${p.rank}. **${p.label}** (keyword: "${p.keyword}")`);
+  return `⭐ Daftar member prioritas:\n${lines.join("\n")}`;
+}
+
+// Kebalikan dari handleSubscribe/handleUnsubscribe - buat user nanya "aku
+// subscribe siapa aja sih" tanpa harus inget-inget sendiri.
+function replyMySubscriptions(authorId) {
+  const subs = loadSubscriptions();
+  const keywords = Object.entries(subs)
+    .filter(([, ids]) => ids.includes(authorId))
+    .map(([keyword]) => keyword);
+
+  if (keywords.length === 0) {
+    return 'Cok, kamu belum subscribe reminder buat siapa pun. Ketik "cok ingetin <nama member>" buat mulai.';
+  }
+  return `🔔 Kamu subscribe reminder buat: ${keywords.map((k) => `"${k}"`).join(", ")}`;
+}
+
+// Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00
+// WIB) - ini dipanggil kapan aja user nanya, nunjukkin progress SEJAUH INI
+// (live yang masih berlangsung belum ikut ke-hitung, baru masuk pas selesai).
+function replyTodayRecapSoFar() {
+  const log = loadDailyLog();
+  const stillLiveNote = activeLives.size > 0 ? `\n(masih ada ${activeLives.size} yang live sekarang, belum masuk hitungan ini)` : "";
+
+  if (log.entries.length === 0) {
+    return `Cok, belum ada live yang selesai hari ini (${log.date}).${stillLiveNote}`;
+  }
+
+  const totalLives = log.entries.length;
+  const totalDurationMs = log.entries.reduce((sum, e) => sum + e.durationMs, 0);
+  const longest = log.entries.reduce((max, e) => (e.durationMs > max.durationMs ? e : max), log.entries[0]);
+  const uniqueMembers = new Set(log.entries.map((e) => e.name)).size;
+
+  return [
+    `📋 **Rekap sementara hari ini (${log.date})**`,
+    `Total live selesai: ${totalLives}x dari ${uniqueMembers} member`,
+    `Total durasi gabungan: ${formatDuration(totalDurationMs)}`,
+    `Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})${stillLiveNote}`,
   ].join("\n");
 }
 
@@ -940,9 +1034,16 @@ function isOwner(authorId) {
   return Boolean(PRIORITY_PING_USER_ID) && authorId === PRIORITY_PING_USER_ID;
 }
 
+// Dipake buat bersihin ekor kayak "nala live" / "nala live?" jadi cuma
+// "nala" - orang sering nulis kalimat lengkap ("tambah prioritas nala live")
+// padahal yang dibutuhin cuma nama/keyword-nya doang.
+function stripTrailingLiveWord(raw) {
+  return (raw || "").trim().replace(/\s+live\??$/i, "").trim();
+}
+
 function handleAddPriority(nameFragment, authorId) {
   if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ubah daftar prioritas.";
-  const name = nameFragment.trim();
+  const name = stripTrailingLiveWord(nameFragment);
   const result = addCustomPriorityMember(name);
   if (!result.ok && result.reason === "exists") return `"${name}" udah ada di daftar prioritas.`;
   if (!result.ok && result.reason === "too_short") return "Nama/keyword-nya kependekan, minimal 3 huruf ya.";
@@ -952,7 +1053,7 @@ function handleAddPriority(nameFragment, authorId) {
 
 function handleRemovePriority(nameFragment, authorId) {
   if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ubah daftar prioritas.";
-  const name = nameFragment.trim();
+  const name = stripTrailingLiveWord(nameFragment);
   const result = removeCustomPriorityMember(name);
   if (!result.ok) return `"${name}" nggak ketemu di daftar prioritas custom (Nala/Levi/Lily nggak bisa dihapus lewat chat).`;
   return `✅ "${name}" dihapus dari daftar prioritas.`;
@@ -961,7 +1062,7 @@ function handleRemovePriority(nameFragment, authorId) {
 // Beda dari priority list (khusus owner), subscribe ini SIAPA AJA boleh -
 // personal reminder buat di-tag pas member manapun mulai live.
 function handleSubscribe(rawName, authorId) {
-  const name = rawName.trim().replace(/\s+live\??$/, "").trim();
+  const name = stripTrailingLiveWord(rawName);
   const result = addSubscription(name, authorId);
   if (!result.ok && result.reason === "too_short") return "Nama membernya kependekan, minimal 3 huruf ya.";
   if (!result.ok && result.reason === "already") return `Kamu udah subscribe notif buat "${name}" kok.`;
@@ -970,7 +1071,7 @@ function handleSubscribe(rawName, authorId) {
 }
 
 function handleUnsubscribe(rawName, authorId) {
-  const name = rawName.trim().replace(/\s+live\??$/, "").trim();
+  const name = stripTrailingLiveWord(rawName);
   const result = removeSubscription(name, authorId);
   if (!result.ok) return `Kamu belum subscribe "${name}".`;
   return `🔕 Oke, notif buat "${name}" dimatiin.`;
@@ -1038,13 +1139,14 @@ function buildChatReply(rawContent, { isBotChannel = false, channelId = null, au
 
   // Di channel khusus bot, hampir semua pesan dianggap "ditujukan ke bot" -
   // gak perlu nyebut "cok" atau "live" dulu.
-  const mentionsBot = isBotChannel || CHAT_WAKE_WORDS.some((w) => text.includes(w));
+  const mentionsBot = isBotChannel || CHAT_WAKE_WORDS.some((w) => containsWholeWord(text, w));
   const looksLikeLiveQuestion =
-    TOPIC_WORDS.some((w) => text.includes(w)) && QUESTION_HINTS.some((w) => text.includes(w));
+    TOPIC_WORDS.some((w) => containsWholeWord(text, w)) &&
+    QUESTION_HINTS.some((w) => (w === "?" ? text.includes("?") : containsWholeWord(text, w)));
 
   if (!mentionsBot && !looksLikeLiveQuestion) return null;
 
-  const addPriorityMatch = text.match(/tambah(?:in)?\s+prioritas\s+(.+)/);
+  const addPriorityMatch = text.match(/tambah(?:in|kan)?\s+prioritas\s+(.+)/);
   if (addPriorityMatch) {
     return handleAddPriority(addPriorityMatch[1], authorId);
   }
@@ -1052,6 +1154,14 @@ function buildChatReply(rawContent, { isBotChannel = false, channelId = null, au
   const removePriorityMatch = text.match(/hapus\s+prioritas\s+(.+)/);
   if (removePriorityMatch) {
     return handleRemovePriority(removePriorityMatch[1], authorId);
+  }
+
+  // Dicek sebelum unsubscribeMatch/subscribeMatch di bawah - "reminder"
+  // adalah kata kunci beda dari "ingetin", tapi kalimatnya bisa aja ngandung
+  // dua-duanya sekaligus (mis. "cok reminder aku ingetin siapa aja"), jadi
+  // biar nggak ketangkep duluan sama regex subscribe yang lebih rakus.
+  if (containsWholeWord(text, "reminder")) {
+    return replyMySubscriptions(authorId);
   }
 
   // "berhenti ingetin" harus dicek DULUAN sebelum "ingetin" biasa, soalnya
@@ -1071,19 +1181,38 @@ function buildChatReply(rawContent, { isBotChannel = false, channelId = null, au
     return replyMemberStats(statsMatch[1]);
   }
 
-  if (text.includes("live") && (text.includes("paling lama") || text.includes("udah lama"))) {
+  if (containsWholeWord(text, "prioritas") && (containsWholeWord(text, "daftar") || containsWholeWord(text, "siapa") || containsWholeWord(text, "list"))) {
+    return replyPriorityList();
+  }
+
+  if (containsWholeWord(text, "rekap")) {
+    return replyTodayRecapSoFar();
+  }
+
+  const asksTopViewers =
+    containsWholeWord(text, "viewer") ||
+    (containsWholeWord(text, "penonton") && (containsWholeWord(text, "banyak") || containsWholeWord(text, "terbanyak") || containsWholeWord(text, "rame"))) ||
+    (containsWholeWord(text, "ditonton") && (containsWholeWord(text, "banyak") || containsWholeWord(text, "rame")));
+  if (asksTopViewers) {
+    return replyTopViewers();
+  }
+
+  if (containsWholeWord(text, "live") && (containsWholeWord(text, "paling lama") || containsWholeWord(text, "udah lama"))) {
     return replyLongestLive();
   }
 
-  if (text.includes("live") && (text.includes("siapa") || text.includes("list") || text.includes("apa aja") || text.includes("ada berapa"))) {
+  if (
+    containsWholeWord(text, "live") &&
+    (containsWholeWord(text, "siapa") || containsWholeWord(text, "list") || containsWholeWord(text, "apa aja") || containsWholeWord(text, "ada berapa"))
+  ) {
     return replyListLive();
   }
 
-  if (text.includes("status") || text.includes("sehat") || text.includes("masih jalan")) {
+  if (containsWholeWord(text, "status") || containsWholeWord(text, "sehat") || containsWholeWord(text, "masih jalan")) {
     return replyBotStatus();
   }
 
-  if (text.includes("help") || text.includes("bantuan") || text.includes("bisa apa")) {
+  if (containsWholeWord(text, "help") || containsWholeWord(text, "bantuan") || containsWholeWord(text, "bisa apa")) {
     return replyHelp();
   }
 
