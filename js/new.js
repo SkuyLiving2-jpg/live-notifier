@@ -420,10 +420,11 @@ function loadDailyLog() {
   const today = getTodayWIB();
   try {
     const data = JSON.parse(fs.readFileSync(DAILY_LOG_FILE, "utf-8"));
-    if (data.date !== today) return { date: today, entries: [], recapSentDate: data.recapSentDate || null };
+    if (data.date !== today) return { date: today, sessions: [], recapSentDate: data.recapSentDate || null };
+    data.sessions = data.sessions || [];
     return data;
   } catch (error) {
-    return { date: today, entries: [], recapSentDate: null };
+    return { date: today, sessions: [], recapSentDate: null };
   }
 }
 
@@ -436,9 +437,43 @@ function saveDailyLog(log) {
   }
 }
 
-function recordDailyEntry(name, durationMs) {
+// Dulu rekap CUMA nyatet pas live SELESAI (recordDailyEntry lama) - jadi
+// kalau kamu nanya "cok rekap hari ini" pas ada member yang MASIH live
+// (belum kelar), dia bakal keliatan "zonk" walau bot JELAS-JELAS abis ngirim
+// notif "mulai live" buat orang itu. Sekarang tiap notif "mulai live" yang
+// berhasil kekirim LANGSUNG dicatet sebagai sesi (status masih live), terus
+// pas dia selesai sesi yang SAMA di-update (bukan bikin entry baru) biar
+// rekap bisa nunjukkin siapa aja yang live hari ini - baik yang udah selesai
+// maupun yang masih berlangsung.
+function recordLiveStartedToday(name, username, startedAtDate) {
   const log = loadDailyLog();
-  log.entries.push({ name, durationMs });
+  log.sessions.push({
+    name,
+    username,
+    startedAtUnix: Math.floor(startedAtDate.getTime() / 1000),
+    endedAtUnix: null,
+    durationMs: null,
+  });
+  saveDailyLog(log);
+}
+
+function recordLiveEndedToday(name, username, durationMs, endedAtDate) {
+  const log = loadDailyLog();
+  const endedAtUnix = Math.floor(endedAtDate.getTime() / 1000);
+  // Cari sesi "masih live" TERAKHIR buat username ini - biasanya emang itu
+  // yang barusan mulai. [...].reverse() bukan .findLast() biar tetep jalan
+  // di runtime Node yang lebih lama.
+  const openSession = [...log.sessions].reverse().find((s) => s.username === username && s.endedAtUnix === null);
+  if (openSession) {
+    openSession.endedAtUnix = endedAtUnix;
+    openSession.durationMs = durationMs;
+  } else {
+    // Sesi "mulai"-nya kelewat kecatet (mis. live-nya kepotong pergantian
+    // hari WIB, atau bot baru restart tengah live) - tetep catet daripada
+    // rekap kehilangan data, walau jam mulainya cuma perkiraan mundur dari
+    // durasi yang kita tau.
+    log.sessions.push({ name, username, startedAtUnix: endedAtUnix - Math.round(durationMs / 1000), endedAtUnix, durationMs });
+  }
   saveDailyLog(log);
 }
 
@@ -448,11 +483,12 @@ async function maybeSendDailyRecap() {
   const log = loadDailyLog();
   if (log.recapSentDate === log.date) return; // udah kekirim hari ini
 
-  if (log.entries.length > 0) {
-    const totalLives = log.entries.length;
-    const totalDurationMs = log.entries.reduce((sum, e) => sum + e.durationMs, 0);
-    const longest = log.entries.reduce((max, e) => (e.durationMs > max.durationMs ? e : max), log.entries[0]);
-    const uniqueMembers = new Set(log.entries.map((e) => e.name)).size;
+  const completed = log.sessions.filter((s) => s.endedAtUnix !== null);
+  if (completed.length > 0) {
+    const totalLives = completed.length;
+    const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
+    const longest = completed.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), completed[0]);
+    const uniqueMembers = new Set(completed.map((s) => s.name)).size;
 
     const payload = {
       content: [
@@ -665,6 +701,7 @@ async function checkLiveMembers() {
             alertedMilestones: [],
           });
           saveActiveLives();
+          recordLiveStartedToday(live.creator.name, live.creator.username, live.live_at ? new Date(live.live_at) : new Date());
           if (getPriorityConfig(live.creator.name, live.creator.username)) {
             await maybePartyModeAlert();
           }
@@ -691,7 +728,7 @@ async function checkLiveMembers() {
             const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
             await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
             recordLiveDuration(username, memberData.name, durationMs);
-            recordDailyEntry(memberData.name, durationMs);
+            recordLiveEndedToday(memberData.name, memberData.username, durationMs, new Date());
           }
           activeLives.delete(username);
           saveActiveLives();
@@ -1048,22 +1085,58 @@ function replyMySubscriptions(authorId) {
 // komentar di fetchExternalTodayLiveHistory). Kalau arsipnya gak keambil
 // (network error/dll), fungsi ini tetep balikin rekap versi lokal doang -
 // gak pernah gagal total gara-gara sumber tambahan ini.
+// Discord ngerender fenced code block (```) monospace - dipake buat nyusun
+// tabel yang kolomnya rapi rata kiri-kanan, bukan cuma daftar baris teks.
+// Dibatesin MAX_ROWS biar sesi yang buanyak hari ini nggak numbrung ngelewatin
+// limit 2000 karakter per pesan Discord.
+const RECAP_TABLE_MAX_ROWS = 20;
+
+function buildRecapTable(sessions) {
+  const sorted = [...sessions].sort((a, b) => a.startedAtUnix - b.startedAtUnix);
+  const shown = sorted.slice(-RECAP_TABLE_MAX_ROWS);
+  const omittedCount = sorted.length - shown.length;
+
+  const header = ["No", "Member", "Status", "Mulai", "Durasi"];
+  const rows = shown.map((s, i) => [
+    String(i + 1),
+    s.name,
+    s.endedAtUnix !== null ? "Selesai" : "Live",
+    formatClockWIB(new Date(s.startedAtUnix * 1000)),
+    s.endedAtUnix !== null ? formatDuration(s.durationMs) : "-",
+  ]);
+
+  const widths = header.map((h, col) => Math.max(h.length, ...rows.map((r) => r[col].length)));
+  const formatRow = (cols) => cols.map((c, i) => c.padEnd(widths[i])).join(" | ");
+  const separator = widths.map((w) => "-".repeat(w)).join("-+-");
+
+  const lines = ["```", formatRow(header), separator, ...rows.map(formatRow), "```"];
+  if (omittedCount > 0) {
+    lines.push(`_(+${omittedCount} sesi lainnya lebih awal hari ini, gak ditampilin biar gak kepanjangan)_`);
+  }
+  return lines.join("\n");
+}
+
+// Dulu ini cuma baca log.entries (yang cuma keisi pas live SELESAI) - jadi
+// kalau ditanya pas member masih live (padahal bot udah ngirim notif "mulai
+// live"-nya), balesannya "zonk" walau data-nya SEBENERNYA ada. Sekarang
+// pakai log.sessions yang kecatet dari notif "mulai" juga, jadi sesi yang
+// masih live pun ikut keliatan (statusnya "🔴 Live", durasi belum ada).
 async function replyTodayRecapSoFar() {
   const log = loadDailyLog();
-  const stillLiveNote = activeLives.size > 0 ? `\n(masih ada ${activeLives.size} yang live sekarang, belum masuk hitungan ini)` : "";
-  const trackedNames = new Set(log.entries.map((e) => e.name));
+  const sessions = log.sessions;
+  const completed = sessions.filter((s) => s.endedAtUnix !== null);
+  const ongoingCount = sessions.length - completed.length;
 
-  // Member yang KETAUAN live hari ini dari arsip eksternal, tapi durasinya
-  // BELUM ke-track lokal (kemungkinan besar karena bot sempet mati/restart
-  // pas dia live) - dan yang masih live sekarang sengaja di-skip, itu bukan
-  // "kelewatan", cuma emang belum selesai.
+  // Member yang KETAUAN live hari ini dari arsip eksternal, tapi beneran gak
+  // ke-track lokal sama sekali (bukan cuma "masih live", tapi bot-nya emang
+  // kelewatan momennya - mis. sempet mati/restart pas dia live).
+  const trackedNames = new Set(sessions.map((s) => s.name));
   const external = await fetchExternalTodayLiveHistory();
   const missedByMember = new Map();
   for (const e of external || []) {
     if (trackedNames.has(e.creator_name) || activeLives.has(e.username)) continue;
     if (!missedByMember.has(e.creator_name)) missedByMember.set(e.creator_name, e);
   }
-
   const missedNote =
     missedByMember.size > 0
       ? `\n\n📡 Dari arsip publik JKT48Live-Record, ketauan juga live hari ini yang kelewatan bot: ${[...missedByMember.entries()]
@@ -1071,27 +1144,25 @@ async function replyTodayRecapSoFar() {
           .join(", ")} - durasinya belum ke-track soalnya bot nggak nyaksiin dari awal sampai selesai.`
       : "";
 
-  if (log.entries.length === 0) {
-    const base =
-      missedByMember.size > 0
-        ? `Cok, belum ada live yang ke-track LENGKAP durasinya hari ini (${log.date}).`
-        : `Cok, belum ada live yang selesai hari ini (${log.date}).`;
-    return `${base}${missedNote}${stillLiveNote}`;
+  if (sessions.length === 0) {
+    return `Cok, belum ada yang live hari ini (${log.date}).${missedNote}`;
   }
 
-  const totalLives = log.entries.length;
-  const totalDurationMs = log.entries.reduce((sum, e) => sum + e.durationMs, 0);
-  const longest = log.entries.reduce((max, e) => (e.durationMs > max.durationMs ? e : max), log.entries[0]);
-  const uniqueMembers = new Set(log.entries.map((e) => e.name)).size;
+  const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
+  const uniqueMembers = new Set(sessions.map((s) => s.name)).size;
+  const longest = completed.length > 0 ? completed.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), completed[0]) : null;
 
-  return (
-    [
-      `📋 **Rekap sementara hari ini (${log.date})**`,
-      `Total live selesai (ke-track lengkap): ${totalLives}x dari ${uniqueMembers} member`,
-      `Total durasi gabungan: ${formatDuration(totalDurationMs)}`,
-      `Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})${stillLiveNote}`,
-    ].join("\n") + missedNote
-  );
+  const summaryLines = [
+    `📋 **Rekap live hari ini (${log.date})**`,
+    `Total sesi: ${sessions.length}x dari ${uniqueMembers} member (${completed.length} udah selesai, ${ongoingCount} masih live)`,
+  ];
+  if (longest) {
+    summaryLines.push(
+      `Total durasi (yang udah selesai): ${formatDuration(totalDurationMs)} | Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
+    );
+  }
+
+  return [summaryLines.join("\n"), buildRecapTable(sessions)].join("\n") + missedNote;
 }
 
 function replyMemberStats(fragment) {
