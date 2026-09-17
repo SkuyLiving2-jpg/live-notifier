@@ -1086,14 +1086,23 @@ const PENDING_MENU_TTL_MS = 3 * 60000;
 
 // Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
 // pertanyaan yang udah dikenali - dikasih menu daripada bot diem aja.
+//
+// CATATAN: pilihan #3 dulu teksnya "paling lama live PER HARI INI" - itu
+// SALAH, yang beneran dijalanin (replyLongestLive) itu ranking durasi live
+// yang LAGI AKTIF sekarang, bukan rekap harian (itu fiturnya "cok rekap
+// hari ini" / pilihan #8, beda). Dibenerin biar gak nyesetin ekspektasi.
 function replyFallbackMenu() {
   const ownerContact = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}>` : "owner channel ini";
   return [
     `Halo, selamat ${getGreeting()}! Apa yang ingin kamu tanyakan?`,
     "1. Siapa saja yang masih live?",
     "2. Status live sekarang",
-    "3. Siapa yang paling lama live per hari ini?",
+    "3. Siapa yang paling lama live sekarang?",
     "4. Apakah <nama member> masih live?",
+    "5. Siapa yang paling rame ditonton sekarang?",
+    "6. Daftar member prioritas",
+    "7. Reminder aku (siapa aja yang aku subscribe)",
+    "8. Rekap live hari ini",
     "",
     '(Abis ini kamu bisa balas cukup ketik angkanya aja, misal "1" atau "4 Nala")',
     "",
@@ -1101,7 +1110,7 @@ function replyFallbackMenu() {
   ].join("\n");
 }
 
-function tryHandleMenuShortcut(text, channelId) {
+function tryHandleMenuShortcut(text, channelId, authorId) {
   if (!channelId) return null;
 
   const shownAt = pendingMenuByChannel.get(channelId);
@@ -1110,19 +1119,32 @@ function tryHandleMenuShortcut(text, channelId) {
 
   // Sebelumnya /^([1-4])\s*(.*)$/ - itu match ke SEMUA pesan yang cuma
   // DIAWALI angka 1-4 (mis. "10 menit lagi" ke-anggep pilih menu #1). Sekarang
-  // pilihan 1-3 harus persis satu karakter itu doang, dan pilihan 4 harus
-  // "4" doang atau "4 <spasi><nama>" - bukan asal awalan angka.
-  const bareChoice = text.match(/^([1-3])$/);
+  // pilihan yang nggak butuh input tambahan (1-3, 5-8) harus persis SATU
+  // angka itu doang, dan pilihan 4 (butuh nama member) harus "4" doang atau
+  // "4 <spasi><nama>" - bukan asal awalan angka.
+  const bareChoice = text.match(/^([1-3]|[5-8])$/);
   const choiceFour = text.match(/^4(?:\s+(.+))?$/);
   if (!bareChoice && !choiceFour) return null;
 
   pendingMenuByChannel.delete(channelId); // sekali pake abis itu clear
 
   if (bareChoice) {
-    const choice = bareChoice[1];
-    if (choice === "1") return replyListLive();
-    if (choice === "2") return replyBotStatus();
-    return replyLongestLive(); // choice === "3"
+    switch (bareChoice[1]) {
+      case "1":
+        return replyListLive();
+      case "2":
+        return replyBotStatus();
+      case "3":
+        return replyLongestLive();
+      case "5":
+        return replyTopViewers();
+      case "6":
+        return replyPriorityList();
+      case "7":
+        return replyMySubscriptions(authorId);
+      default:
+        return replyTodayRecapSoFar(); // "8"
+    }
   }
 
   const rest = (choiceFour[1] || "").trim();
@@ -1134,7 +1156,7 @@ function tryHandleMenuShortcut(text, channelId) {
 function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
 
-  const shortcutReply = tryHandleMenuShortcut(text, channelId);
+  const shortcutReply = tryHandleMenuShortcut(text, channelId, authorId);
   if (shortcutReply) return shortcutReply;
 
   // Di channel khusus bot, hampir semua pesan dianggap "ditujukan ke bot" -
