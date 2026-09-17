@@ -363,6 +363,59 @@ function getHourWIB() {
   );
 }
 
+// Awal & akhir "hari ini" (WIB, UTC+7 tetap sepanjang tahun - gak ada DST)
+// dalam Unix SECONDS, buat nyaring entri arsip eksternal yang live_at_unix-nya
+// jatuh di hari ini.
+function getTodayWIBRangeUnix() {
+  const startMs = new Date(`${getTodayWIB()}T00:00:00+07:00`).getTime();
+  return { startSec: Math.floor(startMs / 1000), endSec: Math.floor(startMs / 1000) + 24 * 60 * 60 };
+}
+
+// PENTING soal CACHE_DIR/Railway: rekap harian kita ("data/daily-log.json")
+// cuma nyatet live yang kita SENDIRI pantau start-sampai-selesai. Kalau bot
+// sempet mati/restart di tengah hari (misal abis redeploy, dan CACHE_DIR-nya
+// nggak diarahin ke storage yang persist lintas redeploy), live yang
+// kejadian pas bot lagi off bakal "kelewatan" - bukan salah IDN, tapi karena
+// kita cuma bisa nyatet apa yang kita amati sendiri secara real-time.
+//
+// IDN sendiri gak nyediain API histori sama sekali (udah di-cek langsung ke
+// schema GraphQL-nya). Jadi buat nutup celah itu, kita baca (READ-ONLY, gak
+// nulis/redistribusi apa-apa) dari arsip publik JKT48Live-Record
+// (github.com/rznive/JKT48Live-Record) - project auto-scraper pihak ketiga
+// yang ngerekam tiap live IDN JKT48 lewat GitHub Actions, datanya disimpen
+// per-bulan di data/idn/YYYY-MM.json. Ini CUMA pelengkap informasi (siapa aja
+// yang sempet live + jam berapa) - repo itu gak punya LICENSE file jadi kita
+// nggak nyalin/nyimpen kodenya, cuma baca file JSON publiknya on-the-fly,
+// sama kayak kita manggil endpoint publik IDN sendiri. Kalau lagi gak bisa
+// diakses (jaringan/repo pindah/dll), rekap tetap jalan normal pakai data
+// lokal doang - ini FITUR TAMBAHAN, bukan dependency yang bisa bikin bot mati.
+const EXTERNAL_LIVE_HISTORY_BASE_URL = "https://raw.githubusercontent.com/rznive/JKT48Live-Record/main/data/idn";
+
+async function fetchExternalTodayLiveHistory() {
+  try {
+    const [year, month] = getTodayWIB().split("-");
+    const url = `${EXTERNAL_LIVE_HISTORY_BASE_URL}/${year}-${month}.json`;
+    const response = await fetch(url);
+    if (!response.ok) return null; // wajar kalau bulan berjalan belum ke-commit filenya
+
+    const allEntries = await response.json();
+    if (!Array.isArray(allEntries)) return null;
+
+    const { startSec, endSec } = getTodayWIBRangeUnix();
+    return allEntries.filter(
+      (e) =>
+        typeof e?.username === "string" &&
+        e.username.toLowerCase().startsWith("jkt48_") &&
+        typeof e.live_at_unix === "number" &&
+        e.live_at_unix >= startSec &&
+        e.live_at_unix < endSec,
+    );
+  } catch (error) {
+    console.error("Gagal ambil arsip live eksternal (nggak fatal, rekap tetap jalan pakai data lokal):", error.message);
+    return null;
+  }
+}
+
 function loadDailyLog() {
   const today = getTodayWIB();
   try {
@@ -991,12 +1044,39 @@ function replyMySubscriptions(authorId) {
 // Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00
 // WIB) - ini dipanggil kapan aja user nanya, nunjukkin progress SEJAUH INI
 // (live yang masih berlangsung belum ikut ke-hitung, baru masuk pas selesai).
-function replyTodayRecapSoFar() {
+// Async karena nyoba lengkapin data lokal pakai arsip eksternal (lihat
+// komentar di fetchExternalTodayLiveHistory). Kalau arsipnya gak keambil
+// (network error/dll), fungsi ini tetep balikin rekap versi lokal doang -
+// gak pernah gagal total gara-gara sumber tambahan ini.
+async function replyTodayRecapSoFar() {
   const log = loadDailyLog();
   const stillLiveNote = activeLives.size > 0 ? `\n(masih ada ${activeLives.size} yang live sekarang, belum masuk hitungan ini)` : "";
+  const trackedNames = new Set(log.entries.map((e) => e.name));
+
+  // Member yang KETAUAN live hari ini dari arsip eksternal, tapi durasinya
+  // BELUM ke-track lokal (kemungkinan besar karena bot sempet mati/restart
+  // pas dia live) - dan yang masih live sekarang sengaja di-skip, itu bukan
+  // "kelewatan", cuma emang belum selesai.
+  const external = await fetchExternalTodayLiveHistory();
+  const missedByMember = new Map();
+  for (const e of external || []) {
+    if (trackedNames.has(e.creator_name) || activeLives.has(e.username)) continue;
+    if (!missedByMember.has(e.creator_name)) missedByMember.set(e.creator_name, e);
+  }
+
+  const missedNote =
+    missedByMember.size > 0
+      ? `\n\n📡 Dari arsip publik JKT48Live-Record, ketauan juga live hari ini yang kelewatan bot: ${[...missedByMember.entries()]
+          .map(([name, e]) => `**${name}** (${formatClockWIB(new Date(e.live_at_unix * 1000))})`)
+          .join(", ")} - durasinya belum ke-track soalnya bot nggak nyaksiin dari awal sampai selesai.`
+      : "";
 
   if (log.entries.length === 0) {
-    return `Cok, belum ada live yang selesai hari ini (${log.date}).${stillLiveNote}`;
+    const base =
+      missedByMember.size > 0
+        ? `Cok, belum ada live yang ke-track LENGKAP durasinya hari ini (${log.date}).`
+        : `Cok, belum ada live yang selesai hari ini (${log.date}).`;
+    return `${base}${missedNote}${stillLiveNote}`;
   }
 
   const totalLives = log.entries.length;
@@ -1004,12 +1084,14 @@ function replyTodayRecapSoFar() {
   const longest = log.entries.reduce((max, e) => (e.durationMs > max.durationMs ? e : max), log.entries[0]);
   const uniqueMembers = new Set(log.entries.map((e) => e.name)).size;
 
-  return [
-    `📋 **Rekap sementara hari ini (${log.date})**`,
-    `Total live selesai: ${totalLives}x dari ${uniqueMembers} member`,
-    `Total durasi gabungan: ${formatDuration(totalDurationMs)}`,
-    `Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})${stillLiveNote}`,
-  ].join("\n");
+  return (
+    [
+      `📋 **Rekap sementara hari ini (${log.date})**`,
+      `Total live selesai (ke-track lengkap): ${totalLives}x dari ${uniqueMembers} member`,
+      `Total durasi gabungan: ${formatDuration(totalDurationMs)}`,
+      `Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})${stillLiveNote}`,
+    ].join("\n") + missedNote
+  );
 }
 
 function replyMemberStats(fragment) {
@@ -1110,7 +1192,7 @@ function replyFallbackMenu() {
   ].join("\n");
 }
 
-function tryHandleMenuShortcut(text, channelId, authorId) {
+async function tryHandleMenuShortcut(text, channelId, authorId) {
   if (!channelId) return null;
 
   const shownAt = pendingMenuByChannel.get(channelId);
@@ -1143,7 +1225,7 @@ function tryHandleMenuShortcut(text, channelId, authorId) {
       case "7":
         return replyMySubscriptions(authorId);
       default:
-        return replyTodayRecapSoFar(); // "8"
+        return await replyTodayRecapSoFar(); // "8"
     }
   }
 
@@ -1212,13 +1294,13 @@ function tryHandleWatchConfirmShortcut(text, channelId, authorId) {
   return `Oke sip. **${entry.name}** ${elapsedText}, kalau berubah pikiran tinggal cek lagi ya.`;
 }
 
-function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
+async function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
 
   const watchConfirmReply = tryHandleWatchConfirmShortcut(text, channelId, authorId);
   if (watchConfirmReply) return watchConfirmReply;
 
-  const shortcutReply = tryHandleMenuShortcut(text, channelId, authorId);
+  const shortcutReply = await tryHandleMenuShortcut(text, channelId, authorId);
   if (shortcutReply) return shortcutReply;
 
   // Di channel khusus bot, hampir semua pesan dianggap "ditujukan ke bot" -
@@ -1270,7 +1352,7 @@ function buildChatReply(rawContent, { isBotChannel = false, channelId = null, au
   }
 
   if (containsWholeWord(text, "rekap")) {
-    return replyTodayRecapSoFar();
+    return await replyTodayRecapSoFar();
   }
 
   const asksTopViewers =
@@ -1337,7 +1419,7 @@ if (DISCORD_BOT_TOKEN) {
     try {
       if (message.author.bot) return;
       const isBotChannel = Boolean(BOT_CHANNEL_ID) && message.channel.id === BOT_CHANNEL_ID;
-      const reply = buildChatReply(message.content, {
+      const reply = await buildChatReply(message.content, {
         isBotChannel,
         channelId: message.channel.id,
         authorId: message.author.id,
