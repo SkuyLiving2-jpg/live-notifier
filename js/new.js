@@ -1149,12 +1149,74 @@ function tryHandleMenuShortcut(text, channelId, authorId) {
 
   const rest = (choiceFour[1] || "").trim();
   if (!rest) return 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".';
-  const found = findMemberByNameFragment(rest);
-  return found ? replySpecificMember(found) : replyMemberNotFound(rest);
+  return startWatchConfirm(rest, channelId, authorId);
+}
+
+// "channelId:authorId" -> { username, name, at } - nunggu jawaban y/n abis
+// user milih member lewat menu #4. Di-key per channel+author (beda dari
+// pendingMenuByChannel yang per-channel doang) soalnya ini nunggu jawaban
+// SATU ORANG spesifik - kalau cuma per-channel, jawaban "y" dari orang lain
+// di channel yang sama bisa nyangkut ke pertanyaan yang bukan buat dia.
+const pendingWatchConfirm = new Map();
+const PENDING_WATCH_CONFIRM_TTL_MS = 2 * 60000;
+const YES_PATTERN = /^(y|ya|iya|iyah|iy|yes|yup|yoi|oke|ok|gas|mau|boleh)$/i;
+const NO_PATTERN = /^(n|no|ga|gak|kaga|nggak|enggak|tidak|males|ga\s*mau|nggak\s*mau)$/i;
+
+// Dipanggil abis user milih member lewat "4 <nama>" - kalau membernya lagi
+// live, JANGAN langsung kasih link, tanya dulu "mau nonton?" (biar kayak
+// ngobrol beneran, bukan asal muntahin info). Kalau membernya ternyata lagi
+// nggak live, gak usah nanya apa-apa lagi, langsung bilang aja.
+function startWatchConfirm(fragment, channelId, authorId) {
+  const found = findMemberByNameFragment(fragment);
+  if (!found) return replyMemberNotFound(fragment);
+
+  if (channelId && authorId) {
+    pendingWatchConfirm.set(`${channelId}:${authorId}`, { username: found.username, name: found.name, at: Date.now() });
+  }
+  return `**${found.name}** lagi live nih! Mau nonton sekarang? (y/n)`;
+}
+
+// Dicek di AWAL buildChatReply (kayak tryHandleMenuShortcut) - jawaban "y"
+// atau "n" polos nggak nyebut "cok"/"live" sama sekali, jadi kalau nunggu
+// wake-word dulu, jawabannya nggak akan pernah ke-proses.
+function tryHandleWatchConfirmShortcut(text, channelId, authorId) {
+  if (!channelId || !authorId) return null;
+  const key = `${channelId}:${authorId}`;
+  const pending = pendingWatchConfirm.get(key);
+  if (!pending) return null;
+
+  if (Date.now() - pending.at > PENDING_WATCH_CONFIRM_TTL_MS) {
+    pendingWatchConfirm.delete(key);
+    return null;
+  }
+
+  const isYes = YES_PATTERN.test(text);
+  const isNo = NO_PATTERN.test(text);
+  if (!isYes && !isNo) return null; // bukan jawaban y/n, biarin ke routing normal
+
+  pendingWatchConfirm.delete(key); // sekali pake abis itu clear
+
+  // Re-cek status live-nya SEKARANG, jangan percaya data lama - bisa aja
+  // dia udah selesai live selagi user mikir mau jawab y/n apa nggak.
+  const entry = activeLives.get(pending.username);
+  if (!entry) {
+    return `Yah, **${pending.name}** kayaknya baru aja selesai live.`;
+  }
+
+  if (isYes) {
+    const liveUrl = `https://idn.app/${entry.username}/live/${entry.slug}`;
+    return `🔴 Gas nonton! **${entry.name}** - ${liveUrl}`;
+  }
+
+  const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
+  return `Oke sip. **${entry.name}** ${elapsedText}, kalau berubah pikiran tinggal cek lagi ya.`;
 }
 
 function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
+
+  const watchConfirmReply = tryHandleWatchConfirmShortcut(text, channelId, authorId);
+  if (watchConfirmReply) return watchConfirmReply;
 
   const shortcutReply = tryHandleMenuShortcut(text, channelId, authorId);
   if (shortcutReply) return shortcutReply;
