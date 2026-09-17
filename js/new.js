@@ -73,8 +73,21 @@ const JKT48_USERNAME_WHITELIST = [
 // default netral. Nala (#1, paling emergency) sengaja dikasih buttonLabel
 // custom yang lebih "mendesak" (ada tanda panah) biar kerasa beda urgensinya
 // dibanding Levi/Lily yang tetap prioritas tapi nggak se-emergency itu.
+//
+// endMessage opsional - kalau diisi, notif "SELESAI live" buat member itu
+// dikasih sentuhan khusus (embed field pesan + footer beda), biar keliatan
+// beda dari member prioritas lain yang notif selesainya tetep plain. Cuma
+// Nala yang dikasih ini sekarang - Levi/Lily sengaja dibiarin default.
 const PRIORITY_MEMBERS = [
-  { rank: 1, keyword: "nala", label: "NALA", color: 0x1abc9c, sirens: "🚨🔥🚨", buttonLabel: "➡️ GAS, INI LIVE PALING URGENT SEDUNIA! ➡️" },
+  {
+    rank: 1,
+    keyword: "nala",
+    label: "NALA",
+    color: 0x1abc9c,
+    sirens: "🚨🔥🚨",
+    buttonLabel: "➡️ GAS, INI LIVE PALING URGENT SEDUNIA! ➡️",
+    endMessage: "Makasih banyak udah nemenin live hari ini! Sampai jumpa di live berikutnya ya 💚",
+  },
   { rank: 2, keyword: "levi", label: "LEVI", color: 0xff0000, sirens: "🚨⚡🚨" },
   { rank: 3, keyword: "lily", label: "LILY", color: 0x3498db, sirens: "🚨✨🚨" },
 ];
@@ -866,15 +879,25 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl) {
   const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
 
   if (status === "end") {
+    // endMessage (opsional, lihat PRIORITY_MEMBERS) - cuma diisi buat member
+    // yang emang mau dikasih sentuhan khusus di notif "selesai live"-nya
+    // (misal Nala). Kalau kosong, notif "selesai" tetap plain kayak
+    // Levi/Lily - jadi ini BUKAN template semua member prioritas, cuma
+    // yang di-opt-in lewat field itu.
     return {
-      content: `${mention}${priority.sirens} Live prioritas **#${priority.rank} ${priority.label}** udah selesai.`,
+      content: priority.endMessage
+        ? `${mention}${priority.sirens} Live prioritas **#${priority.rank} ${priority.label}** udah selesai. 💌`
+        : `${mention}${priority.sirens} Live prioritas **#${priority.rank} ${priority.label}** udah selesai.`,
       embeds: [
         {
-          title: `${priority.label} sudah selesai live`,
+          title: priority.endMessage ? `💚 ${priority.label} sudah selesai live - makasih ya!` : `${priority.label} sudah selesai live`,
           description: memberName,
           color: priority.color,
           url: liveUrl,
           ...(imageUrl ? { thumbnail: { url: imageUrl } } : {}),
+          ...(priority.endMessage
+            ? { fields: [{ name: `💌 Pesan dari ${priority.label}`, value: priority.endMessage }], footer: { text: "Sampai jumpa di live berikutnya!" } }
+            : {}),
         },
       ],
     };
