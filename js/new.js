@@ -35,10 +35,21 @@ console.log(
 const CACHE_FILE = path.join(CACHE_DIR, "active-lives-cache.json");
 const DURATION_HISTORY_FILE = path.join(CACHE_DIR, "live-duration-history.json");
 
-// Token bot Discord buat fitur tanya-jawab interaktif (opsional). Beda sama
-// DISCORD_WEBHOOK_URL yang cuma bisa kirim, bukan baca pesan. Kalau nggak
-// diset, notifikasi tetap jalan normal, cuma fitur tanya-jawabnya mati.
+// Token bot Discord buat fitur tanya-jawab interaktif DAN buat kirim DM
+// notifikasi prioritas ke pemilik bot (opsional). Beda sama DISCORD_WEBHOOK_URL
+// yang cuma bisa kirim ke channel, bukan baca pesan ATAU kirim DM. Kalau
+// nggak diset, notifikasi channel tetap jalan normal, cuma fitur tanya-jawab
+// DAN versi flashy/DM notif prioritas-nya mati (prioritas tetap dapet notif
+// biasa doang di channel, kayak member lain).
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
+
+// Instance discord.js Client, cuma keisi kalau DISCORD_BOT_TOKEN diset (lihat
+// blok "if (DISCORD_BOT_TOKEN)" di bagian bawah file). Dideklarasiin di sini
+// (bukan langsung "const chatClient = ..." di dalam blok itu) biar fungsi-fungsi
+// notifikasi prioritas (sendPriorityDM, sendEndingSoonAlert, maybePartyModeAlert)
+// yang letak definisinya lebih awal di file ini bisa ikut make instance yang
+// sama buat kirim DM ke pemilik bot.
+let chatClient = null;
 
 // Opsional - ID channel Discord tempat bot boleh lebih "agresif" balas
 // (hampir semua pesan yang gak dikenali dibalas menu options, gak perlu
@@ -270,11 +281,13 @@ function removeSubscription(rawKeyword, userId) {
   return { ok: true };
 }
 
-// User yang udah di-mention lewat PRIORITY_PING_USER_ID di-exclude dari hasil
-// SUBSCRIPTIONnya kalau member ini kebetulan member prioritas juga - biar
-// nggak dobel tag di notifnya. Sebelumnya ini selalu ngehapus PRIORITY_PING_USER_ID
-// dari hasil apapun membernya - bug-nya, kalau si owner subscribe ke member
-// yang BUKAN prioritas, dia nggak akan pernah ke-tag walau udah subscribe.
+// User yang udah dapet DM prioritas (PRIORITY_PING_USER_ID, lihat
+// sendPriorityDM) di-exclude dari hasil SUBSCRIPTION-nya kalau member ini
+// kebetulan member prioritas juga - biar owner gak dobel ke-tag (sekali di DM
+// prioritas, sekali lagi di notif channel biasa). Sebelumnya ini selalu
+// ngehapus PRIORITY_PING_USER_ID dari hasil apapun membernya - bug-nya, kalau
+// si owner subscribe ke member yang BUKAN prioritas, dia nggak akan pernah
+// ke-tag walau udah subscribe.
 function getSubscribersFor(memberName, username) {
   const text = `${memberName || ""} ${username || ""}`.toLowerCase();
   const subs = loadSubscriptions();
@@ -698,27 +711,28 @@ async function maybeAnnounceNewRecord(username, memberName, durationMs, duration
 // notif "mulai live" biasa-biasa tiap orang. Dipanggil abis notif "start"
 // buat member prioritas berhasil kekirim, jadi otomatis nge-refresh ("Nala &
 // Levi" -> "Nala & Levi & Lily") tiap kali ada tambahan anggota partynya.
+//
+// Sama kayak notif prioritas & ending-soon, ini soal daftar prioritas PRIBADI
+// pemilik bot - jadi dikirim lewat DM ke pemilik doang, gak diposting ke
+// channel bersama (yang keliatan sama buat siapapun yang join server).
 async function maybePartyModeAlert() {
+  if (!chatClient || !PRIORITY_PING_USER_ID) return;
+
   const liveNow = [...activeLives.values()].filter((entry) => getPriorityConfig(entry.name, entry.username));
   if (liveNow.length < 2) return;
 
-  const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
   const names = liveNow.map((entry) => `**${entry.name}**`).join(" & ");
 
   const payload = {
-    content: `${mention}🎉🔥 **PARTY MODE AKTIF!** 🔥🎉\n${liveNow.length} member prioritas live BARENGAN: ${names}!\nSaatnya split-screen! 📱📱`,
+    content: `🎉🔥 **PARTY MODE AKTIF!** 🔥🎉\n${liveNow.length} member prioritas live BARENGAN: ${names}!\nSaatnya split-screen! 📱📱`,
   };
 
   try {
-    const response = await fetch(DISCORD_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) throw new Error(`Discord webhook balikin status ${response.status}`);
-    console.log("Party Mode alert terkirim");
+    const user = await chatClient.users.fetch(PRIORITY_PING_USER_ID);
+    await user.send(payload);
+    console.log("Party Mode alert (DM) terkirim");
   } catch (error) {
-    console.error("Gagal ngirim Party Mode alert:", error.message);
+    console.error("Gagal ngirim Party Mode alert (DM, ini nggak fatal):", error.message);
   }
 }
 
@@ -924,8 +938,13 @@ function buildNormalPayload(memberName, liveUrl, status) {
 // dipasang buat notif PRIORITAS - biar makin flashy/eye-catching, sesuai
 // permintaan. Notif biasa (buildNormalPayload) sengaja dibiarin polos kayak
 // semula, biar bedanya sama prioritas makin kerasa.
-function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl) {
-  const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
+//
+// includeMention (default true) - dimatiin kalau payload ini bakal dikirim
+// lewat DM PRIBADI ke pemilik bot (lihat sendPriorityDM) - nge-mention diri
+// sendiri di DM sendiri itu aneh/redundant, mention cuma perlu dipasang kalau
+// suatu saat payload ini dipakai lagi buat posting ke channel bersama.
+function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, { includeMention = true } = {}) {
+  const mention = includeMention && PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
 
   if (status === "end") {
     // endMessagePool (opsional, lihat PRIORITY_MEMBERS) - cuma diisi buat
@@ -996,6 +1015,29 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl) {
   };
 }
 
+// Notif flashy (embed warna-warni + tombol + pesan spesial) buat member
+// prioritas dulu kekirim ke CHANNEL bersama - masalahnya, channel itu
+// kelihatan sama persis buat SEMUA orang yang join server, padahal daftar
+// prioritas (Nala/Levi/Lily/custom) itu preferensi PRIBADI pemilik bot
+// (PRIORITY_PING_USER_ID). Sekarang dipisah: channel publik SELALU dapet
+// notif standar (buildNormalPayload) buat SEMUA member termasuk prioritas -
+// biar orang lain yang join gak ngerasa "dipaksa" liat 3 member itu
+// diistimewain. Versi flashy-nya dikirim TERPISAH lewat DM pribadi ke
+// pemilik doang (lihat sendPriorityDM), gak numpang tampil di channel sama
+// sekali.
+async function sendPriorityDM(memberName, liveUrl, status, priority, imageUrl) {
+  if (!chatClient || !PRIORITY_PING_USER_ID) return; // fitur bot token/owner ID belum diset - flashy DM dimatiin, channel tetap dapet notif biasa
+
+  const payload = buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, { includeMention: false });
+  try {
+    const user = await chatClient.users.fetch(PRIORITY_PING_USER_ID);
+    await user.send(payload);
+    console.log(`DM prioritas (${status}) terkirim untuk ${memberName}`);
+  } catch (error) {
+    console.error("Gagal ngirim DM prioritas (channel tetap dapet notif biasa, ini nggak fatal):", error.message);
+  }
+}
+
 async function sendDiscordNotif(memberName, username, slug, status = "start", imageUrl = null) {
   // Tanpa "www" biar konsisten sama link yang di-generate tombol Share di
   // app IDN sendiri (lebih besar kemungkinan ke-handle sebagai App
@@ -1003,9 +1045,7 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   // udah ke-install, bukan buka browser).
   const liveUrl = `https://idn.app/${username}/live/${slug}`;
   const priority = getPriorityConfig(memberName, username);
-  const payload = priority
-    ? buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl)
-    : buildNormalPayload(memberName, liveUrl, status);
+  const payload = buildNormalPayload(memberName, liveUrl, status);
 
   if (status === "start") {
     const subscriberIds = getSubscribersFor(memberName, username);
@@ -1015,6 +1055,7 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
     }
   }
 
+  let terkirim = true;
   try {
     const response = await fetch(DISCORD_WEBHOOK_URL, {
       method: "POST",
@@ -1029,11 +1070,21 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
     }
 
     console.log(`Notif ${status} terkirim untuk ${memberName}`);
-    return true;
   } catch (error) {
     console.error("Gagal ngirim notif ke Discord:", error.message);
-    return false;
+    terkirim = false;
   }
+
+  // DM flashy dikirim TERPISAH dari notif channel di atas, dan kegagalannya
+  // gak mempengaruhi nilai balik "terkirim" (channel tetap dianggep sukses
+  // walau DM-nya gagal, mis. pemilik nutup DM dari member server) - biar
+  // activeLives/riwayat tetap ke-track normal, cuma sisi flashy-nya yang
+  // sempet kelewat sekali.
+  if (priority) {
+    await sendPriorityDM(memberName, liveUrl, status, priority, imageUrl);
+  }
+
+  return terkirim;
 }
 
 // PENTING: ini PERKIRAAN, bukan deteksi beneran. API IDN nggak nyediain data
@@ -1057,8 +1108,14 @@ async function maybeAlertEndingSoon(entry, durationHistory) {
   }
 }
 
+// Heuristik ini cuma buat 3 member prioritas (preferensi PRIBADI pemilik) -
+// sama kayak notif start/end prioritas, ini dikirim lewat DM ke pemilik
+// doang, BUKAN diposting ke channel bersama (dulu gitu - masalahnya orang
+// lain di channel bakal ikut keliatan "kok bot ini perhatian banget sama 3
+// orang ini doang" padahal itu preferensi pemilik doang).
 async function sendEndingSoonAlert(entry, priority, elapsedMs, avgMs) {
-  const mention = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
+  if (!chatClient || !PRIORITY_PING_USER_ID) return;
+
   const liveUrl = `https://idn.app/${entry.username}/live/${entry.slug}`;
   const elapsedText = formatDuration(elapsedMs);
   const basis = avgMs
@@ -1066,7 +1123,7 @@ async function sendEndingSoonAlert(entry, priority, elapsedMs, avgMs) {
     : `belum ada cukup riwayat, pakai perkiraan umum ${formatDuration(DEFAULT_ENDING_SOON_THRESHOLD_MS)}`;
 
   const payload = {
-    content: `${mention}${priority.sirens} **${priority.label} udah live ${elapsedText}** - kemungkinan mendekati akhir/mau baca podium (${basis}). Ini perkiraan doang, bisa meleset!`,
+    content: `${priority.sirens} **${priority.label} udah live ${elapsedText}** - kemungkinan mendekati akhir/mau baca podium (${basis}). Ini perkiraan doang, bisa meleset!`,
     embeds: [
       {
         title: `⏳ Kemungkinan ${priority.label} bakal segera akhirin live`,
@@ -1079,17 +1136,11 @@ async function sendEndingSoonAlert(entry, priority, elapsedMs, avgMs) {
   };
 
   try {
-    const response = await fetch(DISCORD_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      throw new Error(`Discord webhook balikin status ${response.status}`);
-    }
-    console.log(`Alert 'ending soon' terkirim untuk ${entry.name}`);
+    const user = await chatClient.users.fetch(PRIORITY_PING_USER_ID);
+    await user.send(payload);
+    console.log(`Alert 'ending soon' (DM) terkirim untuk ${entry.name}`);
   } catch (error) {
-    console.error("Gagal ngirim alert ending-soon:", error.message);
+    console.error("Gagal ngirim alert ending-soon (DM, ini nggak fatal):", error.message);
   }
 }
 
@@ -2148,10 +2199,12 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   return replyFallbackMenu();
 }
 
-// Fitur tanya-jawab ini opsional - kalau DISCORD_BOT_TOKEN nggak diset,
-// notifikasi tetap jalan normal, cuma bot nggak bisa dichat.
+// Fitur tanya-jawab DAN DM notif prioritas ini opsional - kalau
+// DISCORD_BOT_TOKEN nggak diset, notifikasi channel tetap jalan normal, cuma
+// bot nggak bisa dichat dan member prioritas gak dapet perlakuan flashy/DM
+// (bakal dapet notif biasa doang, sama kayak member lain).
 if (DISCORD_BOT_TOKEN) {
-  const chatClient = new Client({
+  chatClient = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   });
 
@@ -2190,7 +2243,9 @@ if (DISCORD_BOT_TOKEN) {
     console.error("Gagal login bot Discord (cek DISCORD_BOT_TOKEN):", error.message);
   });
 } else {
-  console.log("DISCORD_BOT_TOKEN nggak diset - fitur tanya-jawab dimatiin (notifikasi tetap jalan normal).");
+  console.log(
+    "DISCORD_BOT_TOKEN nggak diset - fitur tanya-jawab DAN DM notif prioritas dimatiin (notif channel tetap jalan normal, member prioritas dapet notif biasa kayak member lain).",
+  );
 }
 
 console.log("Bot notifikasi IDN Live jalan...");
