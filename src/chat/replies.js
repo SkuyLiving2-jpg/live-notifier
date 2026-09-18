@@ -10,6 +10,9 @@ const {
   formatRelativeTime,
   formatViewCount,
   formatClockWIB,
+  getTodayWIB,
+  getDateWIB,
+  formatShortDateWIB,
   describeElapsed,
   getTimeOfDayBucket,
   getHourWIBOf,
@@ -175,13 +178,27 @@ function buildRecapTablePage(sessions, page) {
   const pageSessions = sorted.slice(start, start + RECAP_TABLE_PAGE_SIZE);
 
   const header = ["No", "Member", "Status", "Mulai", "Durasi"];
-  const rows = pageSessions.map((s, i) => [
-    String(start + i + 1),
-    s.name,
-    s.endedAtUnix !== null ? "Selesai" : "Live",
-    formatClockWIB(new Date(s.startedAtUnix * 1000)),
-    s.endedAtUnix !== null ? formatDuration(s.durationMs) : "-",
-  ]);
+  const rows = pageSessions.map((s, i) => {
+    const startedAt = new Date(s.startedAtUnix * 1000);
+    // Live yang mulai sebelum tengah malam WIB tapi baru selesai/kecatet
+    // SETELAH lewat tengah malam (mis. mulai 22:50 kemarin, kelar 00:39 hari
+    // ini) tetep numpang di tabel rekap "hari ini" (soalnya log harian
+    // ngikutin tanggal WIB pas sesi itu SELESAI/kecatet, bukan pas mulai) -
+    // tanpa penanda ini, jam mulainya keliatan kayak jam mulai HARI INI juga,
+    // padahal bukan. Ditambahin "(DD/MM)" di sebelah jam kalau tanggal WIB
+    // mulainya beda dari tanggal "hari ini".
+    const startedOnDifferentDay = getDateWIB(startedAt) !== getTodayWIB();
+    const mulaiText = startedOnDifferentDay
+      ? `${formatClockWIB(startedAt)} (${formatShortDateWIB(startedAt)})`
+      : formatClockWIB(startedAt);
+    return [
+      String(start + i + 1),
+      s.name,
+      s.endedAtUnix !== null ? "Selesai" : "Live",
+      mulaiText,
+      s.endedAtUnix !== null ? formatDuration(s.durationMs) : "-",
+    ];
+  });
 
   const widths = header.map((h, col) => Math.max(h.length, ...rows.map((r) => r[col].length)));
   const formatRow = (cols) => cols.map((c, i) => c.padEnd(widths[i])).join(" | ");

@@ -26,8 +26,25 @@ function formatClockWIB(date) {
   return `${new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }).format(date)} WIB`;
 }
 
+// Tanggal WIB ("YYYY-MM-DD") dari sebuah Date - default ke sekarang. Dipisah
+// dari getTodayWIB() (yang sekarang cuma delegasi ke sini tanpa argumen)
+// biar bisa dipake buat ngecek tanggal WIB dari waktu LAIN, bukan cuma
+// sekarang - misalnya buat bandingin tanggal mulai sebuah sesi live ke
+// tanggal "hari ini", pas sesi itu mulai H-1 tapi baru kecatet/selesai
+// setelah lewat tengah malam WIB (lihat chat/replies.js's buildRecapTablePage).
+function getDateWIB(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(date);
+}
+
 function getTodayWIB() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+  return getDateWIB();
+}
+
+// "DD/MM" dari sebuah Date (WIB) - versi singkat buat nempel di sebelah jam
+// pas perlu nunjukkin sesi itu mulai di HARI LAIN, bukan cuma jamnya doang.
+function formatShortDateWIB(date) {
+  const [, month, day] = getDateWIB(date).split("-");
+  return `${day}/${month}`;
 }
 
 // Jam WIB (0-23) dari sebuah Date - default ke sekarang kalau dipanggil
@@ -117,6 +134,8 @@ module.exports = {
   formatViewCount,
   formatClockWIB,
   getTodayWIB,
+  getDateWIB,
+  formatShortDateWIB,
   getHourWIBOf,
   getTimeOfDayBucket,
   getGreeting,
