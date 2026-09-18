@@ -66,7 +66,25 @@ async function fetchExternalTodayLiveHistory() {
 function loadDailyLog() {
   const today = getTodayWIB();
   const raw = store.load();
-  if (raw.date !== today) return { date: today, sessions: [], recapSentDate: raw.recapSentDate || null };
+  if (raw.date !== today) {
+    // BUG SEBELUMNYA: pas tanggal WIB berganti hari, SEMUA sesi kemarin
+    // dibuang - termasuk sesi yang MASIH LIVE (belum ada endedAtUnix). Jadi
+    // kalau ada member yang mulai live sebelum tengah malam dan masih live
+    // sampai lewat tengah malam, dia "ilang" dari rekap hari ini walau
+    // beneran masih live SEKARANG - baru numpang lagi nanti pas dia SELESAI
+    // (lewat jalur fallback di recordLiveEndedToday, bukan sebagai baris
+    // "Live" yang harusnya kelihatan dari tadi).
+    //
+    // Sekarang sesi yang masih live (endedAtUnix === null) di-CARRY OVER ke
+    // hari yang baru, biar tetep numpang di rekap "hari ini" sampai dia
+    // beneran selesai - openSession lookup di recordLiveEndedToday bakal
+    // ketemu sesi ini juga (referensi objeknya sama), jadi peak-viewer merge
+    // & durasi akuratnya tetap jalan normal, bukan direkonstruksi ulang dari
+    // fallback. Sesi yang UDAH selesai dari hari kemarin sengaja TETEP
+    // dibuang (bukan tanggung jawab rekap hari ini lagi).
+    const carriedOverSessions = (raw.sessions || []).filter((s) => s.endedAtUnix === null);
+    return { date: today, sessions: carriedOverSessions, recapSentDate: raw.recapSentDate || null };
+  }
   raw.sessions = raw.sessions || [];
   return raw;
 }

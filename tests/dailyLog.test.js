@@ -93,3 +93,62 @@ test("loadDailyLog() reset sessions kalau tanggal WIB di file beda dari hari ini
   assert.equal(log.date, getTodayWIB());
   assert.deepEqual(log.sessions, []);
 });
+
+// Bug yang dilaporin user: member yang "online lagi Live" (mulai sebelum
+// tengah malam, MASIH live sampai sekarang) ilang dari "cok rekap" begitu
+// tanggal WIB-nya udah ganti hari, walau dia beneran masih live. Rollover
+// harus mbedain: sesi yang UDAH selesai (buang, bukan tanggung jawab hari
+// ini lagi) vs sesi yang MASIH LIVE (carry over, tetep tanggung jawab hari
+// ini sampai dia beneran selesai).
+test("loadDailyLog() carry-over sesi yang MASIH LIVE pas rollover, tapi buang yang udah selesai", () => {
+  freshDailyLog();
+  fs.mkdirSync(tempCacheDir, { recursive: true });
+  fs.writeFileSync(
+    DAILY_LOG_FILE,
+    JSON.stringify({
+      date: "2000-01-01",
+      sessions: [
+        { name: "StillLive", username: "jkt48_stilllive", startedAtUnix: 0, endedAtUnix: null, durationMs: null, peakViewCount: 50 },
+        { name: "AlreadyDone", username: "jkt48_done", startedAtUnix: 0, endedAtUnix: 100, durationMs: 100000, peakViewCount: 1 },
+      ],
+      recapSentDate: "2000-01-01",
+    }),
+  );
+
+  delete require.cache[MODULE_PATH];
+  const { loadDailyLog } = require("../src/storage/dailyLog");
+  const log = loadDailyLog();
+
+  assert.equal(log.date, getTodayWIB());
+  assert.equal(log.sessions.length, 1);
+  assert.equal(log.sessions[0].username, "jkt48_stilllive");
+  assert.equal(log.sessions[0].endedAtUnix, null);
+});
+
+test("recordLiveEndedToday nemuin sesi yang di-carry-over dari rollover (bukan bikin duplikat/fallback)", () => {
+  freshDailyLog();
+  fs.mkdirSync(tempCacheDir, { recursive: true });
+  const yesterdayStartUnix = Math.floor(new Date("2026-01-15T22:50:00+07:00").getTime() / 1000);
+  fs.writeFileSync(
+    DAILY_LOG_FILE,
+    JSON.stringify({
+      date: "2000-01-01",
+      sessions: [
+        { name: "Nala", username: "jkt48_nala", startedAtUnix: yesterdayStartUnix, endedAtUnix: null, durationMs: null, peakViewCount: 40 },
+      ],
+      recapSentDate: null,
+    }),
+  );
+
+  delete require.cache[MODULE_PATH];
+  const { loadDailyLog, recordLiveEndedToday } = require("../src/storage/dailyLog");
+
+  const endedAt = new Date("2026-01-16T00:39:00+07:00");
+  recordLiveEndedToday("Nala", "jkt48_nala", endedAt.getTime() / 1000 - yesterdayStartUnix, endedAt, 60);
+
+  const log = loadDailyLog();
+  assert.equal(log.sessions.length, 1, "harus tetep 1 sesi, bukan bikin duplikat lewat fallback");
+  assert.equal(log.sessions[0].startedAtUnix, yesterdayStartUnix, "jam mulai asli (22:50 kemarin) harus KEPAKE, bukan direkonstruksi ulang");
+  assert.notEqual(log.sessions[0].endedAtUnix, null);
+  assert.equal(log.sessions[0].peakViewCount, 60); // Math.max(40, 60)
+});
