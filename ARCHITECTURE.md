@@ -58,6 +58,7 @@ src/
     pendingState.js                short-lived per-user "waiting for a reply" state
 data/                    JSON files (see §4) — local fallback; Railway uses a
                          mounted Volume instead (see §9)
+tests/                   automated tests (see §10) — "npm test"
 ```
 
 ## 3. Data flow
@@ -172,3 +173,21 @@ Things already verified as **not** the cause of this (so don't re-check them fro
 - Case-sensitivity of every `require()` path vs. the actual on-disk filename (Windows-dev/Linux-prod mismatches silently pass locally but crash on Railway) — audited with a small Node script that walks every `.js` file, resolves each relative `require()`, and compares it case-sensitively against `fs.readdirSync()` output.
 - `package.json`'s `main`/`scripts.start` pointing at a real, existing file (`src/index.js`).
 - No `Dockerfile`/`nixpacks.toml`/`railway.json`/`Procfile` overriding the start command — `package.json` is the only place it's declared.
+
+## 10. Testing
+
+`npm test` runs `node --test` (Node's built-in test runner — zero new dependencies, matches the project's existing "no framework unless it earns its weight" approach). Test files live under `tests/*.test.js`.
+
+**Coverage is deliberately targeted, not exhaustive** — it covers the pure logic and storage behavior that's already proven fragile in practice (things this project has actually gotten wrong before), not every function in the codebase:
+
+| File | What it covers |
+| --- | --- |
+| `tests/utils.test.js` | Pure formatting/text/WIB-time helpers. |
+| `tests/jsonStore.test.js` | The generic cache/load/save factory: default fallback, corrupt-file recovery, mkdir-on-save, persistence across a fresh instance (simulating a restart). |
+| `tests/dailyLog.test.js` | The peak-viewer-merge logic (the `0`-is-not-"no data" fix), the day-rollover reset, and the "session started before a restart" fallback reconstruction. |
+| `tests/priority.test.js` | Custom priority add/remove validation, and `buildPriorityPayload`'s mention/end-message behavior. |
+| `tests/replies.test.js` | `buildRecapTablePage` — sorting, pagination, and the cross-midnight "(DD/MM)" date marker. |
+
+**Isolation**: `tests/helpers/setupTestEnv.js` points `CACHE_DIR` at a fresh OS temp folder (and blanks `DISCORD_BOT_TOKEN`/`PRIORITY_PING_USER_ID`/`BOT_CHANNEL_ID`) *before* any `src/` module is required, so tests never read or write the real `data/` folder. It must be the first `require` in any test file that touches storage — `src/config.js` is a singleton cached by Node's `require`, so if some other module reads it first, the temp `CACHE_DIR` override arrives too late. `node --test` runs each test file as its own process, so this isolation doesn't leak between files.
+
+**A test caught a real bug while this suite was being written**: `getHourWIBOf()` used `Intl.DateTimeFormat({ hour12: false })`, which has an ICU quirk — it returns `"24"` instead of `"0"` for the *entire* 00:00–00:59 WIB hour, not just the instant of midnight. `notify/publicAlerts.js`'s `maybeSendDailyRecap()` checks `getHourWIBOf() < DAILY_RECAP_HOUR` (default `23`) to skip early; during that hour, `24 < 23` is `false`, so it fell through, found no sessions yet (the day had just rolled over), skipped posting — but still stamped `recapSentDate = log.date`, silently marking that day's recap as already sent before it had even started. The real 23:00 recap for that day would then never fire, with no error anywhere. Fixed with `% 24` in `utils.js`'s `getHourWIBOf()`; guarded by the `tests/utils.test.js` regression test that checks every minute of that hour explicitly.

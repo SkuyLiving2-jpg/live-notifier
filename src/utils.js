@@ -53,7 +53,17 @@ function formatShortDateWIB(date) {
 // harian, getHourWIBOf(date) buat pola jadwal, dan versi inline lagi di
 // dalam getGreeting() - digabung di sini).
 function getHourWIBOf(date = new Date()) {
-  return Number(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jakarta", hour: "numeric", hour12: false }).format(date));
+  // "% 24" BUKAN basa-basi - Intl dengan hour12:false punya kuirk ICU yang
+  // ngebalikin "24" (bukan "0") buat SELURUH jam 00:00-00:59 WIB (kecatet
+  // pas nulis automated test buat fungsi ini, ketauan tengah malam yang
+  // dites nyata-nyata balikin 24). Tanpa modulo ini, "getHourWIBOf() < 23"
+  // di publicAlerts.js's maybeSendDailyRecap() jadi SALAH nganggep tengah
+  // malam itu "udah lewat jam rekap" - bikin recapSentDate ke-set duluan
+  // sebelum sesi hari itu sempet ada, jadi rekap otomatis jam 23:00 yang
+  // BENERAN nggak pernah kekirim buat hari itu (skip diem-diem, gak ada
+  // error). 24 % 24 = 0, dan buat jam 0-23 lainnya modulo ini gak ngubah
+  // apa-apa (n % 24 === n).
+  return Number(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jakarta", hour: "numeric", hour12: false }).format(date)) % 24;
 }
 
 // Bucket waktu WIB (4-11 pagi, 11-15 siang, 15-18 sore, sisanya malam) -

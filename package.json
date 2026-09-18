@@ -6,6 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
+    "test": "node --test",
     "cek-gifter": "node scripts/cek-top-gifter.js"
   },
   "engines": {
