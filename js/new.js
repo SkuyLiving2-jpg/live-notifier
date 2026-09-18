@@ -1342,6 +1342,7 @@ function replyHelp() {
     '- "cok status"',
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
+    '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok daftar prioritas" - lihat member prioritas',
@@ -1524,6 +1525,83 @@ function replyMemberStats(fragment) {
     `- Rata-rata durasi: ${formatDuration(avg)}`,
     `- Rekor terlama: ${formatDuration(max)}`,
   ].join("\n");
+}
+
+// Bucket waktu WIB - sama batasnya kayak getGreeting() (4-11 pagi, 11-15
+// siang, 15-18 sore, sisanya malam), dipisah jadi fungsi murni sendiri
+// (terima hourWIB langsung) biar bisa dipake bukan cuma buat sapaan tapi
+// juga buat NGELOMPOKIN histori jam mulai live per member.
+function getTimeOfDayBucket(hourWIB) {
+  if (hourWIB >= 4 && hourWIB < 11) return "pagi";
+  if (hourWIB >= 11 && hourWIB < 15) return "siang";
+  if (hourWIB >= 15 && hourWIB < 18) return "sore";
+  return "malam";
+}
+
+function getHourWIBOf(date) {
+  return Number(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jakarta", hour: "numeric", hour12: false }).format(date));
+}
+
+const WEEKDAY_FORMATTER_WIB = new Intl.DateTimeFormat("id-ID", { weekday: "long", timeZone: "Asia/Jakarta" });
+
+// PENTING: IDN nggak nyediain jadwal live resmi sama sekali (udah dicek
+// langsung ke API-nya). Jadi ini PURE statistik dari histori kita SENDIRI
+// (live-duration-history.json, maks 10 entry terakhir per orang) - bukan
+// jaminan/jadwal pasti, bisa aja meleset kalau pola live-nya emang nggak
+// tetap. live-duration-history.json cuma nyimpen timestamp SELESAI (`at`)
+// + durasinya, BUKAN timestamp mulai eksplisit - jadi waktu MULAI live
+// diperkirakan mundur (at - durationMs), bukan dibaca langsung dari field.
+function replySchedulePattern(fragment) {
+  const found = findDurationHistoryByNameFragment(fragment);
+  if (!found || found.entries.length === 0) {
+    return `Cok, belum ada riwayat live buat "${fragment.trim()}" - belum bisa nebak polanya.`;
+  }
+
+  const { entries, displayName } = found;
+  if (entries.length < 3) {
+    return `Cok, riwayat **${displayName}** baru ada ${entries.length}x - masih kurang buat nebak pola jadwalnya (minimal 3x live yang ke-track). Coba tanya lagi lain kali.`;
+  }
+
+  const startTimes = entries.map((e) => new Date(new Date(e.at).getTime() - e.durationMs));
+  const total = startTimes.length;
+
+  const bucketCounts = {};
+  const weekdayCounts = {};
+  const hoursByBucket = {};
+  for (const startDate of startTimes) {
+    const hourWIB = getHourWIBOf(startDate);
+    const bucket = getTimeOfDayBucket(hourWIB);
+    bucketCounts[bucket] = (bucketCounts[bucket] || 0) + 1;
+    (hoursByBucket[bucket] = hoursByBucket[bucket] || []).push(hourWIB);
+
+    const weekday = WEEKDAY_FORMATTER_WIB.format(startDate);
+    weekdayCounts[weekday] = (weekdayCounts[weekday] || 0) + 1;
+  }
+
+  const [topBucketName, topBucketCount] = Object.entries(bucketCounts).sort((a, b) => b[1] - a[1])[0];
+  const [topWeekdayName, topWeekdayCount] = Object.entries(weekdayCounts).sort((a, b) => b[1] - a[1])[0];
+
+  // "malam" ngerangkum jam 18-23 SAMA 0-3 (lewat tengah malam) - kalau
+  // dihitung range min/max mentah, itu bisa keliatan salah ("00-23", nutupin
+  // seharian) padahal beneran cuma sekelompok jam malam yang nyambung lewat
+  // pergantian hari. Digeser +24 dulu buat jam dini hari (0-3) biar urutannya
+  // bener secara matematis, baru di-mod 24 lagi pas ditampilin.
+  const rawHours = hoursByBucket[topBucketName];
+  const rangeHours = topBucketName === "malam" ? rawHours.map((h) => (h < 4 ? h + 24 : h)) : rawHours;
+  const rangeMin = Math.min(...rangeHours) % 24;
+  const rangeMax = Math.max(...rangeHours) % 24;
+  const pad2 = (n) => String(n).padStart(2, "0");
+
+  const lines = [
+    `📅 Pola live **${displayName}** (dari ${total} live terakhir yang ke-track):`,
+    `- Paling sering **${topBucketName}**, sekitar jam ${pad2(rangeMin)}-${pad2(rangeMax)} WIB (${topBucketCount}/${total}x)`,
+  ];
+  if (topWeekdayCount / total >= 0.4) {
+    lines.push(`- Hari yang sering: **${topWeekdayName}** (${topWeekdayCount}/${total}x)`);
+  }
+  lines.push("_(Pola dari histori doang, BUKAN jadwal resmi - IDN nggak nyediain jadwal, jadi bisa aja meleset.)_");
+
+  return lines.join("\n");
 }
 
 // PENTING: ini SNAPSHOT (foto sesaat), bukan live/real-time. Bot ini sendiri
@@ -1978,6 +2056,19 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const gifterMatch = text.match(/gifter\s+(.+)/);
   if (gifterMatch) {
     return replyGifterSnapshot(gifterMatch[1]);
+  }
+
+  // Dua cara natural buat nanya pola jadwal: "cok jadwal nala" (pola
+  // keyword+nama kayak stats/gifter) atau "cok kapan nala live/live nala"
+  // (nama-nya "keapit" di antara kata "kapan" dan "live").
+  const jadwalMatch = text.match(/jadwal\s+(.+)/);
+  if (jadwalMatch) {
+    return replySchedulePattern(stripTrailingLiveWord(jadwalMatch[1]));
+  }
+
+  const kapanLiveMatch = text.match(/kapan\s+(?:biasanya\s+)?(.+?)\s+live\b/) || text.match(/kapan\s+live\s+(.+)/);
+  if (kapanLiveMatch) {
+    return replySchedulePattern(kapanLiveMatch[1]);
   }
 
   if (containsWholeWord(text, "prioritas") && (containsWholeWord(text, "daftar") || containsWholeWord(text, "siapa") || containsWholeWord(text, "list"))) {
