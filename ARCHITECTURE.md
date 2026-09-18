@@ -157,3 +157,18 @@ If `DISCORD_BOT_TOKEN` is unset, none of this fires — the bot logs that at boo
 - Attach a Railway **Volume** and Railway auto-populates `RAILWAY_VOLUME_MOUNT_PATH`; `config.js` picks it up automatically (no code change needed) so `data/*.json` survives redeploys instead of resetting.
 - `config.js` logs which `CACHE_DIR` is actually active at boot — check Railway's Deploy Logs first if stats/history seem to have reset unexpectedly.
 - The HTTP server (`src/server.js`) exists purely so Railway's health check sees an open port; the bot itself is a background poller, not a web service.
+
+### Troubleshooting: dashboard stuck showing "Building"
+
+Railway's deploy badge can keep showing **"Building"** even after the **Build Logs** tab clearly finished (look for a green checkmark on `exporting to docker image format` and `image push` near the bottom — if those are there, the image itself built fine). This is almost always one of two things, in order of likelihood:
+
+1. **The dashboard just hasn't refreshed.** Build finished, deploy is already progressing (or done), the badge is stale. Reload the page.
+2. **The container is crashing right after start**, which Railway can sometimes still render as a lingering "Building" state before it flips to "Failed" or starts crash-looping. To tell the difference from (1):
+   - Open the **Deploy Logs** tab (next to Build Logs) — that's where the actual `node src/index.js` process's output goes, not Build Logs.
+   - Look for the boot sequence: `CACHE_DIR aktif: ...`, then `Bot notifikasi IDN Live jalan...`, and (if `DISCORD_BOT_TOKEN` is set) `Bot tanya-jawab login sebagai ...`. If all of these show up, the bot is actually running fine and the dashboard badge was just stale (case 1).
+   - If Deploy Logs instead show a stack trace / `Error: Cannot find module ...` / the process exiting immediately, that's a real crash — paste that log, not the Build Logs, for diagnosis.
+
+Things already verified as **not** the cause of this (so don't re-check them from scratch next time this happens, unless the codebase changes again in a way that could reintroduce them):
+- Case-sensitivity of every `require()` path vs. the actual on-disk filename (Windows-dev/Linux-prod mismatches silently pass locally but crash on Railway) — audited with a small Node script that walks every `.js` file, resolves each relative `require()`, and compares it case-sensitively against `fs.readdirSync()` output.
+- `package.json`'s `main`/`scripts.start` pointing at a real, existing file (`src/index.js`).
+- No `Dockerfile`/`nixpacks.toml`/`railway.json`/`Procfile` overriding the start command — `package.json` is the only place it's declared.
