@@ -149,6 +149,18 @@ function recordLiveEndedToday(name, username, durationMs, endedAtDate, peakViewC
   saveDailyLog(log);
 }
 
+// Dipake monitor.js sebagai jaring pengaman: kalau member yang lagi live
+// (udah ada di activeLives) KETAUAN gak punya sesi "terbuka" di rekap hari
+// ini - entah gara-gara bug yang belum kepikiran, migrasi data manual, atau
+// (kasus nyata yang kejadian) rollover tengah malam yang kepotong PAS di
+// tengah-tengah deploy fix carry-over-nya - bisa langsung dicatet ulang
+// SEKARANG JUGA (lihat monitor.js), bukan nunggu dia selesai baru numpang
+// lewat fallback reconstruction di recordLiveEndedToday.
+function hasOpenSessionToday(username) {
+  const log = loadDailyLog();
+  return log.sessions.some((s) => s.username === username && s.endedAtUnix === null);
+}
+
 module.exports = {
   loadDailyLog,
   saveDailyLog,
@@ -156,4 +168,5 @@ module.exports = {
   fetchExternalTodayLiveHistory,
   recordLiveStartedToday,
   recordLiveEndedToday,
+  hasOpenSessionToday,
 };

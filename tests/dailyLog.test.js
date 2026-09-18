@@ -152,3 +152,20 @@ test("recordLiveEndedToday nemuin sesi yang di-carry-over dari rollover (bukan b
   assert.notEqual(log.sessions[0].endedAtUnix, null);
   assert.equal(log.sessions[0].peakViewCount, 60); // Math.max(40, 60)
 });
+
+// Jaring pengaman dipake monitor.js: member yang lagi live tapi kebetulan
+// gak punya sesi "terbuka" di rekap hari ini (mis. kena bug rollover versi
+// lama, atau sebab lain) harus KETAUAN, biar bisa dicatet ulang lewat
+// recordLiveStartedToday sebelum dia sempet selesai live.
+test("hasOpenSessionToday - true kalau ada sesi belum selesai buat username itu, false kalau enggak", () => {
+  const { recordLiveStartedToday, recordLiveEndedToday, hasOpenSessionToday } = freshDailyLog();
+
+  assert.equal(hasOpenSessionToday("jkt48_nala"), false); // belum ada apa-apa
+
+  recordLiveStartedToday("Nala", "jkt48_nala", new Date(), 10);
+  assert.equal(hasOpenSessionToday("jkt48_nala"), true);
+  assert.equal(hasOpenSessionToday("jkt48_levi"), false); // member lain gak ikut ketrigger
+
+  recordLiveEndedToday("Nala", "jkt48_nala", 60_000, new Date(), 20);
+  assert.equal(hasOpenSessionToday("jkt48_nala"), false); // udah selesai, gak "terbuka" lagi
+});
