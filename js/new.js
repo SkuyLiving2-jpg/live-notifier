@@ -2210,6 +2210,16 @@ if (DISCORD_BOT_TOKEN) {
 
   chatClient.once("clientReady", () => {
     console.log(`Bot tanya-jawab login sebagai ${chatClient.user.tag}`);
+    // Dicetak sekali pas boot - cara paling gampang buat mastiin (lewat
+    // Deploy Logs di Railway, tanpa perlu akses dashboard/CLI-nya) apakah
+    // PRIORITY_PING_USER_ID keisi bener, soalnya kalau kosong DM notif
+    // prioritas (sendPriorityDM/sendEndingSoonAlert/maybePartyModeAlert) diem-
+    // diem gak pernah kekirim tanpa error apapun.
+    console.log(
+      PRIORITY_PING_USER_ID
+        ? `PRIORITY_PING_USER_ID aktif - DM notif prioritas bakal dikirim ke user ID ${PRIORITY_PING_USER_ID}.`
+        : "PRIORITY_PING_USER_ID BELUM diset - DM notif prioritas gak bakal kekirim (channel tetap dapet notif biasa).",
+    );
   });
 
   chatClient.on("messageCreate", async (message) => {
