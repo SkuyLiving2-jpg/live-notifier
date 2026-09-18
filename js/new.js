@@ -144,7 +144,11 @@ const PRIORITY_PING_USER_ID = process.env.PRIORITY_PING_USER_ID || "";
 // kehapus via chat. Di-cache di memori biar nggak baca file berkali-kali
 // tiap kali dicek (sama kayak fix performa riwayat durasi sebelumnya).
 const CUSTOM_PRIORITY_FILE = path.join(CACHE_DIR, "custom-priority.json");
-const PRIORITY_COLOR_PALETTE = [0x1abc9c, 0x9b59b6, 0x3498db, 0x2ecc71, 0xe91e63];
+// Sengaja HINDARIN warna Nala (0x1abc9c teal) & Lily (0x3498db biru) di sini -
+// dulu palette ini masukin dua warna itu, jadi member prioritas custom
+// pertama/ketiga yang ditambahin lewat chat bisa dapet warna PERSIS SAMA
+// kayak Nala/Lily (keliatan "salah orang" di embed Discord).
+const PRIORITY_COLOR_PALETTE = [0x9b59b6, 0x2ecc71, 0xe91e63, 0xe67e22, 0xf1c40f];
 let customPriorityCache = null;
 
 function loadCustomPriorityMembers() {
@@ -602,8 +606,13 @@ function recordLiveEndedToday(name, username, durationMs, endedAtDate, peakViewC
     openSession.durationMs = durationMs;
     // Ambil peak TERBESAR antara yang kecatet pas mulai vs yang kekumpul
     // sepanjang live-nya jalan, biar gak ketimpa turun kalau penontonnya
-    // sempet surut pas mau selesai.
-    openSession.peakViewCount = Math.max(openSession.peakViewCount ?? 0, peakViewCount ?? 0) || null;
+    // sempet surut pas mau selesai. Ditulis pake filter+Math.max (BUKAN
+    // "Math.max(a ?? 0, b ?? 0) || null") soalnya versi lama itu nganggep
+    // peak 0 (kasus langka tapi valid, mis. live keburu selesai sebelum
+    // sempet ke-poll sekali pun) sebagai "nggak ada data" - 0 itu falsy di
+    // JS, jadi ketimpa null padahal datanya sebenernya ada.
+    const knownPeaks = [openSession.peakViewCount, peakViewCount].filter((v) => v != null);
+    openSession.peakViewCount = knownPeaks.length > 0 ? Math.max(...knownPeaks) : null;
   } else {
     // Sesi "mulai"-nya kelewat kecatet (mis. live-nya kepotong pergantian
     // hari WIB, atau bot baru restart tengah live) - tetep catet daripada
@@ -1920,8 +1929,12 @@ async function handleFallbackMemberSelect(interaction) {
   const username = interaction.values[0];
 
   if (optionId === "4") {
+    // Langsung pake entry dari username (udah pasti bener, dari pilihan
+    // dropdown) - BUKAN startWatchConfirm(entry.name, ...) yang bakal
+    // nyari ulang lewat fuzzy name-match dan berpotensi (walau jarang)
+    // nyangkut ke member lain yang kebetulan nama depannya mirip.
     const entry = activeLives.get(username);
-    const reply = entry ? startWatchConfirm(entry.name, interaction.channelId, interaction.user.id) : replyMemberNotFound(username);
+    const reply = entry ? startWatchConfirmForEntry(entry, interaction.channelId, interaction.user.id) : replyMemberNotFound(username);
     await interaction.reply(reply);
     return;
   }
@@ -1946,14 +1959,22 @@ const NO_PATTERN = /^(n|no|ga|gak|kaga|nggak|enggak|tidak|males|ga\s*mau|nggak\s
 // live, JANGAN langsung kasih link, tanya dulu "mau nonton?" (biar kayak
 // ngobrol beneran, bukan asal muntahin info). Kalau membernya ternyata lagi
 // nggak live, gak usah nanya apa-apa lagi, langsung bilang aja.
+// Dipisah dari startWatchConfirm biar pemanggil yang UDAH PASTI punya entry-nya
+// (mis. dropdown pilihan #4, lihat handleFallbackMemberSelect) bisa langsung
+// pake entry itu tanpa nyari ulang lewat fuzzy name-match - beda sama
+// startWatchConfirm(fragment, ...) yang emang butuh nyari dulu (dipanggil dari
+// chat teks yang cuma punya nama, bukan entry).
+function startWatchConfirmForEntry(entry, channelId, authorId) {
+  if (channelId && authorId) {
+    pendingWatchConfirm.set(`${channelId}:${authorId}`, { username: entry.username, name: entry.name, at: Date.now() });
+  }
+  return `**${entry.name}** lagi live nih! Mau nonton sekarang? (y/n)`;
+}
+
 function startWatchConfirm(fragment, channelId, authorId) {
   const found = findMemberByNameFragment(fragment);
   if (!found) return replyMemberNotFound(fragment);
-
-  if (channelId && authorId) {
-    pendingWatchConfirm.set(`${channelId}:${authorId}`, { username: found.username, name: found.name, at: Date.now() });
-  }
-  return `**${found.name}** lagi live nih! Mau nonton sekarang? (y/n)`;
+  return startWatchConfirmForEntry(found, channelId, authorId);
 }
 
 // Dicek di AWAL buildChatReply (kayak tryHandleMenuShortcut) - jawaban "y"
