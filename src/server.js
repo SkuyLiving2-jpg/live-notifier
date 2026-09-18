@@ -1,5 +1,5 @@
 const http = require("http");
-const { requireSignedRequest } = require("../js/security");
+const { requireSignedRequest } = require("./security");
 const { API_SECRET, PORT } = require("./config");
 const { activeLives } = require("./storage/activeLives");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");

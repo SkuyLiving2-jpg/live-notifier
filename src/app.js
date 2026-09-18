@@ -4,7 +4,7 @@ const { wireDiscordEvents } = require("./chat/router");
 const { startServer } = require("./server");
 const { pollLoop } = require("./monitor");
 
-// Titik masuk tunggal buat nyalain seluruh bot - dipanggil dari js/new.js.
+// Titik masuk tunggal buat nyalain seluruh bot - dipanggil dari src/index.js.
 // Sengaja dipisah dari require-time (bukan langsung jalan begitu file ini
 // di-require) biar modul-modul lain (storage, notify, priority, dst) bisa
 // di-require sendiri-sendiri buat dites/diperiksa tanpa ikut nyalain server

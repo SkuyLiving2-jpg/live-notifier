@@ -15,18 +15,19 @@ It is a single always-on Node.js process (no database — everything is small JS
 ## 2. Directory map
 
 ```
-js/
-  new.js                 entry point — require("../src/app").start()
-  security.js             HMAC request-signing helpers (used by src/server.js
-                           and scripts/cek-top-gifter.js)
 scripts/
   cek-top-gifter.js        standalone manual CLI (not part of the 24/7 bot —
                            see §6)
 src/
+  index.js                 entry point — require("./app").start() (this is
+                           what "node src/index.js"/npm start actually runs)
   config.js                env loading + validation + all static config
                            (thresholds, priority member definitions, colors)
   app.js                   start(): wires everything together, the only
-                           entry point with real side effects
+                           module (besides index.js/config.js) with real side effects
+  security.js               HMAC request-signing helpers (used by src/server.js
+                           and scripts/cek-top-gifter.js) — a leaf module like
+                           config.js/utils.js, no dependency on the rest of src/
   discordClient.js         shared discord.js Client singleton
   idnApi.js                IDN Live GraphQL client
   server.js                HTTP server (health check + signed endpoints)
@@ -152,7 +153,7 @@ If `DISCORD_BOT_TOKEN` is unset, none of this fires — the bot logs that at boo
 
 ## 9. Deployment (Railway)
 
-- `package.json`'s `main`/`scripts.start` point at `js/new.js` — unaffected by this file structure, since `js/new.js` is a thin `require("../src/app").start()` and nothing else references it.
+- `package.json`'s `main`/`scripts.start` point at `src/index.js` (a thin `require("./app").start()`), run via `npm start` — no separate `js/` entry point exists anymore, everything lives under `src/`.
 - Attach a Railway **Volume** and Railway auto-populates `RAILWAY_VOLUME_MOUNT_PATH`; `config.js` picks it up automatically (no code change needed) so `data/*.json` survives redeploys instead of resetting.
 - `config.js` logs which `CACHE_DIR` is actually active at boot — check Railway's Deploy Logs first if stats/history seem to have reset unexpectedly.
 - The HTTP server (`src/server.js`) exists purely so Railway's health check sees an open port; the bot itself is a background poller, not a web service.

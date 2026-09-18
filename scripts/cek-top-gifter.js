@@ -25,13 +25,13 @@
 // sekali - ini URL bot kamu sendiri di Railway + secret yang sama kayak di
 // server-nya). Abis itu tiap kali mode interaktif berhasil cek gifter, HASIL
 // nya (bukan token IDN-nya) langsung dikirim ke bot lewat request yang
-// di-sign (lihat js/security.js) - kalau dua var itu kosong, fitur ini
+// di-sign (lihat src/security.js) - kalau dua var itu kosong, fitur ini
 // cuma di-skip, semuanya tetap jalan normal kayak biasa (lokal doang).
 
 const readline = require("readline");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
-const { signPayload } = require("../js/security");
+const { signPayload } = require("../src/security");
 
 const IDN_API_URL = "https://api.idn.app/graphql";
 const MAX_LIVESTREAM_PAGES = 20;
@@ -83,7 +83,7 @@ function createPrompter() {
   };
 }
 
-// Sama kayak fetchAllLivestreams() di js/new.js - API publik IDN, nggak
+// Sama kayak fetchAllLivestreams() di src/idnApi.js - API publik IDN, nggak
 // butuh login. Dipakai buat nyusun daftar live JKT48 yang lagi aktif SEKARANG
 // biar user tinggal milih, nggak perlu copy-paste link manual.
 async function fetchLiveJkt48Members() {
@@ -161,7 +161,7 @@ function printGifterResults(gifters, liveName) {
 
 // Ngirim HASIL cek (nama gifter + gold) ke bot Discord yang lagi jalan -
 // BUKAN token IDN-nya. Pake signPayload yang sama kayak yang dipake server
-// buat verifikasi (js/security.js), jadi endpoint-nya cuma nerima request
+// buat verifikasi (src/security.js), jadi endpoint-nya cuma nerima request
 // yang beneran dari kita, bukan sembarang orang yang nebak URL bot-nya.
 async function pushSnapshotToBot(username, name, gifters) {
   const bodyString = JSON.stringify({ username, name, gifters });
