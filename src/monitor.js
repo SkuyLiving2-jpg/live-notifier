@@ -90,11 +90,29 @@ async function checkLiveMembers() {
   }
 }
 
+// Dipegang biar bisa di-clear pas graceful shutdown (lihat stopPolling di
+// bawah) - tanpa ini, SIGTERM/SIGINT dari Railway cuma bisa "maksa" proses
+// berhenti (kill), bukan berhenti rapi abis siklus yang lagi jalan kelar.
+let pollTimeoutHandle = null;
+let stopped = false;
+
 // Jalankan polling tiap 30 detik (self-scheduling biar nggak tumpang tindih
 // kalau checkLiveMembers kebetulan lebih lambat dari interval-nya)
 async function pollLoop() {
   await checkLiveMembers();
-  setTimeout(pollLoop, POLL_INTERVAL_MS);
+  if (stopped) return; // jangan jadwalin siklus baru - shutdown lagi diminta
+  pollTimeoutHandle = setTimeout(pollLoop, POLL_INTERVAL_MS);
 }
 
-module.exports = { checkLiveMembers, pollLoop };
+// Dipanggil dari src/app.js's shutdown handler. Siklus checkLiveMembers()
+// yang LAGI JALAN dibiarin kelar dulu (gak dipotong paksa) - ini cuma
+// nyegah siklus BERIKUTNYA dijadwalin.
+function stopPolling() {
+  stopped = true;
+  if (pollTimeoutHandle) {
+    clearTimeout(pollTimeoutHandle);
+    pollTimeoutHandle = null;
+  }
+}
+
+module.exports = { checkLiveMembers, pollLoop, stopPolling };

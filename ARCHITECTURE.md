@@ -51,6 +51,8 @@ src/
     priorityDm.js               owner-only DMs: flashy notif, ending-soon
                              heuristic, Party Mode
     publicAlerts.js             viewer milestones, new records, daily recap
+    crashAlert.js                last-resort DM/webhook alert on an uncaught
+                             error, sent right before the process exits
   chat/
     router.js                  buildChatReply() dispatcher + Discord event wiring
     replies.js                   pure reply-string builders + recap pagination
@@ -160,6 +162,8 @@ If `DISCORD_BOT_TOKEN` is unset, none of this fires — the bot logs that at boo
 - Attach a Railway **Volume** and Railway auto-populates `RAILWAY_VOLUME_MOUNT_PATH`; `config.js` picks it up automatically (no code change needed) so `data/*.json` survives redeploys instead of resetting.
 - `config.js` logs which `CACHE_DIR` is actually active at boot — check Railway's Deploy Logs first if stats/history seem to have reset unexpectedly.
 - The HTTP server (`src/server.js`) exists purely so Railway's health check sees an open port; the bot itself is a background poller, not a web service.
+- **Graceful shutdown**: `src/app.js`'s `start()` registers `SIGTERM`/`SIGINT` handlers — on redeploy/restart, Railway sends `SIGTERM` and waits before force-killing. The handler stops `monitor.js`'s poll loop (`stopPolling()` — lets an in-flight cycle finish, just skips scheduling the next one), destroys the Discord client, and closes the HTTP server, with a 5-second fallback `process.exit(0)` in case something hangs. Look for `"SIGTERM diterima, matiin bot dengan rapi..."` in Deploy Logs right before a redeploy's old instance stops.
+- **Crash alerts**: `start()` also registers `uncaughtException`/`unhandledRejection` handlers that call `notify/crashAlert.js`'s `sendCrashAlert()` (DM to the owner if `DISCORD_BOT_TOKEN`/`PRIORITY_PING_USER_ID` are set, else the public webhook channel) before exiting — a last-resort net for something that escapes `checkLiveMembers()`'s own per-cycle try/catch, so a real crash doesn't go silently unnoticed until you happen to check Deploy Logs.
 
 ### Troubleshooting: dashboard stuck showing "Building"
 
@@ -193,6 +197,8 @@ Things already verified as **not** the cause of this (so don't re-check them fro
 | `tests/replies.test.js` | `buildRecapTablePage` — sorting, pagination, and the cross-midnight "(DD/MM)" date marker — plus `getTodaySessionsForRecap`'s merge, `replyMemberStats`/`replySchedulePattern`'s bucket/weekday logic, `replyPriorityList`, subscribe/unsubscribe, and the owner-gated priority add/remove. |
 | `tests/router.test.js` | `buildChatReply`'s dispatch chain — the wake-word gate, the explicitly order-sensitive regex pairs ("reminder" before "ingetin", "berhenti ingetin" before "ingetin"), one case per major command branch, and the fallback-menu path. Deliberately skips anything that dispatches to `replyTodayRecapSoFar` (menu option 8 / "cok rekap"), since that makes a real network call to the external archive — see `tests/menu.test.js`'s note. |
 | `tests/menu.test.js` | `resolveBareMenuChoice`'s dispatch table, the watch-confirm y/n flow (including re-checking live status at confirm time, and a non-y/n answer not consuming the pending state), and the button/select-menu handlers via lightweight fake `interaction` objects (`{ customId, channelId, user: { id }, values, reply }` — the code never touches anything else on a real discord.js interaction, so no mocking library is needed). |
+| `tests/monitor.test.js` | `stopPolling()` is safe to call before any poll cycle has run, and idempotent. Deliberately doesn't exercise `pollLoop()` itself — it calls the real IDN API. |
+| `tests/crashAlert.test.js` | `sendCrashAlert()` never throws, for both an `Error` object and a bare string reason (the two shapes `uncaughtException`/`unhandledRejection` can hand it) — exercises the real webhook-fallback path against the dummy test webhook URL (a fast, deterministic rejection from Discord's real API, not a flaky third party) rather than mocking `fetch`. |
 
 **Isolation**: `tests/helpers/setupTestEnv.js` points `CACHE_DIR` at a fresh OS temp folder (and blanks `DISCORD_BOT_TOKEN`/`PRIORITY_PING_USER_ID`/`BOT_CHANNEL_ID`) *before* any `src/` module is required, so tests never read or write the real `data/` folder. It must be the first `require` in any test file that touches storage — `src/config.js` is a singleton cached by Node's `require`, so if some other module reads it first, the temp `CACHE_DIR` override arrives too late. `node --test` runs each test file as its own process, so this isolation doesn't leak between files.
 

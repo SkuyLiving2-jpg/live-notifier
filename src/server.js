@@ -69,7 +69,7 @@ function handleGifterSnapshotUpload(req, res, body) {
 // signature - health-check di "/" TETAP publik tanpa signature, karena
 // Railway & UptimeRobot manggil itu tanpa tahu cara nge-sign request.
 function startServer() {
-  http
+  return http
     .createServer((req, res) => {
       if (req.url === "/api/status") {
         if (!API_SECRET) {
