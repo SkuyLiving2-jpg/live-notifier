@@ -180,6 +180,8 @@ Things already verified as **not** the cause of this (so don't re-check them fro
 
 `npm test` runs `node --test` (Node's built-in test runner — zero new dependencies, matches the project's existing "no framework unless it earns its weight" approach). Test files live under `tests/*.test.js`.
 
+**CI**: `.github/workflows/test.yml` runs `npm test` on every push and pull request. **This gives visibility, not a deploy gate** — this repo's workflow is direct pushes to `master` with no branch protection or PR step, and Railway's deploy trigger isn't gated on GitHub Actions status by default. A failing test shows up as a red X on the commit on GitHub, but it does **not** by itself stop that commit from being deployed to Railway. Making it an actual gate would mean adding branch protection + a PR-based workflow, or a Railway-side check — neither is set up, since it'd change how this project is worked on day to day.
+
 **Coverage is deliberately targeted, not exhaustive** — it covers the pure logic and storage behavior that's already proven fragile in practice (things this project has actually gotten wrong before), not every function in the codebase:
 
 | File | What it covers |
