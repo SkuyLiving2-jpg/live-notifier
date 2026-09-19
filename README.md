@@ -16,15 +16,15 @@ npm start
 
 ## Scripts
 
-| Command | Buat apa |
-| --- | --- |
-| `npm start` | Nyalain bot (`node src/index.js`) |
-| `npm test` | Jalanin automated test suite (`node --test`) |
-| `npm run lint` | Cek gaya kode pake ESLint |
-| `npm run format` | Rapiin format kode otomatis pake Prettier |
-| `npm run format:check` | Cek format tanpa ngubah file (dipake CI) |
-| `npm run cek-gifter` | Tool CLI manual buat cek top-gifter (lihat `scripts/cek-top-gifter.js`) |
-| `npm run backup-data` | Tool CLI manual buat narik backup data bot ke file lokal |
+| Command                | Buat apa                                                                |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `npm start`            | Nyalain bot (`node src/index.js`)                                       |
+| `npm test`             | Jalanin automated test suite (`node --test`)                            |
+| `npm run lint`         | Cek gaya kode pake ESLint                                               |
+| `npm run format`       | Rapiin format kode otomatis pake Prettier                               |
+| `npm run format:check` | Cek format tanpa ngubah file (dipake CI)                                |
+| `npm run cek-gifter`   | Tool CLI manual buat cek top-gifter (lihat `scripts/cek-top-gifter.js`) |
+| `npm run backup-data`  | Tool CLI manual buat narik backup data bot ke file lokal                |
 
 ## Deploy
 

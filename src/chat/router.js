@@ -58,8 +58,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // gak perlu nyebut "cok" atau "live" dulu.
   const mentionsBot = isBotChannel || CHAT_WAKE_WORDS.some((w) => containsWholeWord(text, w));
   const looksLikeLiveQuestion =
-    TOPIC_WORDS.some((w) => containsWholeWord(text, w)) &&
-    QUESTION_HINTS.some((w) => (w === "?" ? text.includes("?") : containsWholeWord(text, w)));
+    TOPIC_WORDS.some((w) => containsWholeWord(text, w)) && QUESTION_HINTS.some((w) => (w === "?" ? text.includes("?") : containsWholeWord(text, w)));
 
   if (!mentionsBot && !looksLikeLiveQuestion) return null;
 
@@ -116,7 +115,10 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return replySchedulePattern(kapanLiveMatch[1]);
   }
 
-  if (containsWholeWord(text, "prioritas") && (containsWholeWord(text, "daftar") || containsWholeWord(text, "siapa") || containsWholeWord(text, "list"))) {
+  if (
+    containsWholeWord(text, "prioritas") &&
+    (containsWholeWord(text, "daftar") || containsWholeWord(text, "siapa") || containsWholeWord(text, "list"))
+  ) {
     return replyPriorityList();
   }
 
@@ -126,7 +128,8 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 
   const asksTopViewers =
     containsWholeWord(text, "viewer") ||
-    (containsWholeWord(text, "penonton") && (containsWholeWord(text, "banyak") || containsWholeWord(text, "terbanyak") || containsWholeWord(text, "rame"))) ||
+    (containsWholeWord(text, "penonton") &&
+      (containsWholeWord(text, "banyak") || containsWholeWord(text, "terbanyak") || containsWholeWord(text, "rame"))) ||
     (containsWholeWord(text, "ditonton") && (containsWholeWord(text, "banyak") || containsWholeWord(text, "rame")));
   if (asksTopViewers) {
     return replyTopViewers();
@@ -138,7 +141,10 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 
   if (
     containsWholeWord(text, "live") &&
-    (containsWholeWord(text, "siapa") || containsWholeWord(text, "list") || containsWholeWord(text, "apa aja") || containsWholeWord(text, "ada berapa"))
+    (containsWholeWord(text, "siapa") ||
+      containsWholeWord(text, "list") ||
+      containsWholeWord(text, "apa aja") ||
+      containsWholeWord(text, "ada berapa"))
   ) {
     return replyListLive();
   }

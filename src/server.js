@@ -38,7 +38,7 @@ function handleGifterSnapshotUpload(req, res, body) {
   let payload;
   try {
     payload = JSON.parse(body);
-  } catch (error) {
+  } catch {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Body bukan JSON valid" }));
     return;

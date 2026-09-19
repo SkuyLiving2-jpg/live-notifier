@@ -19,7 +19,7 @@ function loadActiveLives() {
   try {
     const raw = fs.readFileSync(CACHE_FILE, "utf-8");
     return new Map(Object.entries(JSON.parse(raw)));
-  } catch (error) {
+  } catch {
     return new Map();
   }
 }

@@ -31,7 +31,7 @@ function verifySignature({ secret, timestamp, signature, body }) {
   try {
     expectedBuf = Buffer.from(expected, "hex");
     actualBuf = Buffer.from(signature, "hex");
-  } catch (error) {
+  } catch {
     return { valid: false, reason: "malformed_signature" };
   }
 

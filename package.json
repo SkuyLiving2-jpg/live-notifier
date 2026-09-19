@@ -7,6 +7,9 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "cek-gifter": "node scripts/cek-top-gifter.js"
   },
   "engines": {
@@ -15,5 +18,12 @@
   "dependencies": {
     "discord.js": "^14.27.0",
     "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.8"
   }
 }

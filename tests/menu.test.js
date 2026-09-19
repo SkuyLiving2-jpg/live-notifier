@@ -162,7 +162,9 @@ test("handleFallbackMemberSelect - opsi 4: member yang dipilih dari dropdown lag
 
 test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown (bukan fuzzy search)", async () => {
   saveGifterSnapshot({
-    members: { jkt48_selectgiftertest: { name: "Selectgiftertest", gifters: [{ name: "Fan1", total_gold: 500 }], checkedAt: new Date().toISOString() } },
+    members: {
+      jkt48_selectgiftertest: { name: "Selectgiftertest", gifters: [{ name: "Fan1", total_gold: 500 }], checkedAt: new Date().toISOString() },
+    },
   });
   const interaction = fakeInteraction({ customId: "fallback_select:9", values: ["jkt48_selectgiftertest"] });
   await handleFallbackMemberSelect(interaction);

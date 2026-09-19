@@ -259,7 +259,9 @@ async function runInteractive() {
   console.log(`${c.bold}🏆 Cek Top Gifter IDN Live${c.reset}\n`);
   const canPushToBot = Boolean(BOT_API_URL && API_SECRET);
   if (!canPushToBot) {
-    console.log(`${c.dim}(Tip: isi BOT_API_URL & API_SECRET di .env biar hasilnya juga muncul di chat Discord lewat "cok gifter <nama>")${c.reset}\n`);
+    console.log(
+      `${c.dim}(Tip: isi BOT_API_URL & API_SECRET di .env biar hasilnya juga muncul di chat Discord lewat "cok gifter <nama>")${c.reset}\n`,
+    );
   }
 
   if (!authToken || !apiKey) {

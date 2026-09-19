@@ -103,7 +103,9 @@ async function resolveBareMenuChoice(choice, channelId, authorId) {
 }
 
 function memberPromptQuestion(option) {
-  return option === "4" ? 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".' : 'Gifter siapa? Ketik nama membernya juga ya, misal "9 Nala".';
+  return option === "4"
+    ? 'Member yang mana? Ketik nama membernya juga ya, misal "4 Nala".'
+    : 'Gifter siapa? Ketik nama membernya juga ya, misal "9 Nala".';
 }
 
 // "channelId:authorId" -> { username, name, at } - nunggu jawaban y/n abis

@@ -18,7 +18,7 @@ function freshDailyLog() {
   delete require.cache[MODULE_PATH];
   try {
     fs.unlinkSync(DAILY_LOG_FILE);
-  } catch (error) {
+  } catch {
     // wajar kalau belum pernah ada file-nya
   }
   return require("../src/storage/dailyLog");

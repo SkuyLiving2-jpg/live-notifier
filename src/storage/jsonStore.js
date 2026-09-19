@@ -21,7 +21,7 @@ function createJsonStore(filePath, defaultValue, { errorLabel } = {}) {
     if (!hasCache) {
       try {
         cache = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      } catch (error) {
+      } catch {
         cache = typeof defaultValue === "function" ? defaultValue() : defaultValue;
       }
       hasCache = true;

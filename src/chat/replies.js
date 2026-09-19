@@ -184,9 +184,7 @@ function buildRecapTablePage(sessions, page) {
     // padahal bukan. Ditambahin "(DD/MM)" di sebelah jam kalau tanggal WIB
     // mulainya beda dari tanggal "hari ini".
     const startedOnDifferentDay = getDateWIB(startedAt) !== getTodayWIB();
-    const mulaiText = startedOnDifferentDay
-      ? `${formatClockWIB(startedAt)} (${formatShortDateWIB(startedAt)})`
-      : formatClockWIB(startedAt);
+    const mulaiText = startedOnDifferentDay ? `${formatClockWIB(startedAt)} (${formatShortDateWIB(startedAt)})` : formatClockWIB(startedAt);
     return [
       String(start + i + 1),
       s.name,

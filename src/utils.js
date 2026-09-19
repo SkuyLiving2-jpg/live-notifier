@@ -124,7 +124,10 @@ function containsWholeWord(text, phrase) {
 // "nala" - orang sering nulis kalimat lengkap ("tambah prioritas nala live")
 // padahal yang dibutuhin cuma nama/keyword-nya doang.
 function stripTrailingLiveWord(raw) {
-  return (raw || "").trim().replace(/\s+live\??$/i, "").trim();
+  return (raw || "")
+    .trim()
+    .replace(/\s+live\??$/i, "")
+    .trim();
 }
 
 // Pilih 1 elemen acak dari sebuah array - dipake buat ngeracik pesan akhir
