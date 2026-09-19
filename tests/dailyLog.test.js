@@ -24,148 +24,106 @@ function freshDailyLog() {
   return require("../src/storage/dailyLog");
 }
 
-test("recordLiveStartedToday lalu recordLiveEndedToday nge-update SESI YANG SAMA, bukan bikin baru", () => {
-  const { loadDailyLog, recordLiveStartedToday, recordLiveEndedToday } = freshDailyLog();
-
-  recordLiveStartedToday("Nala", "jkt48_nala", new Date(), 100);
-  assert.equal(loadDailyLog().sessions.length, 1);
-  assert.equal(loadDailyLog().sessions[0].endedAtUnix, null);
-
-  recordLiveEndedToday("Nala", "jkt48_nala", 60_000, new Date(), 200);
-  const sessions = loadDailyLog().sessions;
-  assert.equal(sessions.length, 1); // tetep 1, bukan 2
-  assert.notEqual(sessions[0].endedAtUnix, null);
-  assert.equal(sessions[0].durationMs, 60_000);
-});
-
-// Ini bug yang udah dibenerin sesi sebelumnya: "Math.max(a ?? 0, b ?? 0) || null"
-// nganggep peak 0 (valid tapi falsy) sebagai "nggak ada data". Filter+Math.max
-// yang sekarang dipake harus bener buat SEMUA kombinasi null/0/angka biasa.
-const peakScenarios = [
-  { startPeak: 0, endPeak: 0, expected: 0 },
-  { startPeak: null, endPeak: 0, expected: 0 },
-  { startPeak: 0, endPeak: null, expected: 0 },
-  { startPeak: 5, endPeak: null, expected: 5 },
-  { startPeak: null, endPeak: null, expected: null },
-  { startPeak: 3, endPeak: 7, expected: 7 },
-];
-
-for (const { startPeak, endPeak, expected } of peakScenarios) {
-  test(`peakViewCount merge: start=${startPeak}, end=${endPeak} -> ${expected}`, () => {
-    const { loadDailyLog, recordLiveStartedToday, recordLiveEndedToday } = freshDailyLog();
-
-    recordLiveStartedToday("Nala", "jkt48_nala", new Date(), startPeak);
-    recordLiveEndedToday("Nala", "jkt48_nala", 60_000, new Date(), endPeak);
-    const [session] = loadDailyLog().sessions;
-    assert.equal(session.peakViewCount, expected);
-  });
+function writeRawFile(raw) {
+  fs.mkdirSync(tempCacheDir, { recursive: true });
+  fs.writeFileSync(DAILY_LOG_FILE, JSON.stringify(raw));
 }
 
-test("recordLiveEndedToday TANPA sesi 'mulai' yang cocok -> bikin entry baru dengan startedAtUnix dimundurin dari durasi", () => {
-  const { loadDailyLog, recordLiveEndedToday } = freshDailyLog();
+// PENTING: dates di test file ini dibikin RELATIF ke Date.now() (bukan
+// tanggal fixed kayak "2026-01-15"), soalnya recordLiveEnded motong sesi
+// yang lebih tua dari SESSION_RETENTION_DAYS (35 hari) - tanggal fixed yang
+// kebetulan lebih dari 35 hari dari kapan test ini BENERAN dijalanin bakal
+// ke-prune diem-diem sebelum sempet ke-assert (persis bug yang kejadian pas
+// nulis test ini pertama kali).
+test("recordLiveEnded nyimpen startedAtUnix/endedAtUnix/durationMs dari Date yang dikasih (bukan ditebak/dimundurin)", () => {
+  const { loadDailyLog, recordLiveEnded } = freshDailyLog();
 
-  const endedAt = new Date("2026-01-15T10:00:00+07:00");
-  const durationMs = 45 * 60_000; // 45 menit
-
-  recordLiveEndedToday("Levi", "jkt48_levi", durationMs, endedAt, 999);
+  const endedAt = new Date();
+  const startedAt = new Date(endedAt.getTime() - 90 * 60_000); // 90 menit sebelumnya
+  recordLiveEnded("Nala", "jkt48_nala", startedAt, endedAt, 123);
 
   const [session] = loadDailyLog().sessions;
+  assert.equal(session.startedAtUnix, Math.floor(startedAt.getTime() / 1000));
   assert.equal(session.endedAtUnix, Math.floor(endedAt.getTime() / 1000));
-  assert.equal(session.startedAtUnix, Math.floor(endedAt.getTime() / 1000) - Math.round(durationMs / 1000));
-  assert.equal(session.peakViewCount, 999);
+  assert.equal(session.durationMs, endedAt.getTime() - startedAt.getTime());
+  assert.equal(session.peakViewCount, 123);
 });
 
-test("loadDailyLog() reset sessions kalau tanggal WIB di file beda dari hari ini (rollover)", () => {
-  freshDailyLog(); // mastiin file lama kehapus & module fresh, sebelum kita tulis manual
-  fs.mkdirSync(tempCacheDir, { recursive: true });
-  fs.writeFileSync(
-    DAILY_LOG_FILE,
-    JSON.stringify({
-      date: "2000-01-01", // pasti beda dari "hari ini"
-      sessions: [{ name: "Old", username: "jkt48_old", startedAtUnix: 0, endedAtUnix: 100, durationMs: 100000, peakViewCount: 1 }],
-      recapSentDate: "2000-01-01",
-    }),
-  );
+test("recordLiveEnded dipanggil 2x -> APPEND, bukan nimpa/nyari sesi lama (gak ada lagi konsep 'openSession')", () => {
+  const { loadDailyLog, recordLiveEnded } = freshDailyLog();
 
-  delete require.cache[MODULE_PATH]; // pastiin module fresh baca file yang barusan ditulis manual
-  const { loadDailyLog } = require("../src/storage/dailyLog");
-  const log = loadDailyLog();
-  assert.equal(log.date, getTodayWIB());
-  assert.deepEqual(log.sessions, []);
+  const now = Date.now();
+  recordLiveEnded("Nala", "jkt48_nala", new Date(now - 3 * 60_000), new Date(now - 2 * 60_000), 10);
+  recordLiveEnded("Nala", "jkt48_nala", new Date(now - 2 * 60_000), new Date(now - 1 * 60_000), 20);
+
+  assert.equal(loadDailyLog().sessions.length, 2);
 });
 
-// Bug yang dilaporin user: member yang "online lagi Live" (mulai sebelum
-// tengah malam, MASIH live sampai sekarang) ilang dari "cok rekap" begitu
-// tanggal WIB-nya udah ganti hari, walau dia beneran masih live. Rollover
-// harus mbedain: sesi yang UDAH selesai (buang, bukan tanggung jawab hari
-// ini lagi) vs sesi yang MASIH LIVE (carry over, tetep tanggung jawab hari
-// ini sampai dia beneran selesai).
-test("loadDailyLog() carry-over sesi yang MASIH LIVE pas rollover, tapi buang yang udah selesai", () => {
+test("getCompletedSessionsToday - nyaring berdasarkan tanggal WIB pas SELESAI-nya (endedAtUnix), termasuk sesi yang MULAI kemarin", () => {
+  const { recordLiveEnded, getCompletedSessionsToday } = freshDailyLog();
+
+  // Dibikin RELATIF ke tanggal sekarang (bukan tanggal fixed) biar test-nya
+  // gak flaky/salah tanggal tergantung kapan test ini dijalanin.
+  const today = getTodayWIB();
+  const yesterdayDate = new Date(`${today}T00:00:00+07:00`);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = yesterdayDate.toISOString().slice(0, 10);
+
+  // Sesi yang mulai kemarin 22:50, kelar hari ini 00:39 - kasus persis yang
+  // dilaporin user (live nyebrang tengah malam WIB). Harus MASUK hitungan
+  // "hari ini" soalnya SELESAI-nya hari ini.
+  recordLiveEnded("Nala", "jkt48_nala", new Date(`${yesterday}T22:50:00+07:00`), new Date(`${today}T00:39:00+07:00`), 40);
+  // Sesi yang beneran kemarin doang (mulai & selesai kemarin) - HARUS gak
+  // ikut kehitung "hari ini".
+  recordLiveEnded("Levi", "jkt48_levi", new Date(`${yesterday}T10:00:00+07:00`), new Date(`${yesterday}T11:00:00+07:00`), 5);
+
+  const completed = getCompletedSessionsToday();
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].username, "jkt48_nala");
+});
+
+test("getCompletedSessionsToday - sesi yang beneran selesai HARI INI (relatif ke jam sistem) ikut kehitung", () => {
+  const { recordLiveEnded, getCompletedSessionsToday } = freshDailyLog();
+
+  const now = new Date();
+  const startedAt = new Date(now.getTime() - 60_000);
+  recordLiveEnded("Nala", "jkt48_nala", startedAt, now, 40);
+
+  const completed = getCompletedSessionsToday();
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].username, "jkt48_nala");
+});
+
+test("loadDailyLog() migrasi otomatis - buang sesi lama yang masih ke-tag endedAtUnix:null (bentuk file SEBELUM refactor ini)", () => {
   freshDailyLog();
-  fs.mkdirSync(tempCacheDir, { recursive: true });
-  fs.writeFileSync(
-    DAILY_LOG_FILE,
-    JSON.stringify({
-      date: "2000-01-01",
-      sessions: [
-        { name: "StillLive", username: "jkt48_stilllive", startedAtUnix: 0, endedAtUnix: null, durationMs: null, peakViewCount: 50 },
-        { name: "AlreadyDone", username: "jkt48_done", startedAtUnix: 0, endedAtUnix: 100, durationMs: 100000, peakViewCount: 1 },
-      ],
-      recapSentDate: "2000-01-01",
-    }),
-  );
+  writeRawFile({
+    date: "2000-01-01", // field lama, harus diabaikan/gak bikin error
+    sessions: [
+      { name: "StillLive", username: "jkt48_stilllive", startedAtUnix: 0, endedAtUnix: null, durationMs: null, peakViewCount: 50 },
+      { name: "AlreadyDone", username: "jkt48_done", startedAtUnix: 0, endedAtUnix: 100, durationMs: 100000, peakViewCount: 1 },
+    ],
+    recapSentDate: "2000-01-01",
+  });
 
   delete require.cache[MODULE_PATH];
   const { loadDailyLog } = require("../src/storage/dailyLog");
   const log = loadDailyLog();
 
-  assert.equal(log.date, getTodayWIB());
   assert.equal(log.sessions.length, 1);
-  assert.equal(log.sessions[0].username, "jkt48_stilllive");
-  assert.equal(log.sessions[0].endedAtUnix, null);
+  assert.equal(log.sessions[0].username, "jkt48_done");
+  assert.equal(log.recapSentDate, "2000-01-01"); // recapSentDate TETEP kebawa, bukan field yang dibuang
 });
 
-test("recordLiveEndedToday nemuin sesi yang di-carry-over dari rollover (bukan bikin duplikat/fallback)", () => {
-  freshDailyLog();
-  fs.mkdirSync(tempCacheDir, { recursive: true });
-  const yesterdayStartUnix = Math.floor(new Date("2026-01-15T22:50:00+07:00").getTime() / 1000);
-  fs.writeFileSync(
-    DAILY_LOG_FILE,
-    JSON.stringify({
-      date: "2000-01-01",
-      sessions: [
-        { name: "Nala", username: "jkt48_nala", startedAtUnix: yesterdayStartUnix, endedAtUnix: null, durationMs: null, peakViewCount: 40 },
-      ],
-      recapSentDate: null,
-    }),
-  );
+test("recordLiveEnded motong sesi yang lebih tua dari retensi (SESSION_RETENTION_DAYS)", () => {
+  const { loadDailyLog, recordLiveEnded } = freshDailyLog();
 
-  delete require.cache[MODULE_PATH];
-  const { loadDailyLog, recordLiveEndedToday } = require("../src/storage/dailyLog");
+  const veryOld = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000); // 40 hari lalu, ngelewatin retensi 35 hari
+  recordLiveEnded("Old", "jkt48_old", new Date(veryOld.getTime() - 60_000), veryOld, 1);
 
-  const endedAt = new Date("2026-01-16T00:39:00+07:00");
-  recordLiveEndedToday("Nala", "jkt48_nala", endedAt.getTime() / 1000 - yesterdayStartUnix, endedAt, 60);
+  const recent = new Date();
+  recordLiveEnded("Recent", "jkt48_recent", new Date(recent.getTime() - 60_000), recent, 2);
 
-  const log = loadDailyLog();
-  assert.equal(log.sessions.length, 1, "harus tetep 1 sesi, bukan bikin duplikat lewat fallback");
-  assert.equal(log.sessions[0].startedAtUnix, yesterdayStartUnix, "jam mulai asli (22:50 kemarin) harus KEPAKE, bukan direkonstruksi ulang");
-  assert.notEqual(log.sessions[0].endedAtUnix, null);
-  assert.equal(log.sessions[0].peakViewCount, 60); // Math.max(40, 60)
-});
-
-// Jaring pengaman dipake monitor.js: member yang lagi live tapi kebetulan
-// gak punya sesi "terbuka" di rekap hari ini (mis. kena bug rollover versi
-// lama, atau sebab lain) harus KETAUAN, biar bisa dicatet ulang lewat
-// recordLiveStartedToday sebelum dia sempet selesai live.
-test("hasOpenSessionToday - true kalau ada sesi belum selesai buat username itu, false kalau enggak", () => {
-  const { recordLiveStartedToday, recordLiveEndedToday, hasOpenSessionToday } = freshDailyLog();
-
-  assert.equal(hasOpenSessionToday("jkt48_nala"), false); // belum ada apa-apa
-
-  recordLiveStartedToday("Nala", "jkt48_nala", new Date(), 10);
-  assert.equal(hasOpenSessionToday("jkt48_nala"), true);
-  assert.equal(hasOpenSessionToday("jkt48_levi"), false); // member lain gak ikut ketrigger
-
-  recordLiveEndedToday("Nala", "jkt48_nala", 60_000, new Date(), 20);
-  assert.equal(hasOpenSessionToday("jkt48_nala"), false); // udah selesai, gak "terbuka" lagi
+  const sessions = loadDailyLog().sessions;
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].username, "jkt48_recent");
 });

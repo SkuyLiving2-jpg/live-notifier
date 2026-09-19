@@ -1,7 +1,7 @@
 const { postToWebhook } = require("./webhook");
-const { formatDuration, getHourWIBOf } = require("../utils");
+const { formatDuration, getHourWIBOf, getTodayWIB } = require("../utils");
 const { getPreviousMaxDuration } = require("../storage/durationHistory");
-const { loadDailyLog, saveDailyLog } = require("../storage/dailyLog");
+const { loadDailyLog, saveDailyLog, getCompletedSessionsToday } = require("../storage/dailyLog");
 const { saveActiveLives } = require("../storage/activeLives");
 const { DAILY_RECAP_HOUR } = require("../config");
 
@@ -54,10 +54,11 @@ async function maybeAnnounceNewRecord(username, memberName, durationMs, duration
 async function maybeSendDailyRecap() {
   if (getHourWIBOf() < DAILY_RECAP_HOUR) return;
 
+  const today = getTodayWIB();
   const log = loadDailyLog();
-  if (log.recapSentDate === log.date) return; // udah kekirim hari ini
+  if (log.recapSentDate === today) return; // udah kekirim hari ini
 
-  const completed = log.sessions.filter((s) => s.endedAtUnix !== null);
+  const completed = getCompletedSessionsToday();
   if (completed.length > 0) {
     const totalLives = completed.length;
     const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
@@ -66,7 +67,7 @@ async function maybeSendDailyRecap() {
 
     const payload = {
       content: [
-        `📋 **Rekap live hari ini (${log.date})**`,
+        `📋 **Rekap live hari ini (${today})**`,
         `Total live: ${totalLives}x dari ${uniqueMembers} member`,
         `Total durasi gabungan: ${formatDuration(totalDurationMs)}`,
         `Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
@@ -78,7 +79,7 @@ async function maybeSendDailyRecap() {
     }
   }
 
-  log.recapSentDate = log.date;
+  log.recapSentDate = today;
   saveDailyLog(log);
 }
 

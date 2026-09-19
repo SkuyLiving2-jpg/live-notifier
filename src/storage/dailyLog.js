@@ -1,14 +1,31 @@
 const path = require("path");
 const { CACHE_DIR } = require("../config");
 const { createJsonStore } = require("./jsonStore");
-const { getTodayWIB } = require("../utils");
+const { getTodayWIB, getDateWIB } = require("../utils");
 
-// --- Rekap harian: sekali sehari, ringkasan siapa aja yang live hari itu ---
+// --- Arsip sesi live yang UDAH SELESAI (append-only, dipangkas per SESSION_RETENTION_DAYS) ---
+//
+// BUG SEBELUMNYA (2x kejadian beneran sebelum ini ditulis ulang): dulu file
+// ini juga nyimpen sesi yang MASIH LIVE (endedAtUnix: null), jadi ada 2
+// representasi "siapa yang lagi live" yang harus disinkronin manual -
+// activeLives.has(username) (lihat storage/activeLives.js) VS sesi di sini
+// yang endedAtUnix-nya null. Dua-duanya bisa nyimpang (rollover tengah
+// malam ngewipe salah satu doang, dll) - udah pernah kejadian 2x.
+//
+// Sekarang activeLives SATU-SATUNYA sumber kebenaran buat "siapa yang lagi
+// live" - file ini CUMA nyimpen sesi yang UDAH SELESAI, gak pernah lagi
+// nyimpen apapun yang "terbuka". Pemanggil yang butuh gambaran LENGKAP hari
+// ini (lagi live + udah selesai) gabungin sendiri di layer-nya (lihat
+// chat/replies.js) dari getCompletedSessionsToday() di sini + activeLives.
 const DAILY_LOG_FILE = path.join(CACHE_DIR, "daily-log.json");
-// date: null sentinel biar SELALU dianggep "hari lain" (raw.date !== today)
-// pas file belum pernah ada - loadDailyLog() di bawah bakal masuk ke cabang
-// reset dan hasilnya persis sama kayak versi lama yang catch-error.
-const store = createJsonStore(DAILY_LOG_FILE, { date: null, sessions: [], recapSentDate: null }, { errorLabel: "log harian" });
+const store = createJsonStore(DAILY_LOG_FILE, { sessions: [], recapSentDate: null }, { errorLabel: "log harian" });
+
+// Berapa lama sesi yang udah selesai disimpen sebelum otomatis dibuang -
+// generous banget buat kebutuhan "hari ini"/beberapa minggu terakhir, tapi
+// tetep dibatesin biar file-nya nggak numpuk gede tanpa akhir selama
+// bot jalan bertahun-tahun (dulu ini otomatis "reset" tiap hari, sekarang
+// nggak lagi - jadi pruning ini gantiin peran itu).
+const SESSION_RETENTION_DAYS = 35;
 
 // Awal & akhir "hari ini" (WIB, UTC+7 tetap sepanjang tahun - gak ada DST)
 // dalam Unix SECONDS, buat nyaring entri arsip eksternal yang live_at_unix-nya
@@ -64,101 +81,56 @@ async function fetchExternalTodayLiveHistory() {
 }
 
 function loadDailyLog() {
-  const today = getTodayWIB();
   const raw = store.load();
-  if (raw.date !== today) {
-    // BUG SEBELUMNYA: pas tanggal WIB berganti hari, SEMUA sesi kemarin
-    // dibuang - termasuk sesi yang MASIH LIVE (belum ada endedAtUnix). Jadi
-    // kalau ada member yang mulai live sebelum tengah malam dan masih live
-    // sampai lewat tengah malam, dia "ilang" dari rekap hari ini walau
-    // beneran masih live SEKARANG - baru numpang lagi nanti pas dia SELESAI
-    // (lewat jalur fallback di recordLiveEndedToday, bukan sebagai baris
-    // "Live" yang harusnya kelihatan dari tadi).
-    //
-    // Sekarang sesi yang masih live (endedAtUnix === null) di-CARRY OVER ke
-    // hari yang baru, biar tetep numpang di rekap "hari ini" sampai dia
-    // beneran selesai - openSession lookup di recordLiveEndedToday bakal
-    // ketemu sesi ini juga (referensi objeknya sama), jadi peak-viewer merge
-    // & durasi akuratnya tetap jalan normal, bukan direkonstruksi ulang dari
-    // fallback. Sesi yang UDAH selesai dari hari kemarin sengaja TETEP
-    // dibuang (bukan tanggung jawab rekap hari ini lagi).
-    const carriedOverSessions = (raw.sessions || []).filter((s) => s.endedAtUnix === null);
-    return { date: today, sessions: carriedOverSessions, recapSentDate: raw.recapSentDate || null };
-  }
-  raw.sessions = raw.sessions || [];
-  return raw;
+  // Migrasi otomatis dari bentuk file yang LAMA (sebelum ditulis ulang jadi
+  // append-only-completed-doang): dulu bisa ada sesi yang MASIH LIVE
+  // (endedAtUnix: null) nyangkut di sini. Itu sekarang basi/redundan -
+  // activeLives satu-satunya sumber kebenaran buat itu - jadi dibuang aja
+  // di sini, gak pernah ditulis lagi ke file ini sejak sekarang.
+  const sessions = (raw.sessions || []).filter((s) => s.endedAtUnix !== null);
+  return { sessions, recapSentDate: raw.recapSentDate || null };
 }
 
 function saveDailyLog(log) {
   store.save(log);
 }
 
-// Dulu rekap CUMA nyatet pas live SELESAI - jadi kalau kamu nanya "cok rekap
-// hari ini" pas ada member yang MASIH live (belum kelar), dia bakal keliatan
-// "zonk" walau bot JELAS-JELAS abis ngirim notif "mulai live" buat orang itu.
-// Sekarang tiap notif "mulai live" yang berhasil kekirim LANGSUNG dicatet
-// sebagai sesi (status masih live), terus pas dia selesai sesi yang SAMA
-// di-update (bukan bikin entry baru) biar rekap bisa nunjukkin siapa aja
-// yang live hari ini - baik yang udah selesai maupun yang masih berlangsung.
-function recordLiveStartedToday(name, username, startedAtDate, peakViewCount = null) {
+// Sesi yang UDAH SELESAI dan tanggal WIB pas dia SELESAI itu "hari ini" -
+// dipake buat semua query "hari ini" (rekap, paling lama, paling rame).
+// Sesi yang MASIH LIVE SEKARANG itu tanggung jawab activeLives (lihat
+// storage/activeLives.js), BUKAN di sini - pemanggil yang butuh gabungan
+// keduanya gabungin sendiri di layernya (lihat chat/replies.js).
+function getCompletedSessionsToday() {
+  const today = getTodayWIB();
+  return loadDailyLog().sessions.filter((s) => getDateWIB(new Date(s.endedAtUnix * 1000)) === today);
+}
+
+// Dipanggil monitor.js pas sebuah live SELESAI. startedAtDate/endedAtDate
+// dari activeLives's liveAt (udah akurat, independen total dari file ini -
+// gak pernah kena bug rollover/reset apapun yang sempet kejadian di sini).
+// peakViewCount juga langsung dari activeLives's running peak - satu-satunya
+// sumber, gak ada lagi "gabungin 2 angka peak" kayak versi lama (itu source
+// of truth ganda-nya udah ilang sekalian bareng openSession).
+function recordLiveEnded(name, username, startedAtDate, endedAtDate, peakViewCount = null) {
   const log = loadDailyLog();
+  const startedAtUnix = Math.floor(startedAtDate.getTime() / 1000);
+  const endedAtUnix = Math.floor(endedAtDate.getTime() / 1000);
   log.sessions.push({
     name,
     username,
-    startedAtUnix: Math.floor(startedAtDate.getTime() / 1000),
-    endedAtUnix: null,
-    durationMs: null,
+    startedAtUnix,
+    endedAtUnix,
+    durationMs: endedAtDate.getTime() - startedAtDate.getTime(),
     peakViewCount,
   });
-  saveDailyLog(log);
-}
 
-function recordLiveEndedToday(name, username, durationMs, endedAtDate, peakViewCount = null) {
-  const log = loadDailyLog();
-  const endedAtUnix = Math.floor(endedAtDate.getTime() / 1000);
-  // Cari sesi "masih live" TERAKHIR buat username ini - biasanya emang itu
-  // yang barusan mulai. [...].reverse() bukan .findLast() biar tetep jalan
-  // di runtime Node yang lebih lama.
-  const openSession = [...log.sessions].reverse().find((s) => s.username === username && s.endedAtUnix === null);
-  if (openSession) {
-    openSession.endedAtUnix = endedAtUnix;
-    openSession.durationMs = durationMs;
-    // Ambil peak TERBESAR antara yang kecatet pas mulai vs yang kekumpul
-    // sepanjang live-nya jalan, biar gak ketimpa turun kalau penontonnya
-    // sempet surut pas mau selesai. Ditulis pake filter+Math.max (BUKAN
-    // "Math.max(a ?? 0, b ?? 0) || null") soalnya versi lama itu nganggep
-    // peak 0 (kasus langka tapi valid, mis. live keburu selesai sebelum
-    // sempet ke-poll sekali pun) sebagai "nggak ada data" - 0 itu falsy di
-    // JS, jadi ketimpa null padahal datanya sebenernya ada.
-    const knownPeaks = [openSession.peakViewCount, peakViewCount].filter((v) => v != null);
-    openSession.peakViewCount = knownPeaks.length > 0 ? Math.max(...knownPeaks) : null;
-  } else {
-    // Sesi "mulai"-nya kelewat kecatet (mis. live-nya kepotong pergantian
-    // hari WIB, atau bot baru restart tengah live) - tetep catet daripada
-    // rekap kehilangan data, walau jam mulainya cuma perkiraan mundur dari
-    // durasi yang kita tau.
-    log.sessions.push({
-      name,
-      username,
-      startedAtUnix: endedAtUnix - Math.round(durationMs / 1000),
-      endedAtUnix,
-      durationMs,
-      peakViewCount,
-    });
-  }
-  saveDailyLog(log);
-}
+  // Pangkas sesi yang lebih tua dari retensi, biar file gak numpuk gede
+  // tanpa batas (dulu ini "otomatis" kejadian tiap hari lewat reset -
+  // sekarang perannya digantiin pruning ini).
+  const cutoffUnix = Math.floor(Date.now() / 1000) - SESSION_RETENTION_DAYS * 24 * 60 * 60;
+  log.sessions = log.sessions.filter((s) => s.endedAtUnix >= cutoffUnix);
 
-// Dipake monitor.js sebagai jaring pengaman: kalau member yang lagi live
-// (udah ada di activeLives) KETAUAN gak punya sesi "terbuka" di rekap hari
-// ini - entah gara-gara bug yang belum kepikiran, migrasi data manual, atau
-// (kasus nyata yang kejadian) rollover tengah malam yang kepotong PAS di
-// tengah-tengah deploy fix carry-over-nya - bisa langsung dicatet ulang
-// SEKARANG JUGA (lihat monitor.js), bukan nunggu dia selesai baru numpang
-// lewat fallback reconstruction di recordLiveEndedToday.
-function hasOpenSessionToday(username) {
-  const log = loadDailyLog();
-  return log.sessions.some((s) => s.username === username && s.endedAtUnix === null);
+  saveDailyLog(log);
 }
 
 module.exports = {
@@ -166,7 +138,6 @@ module.exports = {
   saveDailyLog,
   getTodayWIBRangeUnix,
   fetchExternalTodayLiveHistory,
-  recordLiveStartedToday,
-  recordLiveEndedToday,
-  hasOpenSessionToday,
+  getCompletedSessionsToday,
+  recordLiveEnded,
 };

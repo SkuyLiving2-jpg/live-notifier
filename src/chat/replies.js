@@ -1,5 +1,5 @@
 const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
-const { loadDailyLog, fetchExternalTodayLiveHistory } = require("../storage/dailyLog");
+const { getCompletedSessionsToday, fetchExternalTodayLiveHistory } = require("../storage/dailyLog");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
@@ -42,7 +42,6 @@ function replyListLive() {
 // LAGI JALAN (activeLives) SAMA sesi yang UDAH SELESAI hari ini (daily log)
 // biar rekap-nya beneran akurat sepanjang hari, bukan cuma potret sesaat.
 function replyLongestLive() {
-  const log = loadDailyLog();
   const candidates = [];
 
   for (const entry of activeLives.values()) {
@@ -52,10 +51,8 @@ function replyLongestLive() {
       isLive: true,
     });
   }
-  for (const session of log.sessions) {
-    if (session.endedAtUnix !== null) {
-      candidates.push({ name: session.name, durationMs: session.durationMs, isLive: false });
-    }
+  for (const session of getCompletedSessionsToday()) {
+    candidates.push({ name: session.name, durationMs: session.durationMs, isLive: false });
   }
 
   if (candidates.length === 0) return "Cok, belum ada data live hari ini.";
@@ -73,10 +70,9 @@ function replyLongestLive() {
 // tertinggi per member (kalau dia live 2x hari ini, yang diitung yang
 // paling rame di antara keduanya).
 function replyTopViewers() {
-  const log = loadDailyLog();
   const peakByUsername = new Map();
 
-  for (const session of log.sessions) {
+  for (const session of getCompletedSessionsToday()) {
     if (session.peakViewCount == null) continue;
     const prev = peakByUsername.get(session.username);
     if (!prev || session.peakViewCount > prev.peak) {
@@ -208,6 +204,25 @@ function buildRecapTablePage(sessions, page) {
   return { text, page: clampedPage, totalPages, hasMore: clampedPage < totalPages - 1 };
 }
 
+// Gabungan "gambaran lengkap hari ini" - sesi yang UDAH SELESAI hari ini
+// (dari daily-log.json) + yang MASIH LIVE SEKARANG (dari activeLives,
+// dibentuk jadi baris ala-sesi biar bisa numpang bareng di tabel/hitungan
+// yang sama). Sama pola-nya kayak replyLongestLive()/replyTopViewers()
+// (yang udah lebih dulu gabungin dua sumber ini) - diexport biar bisa dites
+// langsung, sama kayak buildRecapTablePage.
+function getTodaySessionsForRecap() {
+  const completed = getCompletedSessionsToday();
+  const ongoing = [...activeLives.values()].map((entry) => ({
+    name: entry.name,
+    username: entry.username,
+    startedAtUnix: Math.floor(new Date(entry.liveAt).getTime() / 1000),
+    endedAtUnix: null,
+    durationMs: null,
+    peakViewCount: entry.peakViewCount ?? entry.viewCount ?? null,
+  }));
+  return [...completed, ...ongoing];
+}
+
 // "channelId:authorId" -> { nextPage, at } - nunggu jawaban y/n abis nunjukkin
 // 1 halaman tabel rekap yang masih ada lanjutannya. Sama pola-nya kayak
 // pendingWatchConfirm (di chat/menu.js, di-key per orang bukan per channel,
@@ -251,8 +266,7 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
   pendingRecapPage.delete(key);
   if (isNo) return "Oke, segitu aja ya.";
 
-  const log = loadDailyLog();
-  return buildRecapPageBlock(log.sessions, pending.nextPage, channelId, authorId);
+  return buildRecapPageBlock(getTodaySessionsForRecap(), pending.nextPage, channelId, authorId);
 }
 
 // Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00
@@ -262,8 +276,7 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
 // arsipnya gak keambil (network error/dll), fungsi ini tetep balikin rekap
 // versi lokal doang - gak pernah gagal total gara-gara sumber tambahan ini.
 async function replyTodayRecapSoFar(channelId, authorId) {
-  const log = loadDailyLog();
-  const sessions = log.sessions;
+  const sessions = getTodaySessionsForRecap();
   const completed = sessions.filter((s) => s.endedAtUnix !== null);
   const ongoingCount = sessions.length - completed.length;
 
@@ -285,7 +298,7 @@ async function replyTodayRecapSoFar(channelId, authorId) {
       : "";
 
   if (sessions.length === 0) {
-    return `Cok, belum ada yang live hari ini (${log.date}).${missedNote}`;
+    return `Cok, belum ada yang live hari ini (${getTodayWIB()}).${missedNote}`;
   }
 
   const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
@@ -293,7 +306,7 @@ async function replyTodayRecapSoFar(channelId, authorId) {
   const longest = completed.length > 0 ? completed.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), completed[0]) : null;
 
   const summaryLines = [
-    `📋 **Rekap live hari ini (${log.date})**`,
+    `📋 **Rekap live hari ini (${getTodayWIB()})**`,
     `Total sesi: ${sessions.length}x dari ${uniqueMembers} member (${completed.length} udah selesai, ${ongoingCount} masih live)`,
   ];
   if (longest) {
@@ -481,6 +494,7 @@ module.exports = {
   replyGifterSnapshot,
   replyGifterSnapshotByUsername,
   replyTodayRecapSoFar,
+  getTodaySessionsForRecap,
   buildRecapTablePage,
   buildRecapPageBlock,
   tryHandleRecapPageShortcut,

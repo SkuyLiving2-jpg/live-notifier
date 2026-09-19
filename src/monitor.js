@@ -1,7 +1,7 @@
 const { fetchAllLivestreams, isJkt48Member } = require("./idnApi");
 const { activeLives, saveActiveLives } = require("./storage/activeLives");
 const { loadDurationHistory, recordLiveDuration } = require("./storage/durationHistory");
-const { recordLiveStartedToday, recordLiveEndedToday, hasOpenSessionToday } = require("./storage/dailyLog");
+const { recordLiveEnded } = require("./storage/dailyLog");
 const { getPriorityConfig } = require("./priority");
 const { sendDiscordNotif } = require("./notify/liveNotify");
 const { maybePartyModeAlert, maybeAlertEndingSoon } = require("./notify/priorityDm");
@@ -39,12 +39,6 @@ async function checkLiveMembers() {
             alertedMilestones: [],
           });
           saveActiveLives();
-          recordLiveStartedToday(
-            live.creator.name,
-            live.creator.username,
-            live.live_at ? new Date(live.live_at) : new Date(),
-            live.view_count ?? null,
-          );
           if (getPriorityConfig(live.creator.name, live.creator.username)) {
             await maybePartyModeAlert();
           }
@@ -60,16 +54,6 @@ async function checkLiveMembers() {
         if (typeof live.view_count === "number") {
           entry.peakViewCount = Math.max(entry.peakViewCount ?? 0, live.view_count);
         }
-        // Jaring pengaman: kalau member ini ketauan lagi live tapi gak
-        // punya sesi "terbuka" di rekap hari ini (mis. sesinya kepotong
-        // rollover tengah malam PAS di tengah-tengah deploy fix carry-over,
-        // atau sebab lain yang belum kepikiran) - catet ulang SEKARANG
-        // pakai liveAt ASLINYA (dari activeLives, gak kena bug rollover
-        // dailyLog sama sekali), bukan nunggu dia selesai baru numpang
-        // lewat fallback reconstruction di recordLiveEndedToday.
-        if (!hasOpenSessionToday(username)) {
-          recordLiveStartedToday(entry.name, entry.username, entry.liveAt ? new Date(entry.liveAt) : new Date(), entry.peakViewCount ?? entry.viewCount ?? null);
-        }
         await maybeAlertEndingSoon(entry, durationHistory);
         await maybeAlertViewerMilestone(entry);
       }
@@ -84,10 +68,10 @@ async function checkLiveMembers() {
             const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
             await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
             recordLiveDuration(username, memberData.name, durationMs);
-            recordLiveEndedToday(
+            recordLiveEnded(
               memberData.name,
               memberData.username,
-              durationMs,
+              new Date(memberData.liveAt),
               new Date(),
               memberData.peakViewCount ?? memberData.viewCount ?? null,
             );
