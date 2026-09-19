@@ -1,11 +1,28 @@
 require("./helpers/setupTestEnv");
+// Override abis setupTestEnv (yang sengaja ngosongin ini) - dites di sini
+// biar isOwner/handleAddPriority/handleRemovePriority's gate ke owner bisa
+// diverifikasi beneran. Harus di-set SEBELUM require apapun yang nembus ke
+// config.js (termasuk require("../src/chat/replies") di bawah).
+process.env.PRIORITY_PING_USER_ID = "owner-id-replies-test";
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { getTodayWIB } = require("../src/utils");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
-const { buildRecapTablePage, getTodaySessionsForRecap } = require("../src/chat/replies");
+const { saveDurationHistory } = require("../src/storage/durationHistory");
+const {
+  buildRecapTablePage,
+  getTodaySessionsForRecap,
+  replyMemberStats,
+  replySchedulePattern,
+  replyPriorityList,
+  handleSubscribe,
+  handleUnsubscribe,
+  isOwner,
+  handleAddPriority,
+  handleRemovePriority,
+} = require("../src/chat/replies");
 
 function unixAt(dateWIB, timeHHMM) {
   return Math.floor(new Date(`${dateWIB}T${timeHHMM}:00+07:00`).getTime() / 1000);
@@ -105,4 +122,63 @@ test("getTodaySessionsForRecap - gabungin sesi yang udah selesai hari ini SAMA y
   } finally {
     activeLives.clear();
   }
+});
+
+test("replyMemberStats - rata-rata & rekor durasi dari riwayat", () => {
+  saveDurationHistory({
+    jkt48_statstest2: [
+      { name: "Statstest2", durationMs: 60 * 60_000, at: "2026-06-01T21:00:00+07:00" },
+      { name: "Statstest2", durationMs: 120 * 60_000, at: "2026-06-02T21:00:00+07:00" },
+    ],
+  });
+  const reply = replyMemberStats("statstest2");
+  assert.match(reply, /Statistik \*\*Statstest2\*\*/);
+  assert.match(reply, /Rata-rata durasi: 1j 30m/); // rata-rata 60 & 120 menit
+  assert.match(reply, /Rekor terlama: 2j 0m/);
+});
+
+test("replyMemberStats - belum ada riwayat sama sekali", () => {
+  assert.match(replyMemberStats("member-tanpa-riwayat-sama-sekali"), /belum ada data riwayat live/);
+});
+
+test("replySchedulePattern - kurang dari 3 riwayat -> 'masih kurang', minimal 3 -> nebak pola jam", () => {
+  saveDurationHistory({ jkt48_scheduletest: [{ name: "Scheduletest", durationMs: 3600_000, at: "2026-06-01T21:00:00+07:00" }] });
+  assert.match(replySchedulePattern("scheduletest"), /masih kurang/);
+
+  // 3 riwayat, semua mulai sekitar jam 20:00 WIB (durasi 1 jam, selesai jam 21:00) -> bucket "malam"
+  saveDurationHistory({
+    jkt48_scheduletest: [
+      { name: "Scheduletest", durationMs: 3600_000, at: "2026-06-01T21:00:00+07:00" },
+      { name: "Scheduletest", durationMs: 3600_000, at: "2026-06-08T21:00:00+07:00" },
+      { name: "Scheduletest", durationMs: 3600_000, at: "2026-06-03T21:00:00+07:00" },
+    ],
+  });
+  const reply = replySchedulePattern("scheduletest");
+  assert.match(reply, /Paling sering \*\*malam\*\*/);
+  assert.match(reply, /BUKAN jadwal resmi/);
+});
+
+test("replyPriorityList - urut rank, format '<rank>. **LABEL** (keyword: \"...\")'", () => {
+  const reply = replyPriorityList();
+  assert.match(reply, /1\. \*\*NALA\*\* \(keyword: "nala"\)/);
+  assert.match(reply, /2\. \*\*LEVI\*\* \(keyword: "levi"\)/);
+  assert.match(reply, /3\. \*\*LILY\*\* \(keyword: "lily"\)/);
+});
+
+test("handleSubscribe / handleUnsubscribe - validasi & pesan", () => {
+  assert.match(handleSubscribe("ab", "u-subtest"), /kependekan/); // <3 huruf
+  assert.match(handleSubscribe("subtest1", "u-subtest"), /Sip, kamu bakal di-tag/);
+  assert.match(handleSubscribe("subtest1", "u-subtest"), /udah subscribe/); // subscribe 2x -> "already"
+
+  assert.match(handleUnsubscribe("subtest1", "u-subtest"), /notif buat "subtest1" dimatiin/);
+  assert.match(handleUnsubscribe("subtest1", "u-subtest"), /belum subscribe/); // unsubscribe 2x -> gak ketemu
+});
+
+test("isOwner / handleAddPriority / handleRemovePriority - gated ke PRIORITY_PING_USER_ID", () => {
+  assert.equal(isOwner("owner-id-replies-test"), true);
+  assert.equal(isOwner("bukan-owner"), false);
+
+  assert.match(handleAddPriority("repliestestmember", "bukan-owner"), /cuma owner yang boleh/);
+  assert.match(handleAddPriority("repliestestmember", "owner-id-replies-test"), /ditambahin ke daftar prioritas/);
+  assert.match(handleRemovePriority("repliestestmember", "owner-id-replies-test"), /dihapus dari daftar prioritas/);
 });
