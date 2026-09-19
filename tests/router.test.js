@@ -93,6 +93,23 @@ test("paling lama live hari ini - dispatch ke replyLongestLive", async () => {
   assert.match(reply, /Paling lama live hari ini|belum ada data live hari ini/);
 });
 
+// Beda dari "cok rekap" polos (replyTodayRecapSoFar) - replyRecapRange gak
+// nyentuh network (gak ada lookup arsip eksternal), jadi aman dites
+// langsung, dan penting buat mastiin urutan regex-nya bener: "rekap minggu
+// ini"/"rekap bulan ini" harus ketangkep SEBELUM "rekap" polos, bukan
+// malah kepick up sebagai rekap hari ini.
+test("rekap minggu ini - dispatch ke replyRecapRange(7, ...), BUKAN rekap hari ini", async () => {
+  const reply = await buildChatReply("cok rekap minggu ini");
+  assert.match(reply, /Rekap minggu ini|belum ada live yang kecatet dalam minggu ini/);
+  assert.doesNotMatch(reply, /Rekap live hari ini/);
+});
+
+test("rekap bulan ini - dispatch ke replyRecapRange(30, ...), BUKAN rekap hari ini", async () => {
+  const reply = await buildChatReply("cok rekap bulan ini");
+  assert.match(reply, /Rekap bulan ini|belum ada live yang kecatet dalam bulan ini/);
+  assert.doesNotMatch(reply, /Rekap live hari ini/);
+});
+
 test("status - dispatch ke replyBotStatus", async () => {
   const reply = await buildChatReply("cok status");
   assert.match(reply, /Bot jalan normal/);

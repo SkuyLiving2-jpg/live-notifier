@@ -18,6 +18,7 @@ const {
   replySchedulePattern,
   replyGifterSnapshot,
   replyTodayRecapSoFar,
+  replyRecapRange,
   tryHandleRecapPageShortcut,
   handleAddPriority,
   handleRemovePriority,
@@ -122,6 +123,15 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return replyPriorityList();
   }
 
+  // Dicek SEBELUM "rekap" polos di bawah - kalimatnya juga ngandung "rekap"
+  // jadi harus ketangkep duluan sama check yang lebih spesifik ini, sama
+  // pola-nya kayak "berhenti ingetin" vs "ingetin" di atas.
+  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "minggu")) {
+    return await replyRecapRange(7, "minggu ini", channelId, authorId);
+  }
+  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "bulan")) {
+    return await replyRecapRange(30, "bulan ini", channelId, authorId);
+  }
   if (containsWholeWord(text, "rekap")) {
     return await replyTodayRecapSoFar(channelId, authorId);
   }

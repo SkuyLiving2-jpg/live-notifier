@@ -105,6 +105,17 @@ function getCompletedSessionsToday() {
   return loadDailyLog().sessions.filter((s) => getDateWIB(new Date(s.endedAtUnix * 1000)) === today);
 }
 
+// Versi lebih lebar dari getCompletedSessionsToday() - sesi yang SELESAI-nya
+// jatuh dalam `daysBack` hari terakhir (dari sekarang), dipake buat rekap
+// mingguan/bulanan. Cuma jadi bisa dibikin gara-gara daily-log.json sekarang
+// arsip append-only (bukan di-reset tiap hari kayak dulu) - jadi query
+// rentang-lebih-lebar tinggal filter tanggal yang lebih longgar, bukan
+// konsep penyimpanan baru.
+function getCompletedSessionsSince(daysBack) {
+  const cutoffUnix = Math.floor(Date.now() / 1000) - daysBack * 24 * 60 * 60;
+  return loadDailyLog().sessions.filter((s) => s.endedAtUnix >= cutoffUnix);
+}
+
 // Dipanggil monitor.js pas sebuah live SELESAI. startedAtDate/endedAtDate
 // dari activeLives's liveAt (udah akurat, independen total dari file ini -
 // gak pernah kena bug rollover/reset apapun yang sempet kejadian di sini).
@@ -139,5 +150,6 @@ module.exports = {
   getTodayWIBRangeUnix,
   fetchExternalTodayLiveHistory,
   getCompletedSessionsToday,
+  getCompletedSessionsSince,
   recordLiveEnded,
 };

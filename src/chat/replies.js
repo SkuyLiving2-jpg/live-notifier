@@ -1,5 +1,5 @@
 const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
-const { getCompletedSessionsToday, fetchExternalTodayLiveHistory } = require("../storage/dailyLog");
+const { getCompletedSessionsToday, getCompletedSessionsSince, fetchExternalTodayLiveHistory } = require("../storage/dailyLog");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
@@ -127,6 +127,7 @@ function replyHelp() {
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
+    '- "cok rekap minggu ini" / "cok rekap bulan ini" - rekap 7/30 hari terakhir',
     '- "cok daftar prioritas" - lihat member prioritas',
     '- "cok ingetin <nama member>" - kamu di-tag pribadi kalau dia mulai live',
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
@@ -221,22 +222,28 @@ function getTodaySessionsForRecap() {
   return [...completed, ...ongoing];
 }
 
-// "channelId:authorId" -> { nextPage, at } - nunggu jawaban y/n abis nunjukkin
-// 1 halaman tabel rekap yang masih ada lanjutannya. Sama pola-nya kayak
-// pendingWatchConfirm (di chat/menu.js, di-key per orang bukan per channel,
-// biar jawaban orang lain di channel yang sama gak nyasar ke halaman punya
-// orang ini).
+// "channelId:authorId" -> { nextPage, at, rangeDays } - nunggu jawaban y/n
+// abis nunjukkin 1 halaman tabel rekap yang masih ada lanjutannya. Sama
+// pola-nya kayak pendingWatchConfirm (di chat/menu.js, di-key per orang
+// bukan per channel, biar jawaban orang lain di channel yang sama gak
+// nyasar ke halaman punya orang ini). `rangeDays` (null = "hari ini",
+// gabungan sama activeLives; angka = rekap mingguan/bulanan, cuma sesi yang
+// UDAH selesai) dicatet biar halaman BERIKUTNYA tau harus narik dari daftar
+// sesi yang SAMA, bukan default balik ke rekap hari ini - dulu (sebelum
+// rekap mingguan/bulanan ada) cuma ada 1 jenis rekap jadi ini gak masalah,
+// sekarang WAJIB biar lanjut halaman rekap minggu ini gak diem-diem ganti
+// jadi nunjukkin rekap hari ini.
 const pendingRecapPage = new Map();
 const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 
-function buildRecapPageBlock(sessions, page, channelId, authorId) {
+function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = null) {
   const result = buildRecapTablePage(sessions, page);
   const footer = result.hasMore
     ? `_(Halaman ${result.page + 1}/${result.totalPages} - masih ada lagi, mau liat halaman berikutnya? Balas "y")_`
     : `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir)_`;
 
   if (result.hasMore && channelId && authorId) {
-    pendingRecapPage.set(`${channelId}:${authorId}`, { nextPage: result.page + 1, at: Date.now() });
+    pendingRecapPage.set(`${channelId}:${authorId}`, { nextPage: result.page + 1, at: Date.now(), rangeDays });
   }
 
   return `${result.text}\n${footer}`;
@@ -264,7 +271,8 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
   pendingRecapPage.delete(key);
   if (isNo) return "Oke, segitu aja ya.";
 
-  return buildRecapPageBlock(getTodaySessionsForRecap(), pending.nextPage, channelId, authorId);
+  const sessions = pending.rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(pending.rangeDays);
+  return buildRecapPageBlock(sessions, pending.nextPage, channelId, authorId, pending.rangeDays);
 }
 
 // Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00
@@ -314,6 +322,32 @@ async function replyTodayRecapSoFar(channelId, authorId) {
   }
 
   return [summaryLines.join("\n"), buildRecapPageBlock(sessions, 0, channelId, authorId)].join("\n") + missedNote;
+}
+
+// Rekap mingguan/bulanan - beda dari replyTodayRecapSoFar dalam 2 hal: (1)
+// ini jendela waktu yang UDAH LEWAT/tertutup, jadi gak perlu digabung sama
+// activeLives (member yang lagi live sekarang bukan bagian dari "7 hari
+// terakhir", itu bagian dari HARI INI, yang bakal numpang di sini juga
+// begitu dia beneran selesai), dan (2) gak perlu cek arsip eksternal
+// (JKT48Live-Record) - itu arsipnya emang cuma nyimpen bulan berjalan,
+// gak didesain buat query rentang lebih lebar.
+async function replyRecapRange(daysBack, label, channelId, authorId) {
+  const sessions = getCompletedSessionsSince(daysBack);
+  if (sessions.length === 0) {
+    return `Cok, belum ada live yang kecatet dalam ${label}.`;
+  }
+
+  const totalDurationMs = sessions.reduce((sum, s) => sum + s.durationMs, 0);
+  const uniqueMembers = new Set(sessions.map((s) => s.name)).size;
+  const longest = sessions.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), sessions[0]);
+
+  const summaryLines = [
+    `📋 **Rekap ${label}**`,
+    `Total sesi: ${sessions.length}x dari ${uniqueMembers} member`,
+    `Total durasi gabungan: ${formatDuration(totalDurationMs)} | Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
+  ];
+
+  return [summaryLines.join("\n"), buildRecapPageBlock(sessions, 0, channelId, authorId, daysBack)].join("\n");
 }
 
 function replyMemberStats(fragment) {
@@ -492,6 +526,7 @@ module.exports = {
   replyGifterSnapshot,
   replyGifterSnapshotByUsername,
   replyTodayRecapSoFar,
+  replyRecapRange,
   getTodaySessionsForRecap,
   buildRecapTablePage,
   buildRecapPageBlock,

@@ -127,3 +127,20 @@ test("recordLiveEnded motong sesi yang lebih tua dari retensi (SESSION_RETENTION
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].username, "jkt48_recent");
 });
+
+test("getCompletedSessionsSince - filter berdasarkan jendela waktu (dipake buat rekap mingguan/bulanan)", () => {
+  const { getCompletedSessionsSince, recordLiveEnded } = freshDailyLog();
+
+  const now = Date.now();
+  const twoDaysAgo = new Date(now - 2 * 24 * 60 * 60 * 1000);
+  const tenDaysAgo = new Date(now - 10 * 24 * 60 * 60 * 1000);
+
+  recordLiveEnded("Nala", "jkt48_2dayago", new Date(twoDaysAgo.getTime() - 60_000), twoDaysAgo, 10);
+  recordLiveEnded("Levi", "jkt48_10dayago", new Date(tenDaysAgo.getTime() - 60_000), tenDaysAgo, 20);
+
+  const last7Days = getCompletedSessionsSince(7).map((s) => s.username);
+  assert.deepEqual(last7Days, ["jkt48_2dayago"]);
+
+  const last30Days = getCompletedSessionsSince(30).map((s) => s.username);
+  assert.deepEqual(last30Days.sort(), ["jkt48_10dayago", "jkt48_2dayago"]);
+});

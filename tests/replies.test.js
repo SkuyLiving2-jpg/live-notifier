@@ -5,9 +5,12 @@ require("./helpers/setupTestEnv");
 // config.js (termasuk require("../src/chat/replies") di bawah).
 process.env.PRIORITY_PING_USER_ID = "owner-id-replies-test";
 
+const fs = require("fs");
+const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { getTodayWIB } = require("../src/utils");
+const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
 const { saveDurationHistory } = require("../src/storage/durationHistory");
@@ -23,6 +26,32 @@ const {
   handleAddPriority,
   handleRemovePriority,
 } = require("../src/chat/replies");
+
+// daily-log.json's jsonStore caches in-memory for the whole life of this
+// test FILE (same reasoning as tests/dailyLog.test.js), and every other
+// test above accumulates sessions into it too - so replyRecapRange's own
+// tests (which assert on exact totals, not just "does this one username
+// show up") need a truly clean store, not just unique usernames. Clears
+// BOTH storage/dailyLog's AND chat/replies's require cache (replies.js
+// captures its own reference to dailyLog's functions at require-time, so
+// resetting only dailyLog's cache wouldn't be enough - replies.js would
+// still be holding the stale one) and re-requires both fresh.
+const DAILYLOG_MODULE_PATH = require.resolve("../src/storage/dailyLog");
+const REPLIES_MODULE_PATH = require.resolve("../src/chat/replies");
+const DAILY_LOG_FILE = path.join(tempCacheDir, "daily-log.json");
+
+function freshRepliesForRecapRange() {
+  delete require.cache[DAILYLOG_MODULE_PATH];
+  delete require.cache[REPLIES_MODULE_PATH];
+  try {
+    fs.unlinkSync(DAILY_LOG_FILE);
+  } catch {
+    // wajar kalau belum pernah ada file-nya
+  }
+  const dailyLog = require("../src/storage/dailyLog");
+  const replies = require("../src/chat/replies");
+  return { recordLiveEnded: dailyLog.recordLiveEnded, replyRecapRange: replies.replyRecapRange };
+}
 
 function unixAt(dateWIB, timeHHMM) {
   return Math.floor(new Date(`${dateWIB}T${timeHHMM}:00+07:00`).getTime() / 1000);
@@ -181,4 +210,37 @@ test("isOwner / handleAddPriority / handleRemovePriority - gated ke PRIORITY_PIN
   assert.match(handleAddPriority("repliestestmember", "bukan-owner"), /cuma owner yang boleh/);
   assert.match(handleAddPriority("repliestestmember", "owner-id-replies-test"), /ditambahin ke daftar prioritas/);
   assert.match(handleRemovePriority("repliestestmember", "owner-id-replies-test"), /dihapus dari daftar prioritas/);
+});
+
+test("replyRecapRange - belum ada live yang kecatet dalam rentang itu", async () => {
+  const { replyRecapRange: freshReplyRecapRange } = freshRepliesForRecapRange();
+  const reply = await freshReplyRecapRange(7, "minggu ini (kosong)", "c-range-empty", "u-range-empty");
+  assert.match(reply, /belum ada live yang kecatet dalam minggu ini \(kosong\)/);
+});
+
+test("replyRecapRange - agregasi sesi dalam rentang waktu, TANPA gabung activeLives (beda dari rekap hari ini)", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
+  freshRecordLiveEnded("Nala", "jkt48_rangetest1", new Date(threeDaysAgo.getTime() - 3600_000), threeDaysAgo, 50);
+  freshRecordLiveEnded("Levi", "jkt48_rangetest2", new Date(threeDaysAgo.getTime() - 1800_000), new Date(threeDaysAgo.getTime() + 60_000), 30);
+
+  // Member yang LAGI live sekarang - harus TETEP GAK IKUT ke rekap rentang
+  // (bukan "hari ini", jendela waktu yang udah tertutup).
+  activeLives.set("jkt48_rangetest_ongoing", {
+    name: "Rangetestongoing",
+    username: "jkt48_rangetest_ongoing",
+    slug: "s",
+    liveAt: new Date().toISOString(),
+  });
+
+  try {
+    const reply = await freshReplyRecapRange(7, "minggu ini", "c-range", "u-range");
+    assert.match(reply, /Rekap minggu ini/);
+    assert.match(reply, /Total sesi: 2x dari 2 member/);
+    assert.doesNotMatch(reply, /Rangetestongoing/);
+  } finally {
+    activeLives.delete("jkt48_rangetest_ongoing");
+  }
 });
