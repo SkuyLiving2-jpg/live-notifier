@@ -3,6 +3,10 @@ const { requireSignedRequest } = require("./security");
 const { API_SECRET, PORT } = require("./config");
 const { activeLives } = require("./storage/activeLives");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
+const { loadDurationHistory } = require("./storage/durationHistory");
+const { loadDailyLog } = require("./storage/dailyLog");
+const { loadCustomPriorityMembers } = require("./storage/priorityStore");
+const { loadSubscriptions } = require("./storage/subscriptions");
 
 // Endpoint contoh yang dilindungi signature - nunjukkin data internal bot
 // yang lebih detail dibanding health-check publik. Pola ini yang dipake
@@ -60,34 +64,63 @@ function handleGifterSnapshotUpload(req, res, body) {
   res.end(JSON.stringify({ ok: true, username, gifterCount: gifters.length }));
 }
 
+// Read-only - narik SEMUA data yang lagi kesimpen jadi satu file JSON,
+// buat scripts/backup-data.js narik backup manual ke komputer lokal (data
+// Railway cuma ada di Volume-nya, gak ada cadangan lain kalau itu ilang).
+// Gabungan langsung dari load() tiap storage module - gak ada logic baru,
+// murni agregasi apa yang udah ada.
+function handleBackupExport(req, res) {
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      activeLives: Object.fromEntries(activeLives),
+      durationHistory: loadDurationHistory(),
+      dailyLog: loadDailyLog(),
+      customPriority: loadCustomPriorityMembers(),
+      subscriptions: loadSubscriptions(),
+      gifterSnapshot: loadGifterSnapshot(),
+    }),
+  );
+}
+
+// Dipake tiap endpoint /api/* yang butuh signature - dedup dari 3 blok
+// "kalau API_SECRET belum diset, 503" + requireSignedRequest yang sebelumnya
+// (sebelum backup ditambah) udah diulang 2x identik.
+function signedEndpoint(handler) {
+  return (req, res) => {
+    if (!API_SECRET) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "API_SECRET belum diset di server" }));
+      return;
+    }
+    requireSignedRequest(API_SECRET, handler)(req, res);
+  };
+}
+
 // Railway (dan platform hosting sejenis) ngecek apakah service "sehat" dengan
 // nunggu ada port yang kebuka. Bot ini murni background process tanpa server
 // HTTP, jadi tanpa ini Railway bisa nganggep container-nya nggak sehat dan
 // restart terus-menerus. Server kecil ini cuma buat "ngasih tanda hidup".
 //
-// /api/status & /api/gifter-snapshot sengaja dipisah dan dilindungi
-// signature - health-check di "/" TETAP publik tanpa signature, karena
-// Railway & UptimeRobot manggil itu tanpa tahu cara nge-sign request.
+// /api/* sengaja dipisah dan dilindungi signature - health-check di "/"
+// TETAP publik tanpa signature, karena Railway & UptimeRobot manggil itu
+// tanpa tahu cara nge-sign request.
 function startServer() {
   return http
     .createServer((req, res) => {
       if (req.url === "/api/status") {
-        if (!API_SECRET) {
-          res.writeHead(503, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "API_SECRET belum diset di server" }));
-          return;
-        }
-        requireSignedRequest(API_SECRET, handleProtectedStatus)(req, res);
+        signedEndpoint(handleProtectedStatus)(req, res);
         return;
       }
 
       if (req.url === "/api/gifter-snapshot") {
-        if (!API_SECRET) {
-          res.writeHead(503, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "API_SECRET belum diset di server" }));
-          return;
-        }
-        requireSignedRequest(API_SECRET, handleGifterSnapshotUpload)(req, res);
+        signedEndpoint(handleGifterSnapshotUpload)(req, res);
+        return;
+      }
+
+      if (req.url === "/api/backup") {
+        signedEndpoint(handleBackupExport)(req, res);
         return;
       }
 

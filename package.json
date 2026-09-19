@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "cek-gifter": "node scripts/cek-top-gifter.js"
+    "cek-gifter": "node scripts/cek-top-gifter.js",
+    "backup-data": "node scripts/backup-data.js"
   },
   "engines": {
     "node": ">=18"
