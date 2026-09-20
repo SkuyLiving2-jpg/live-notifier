@@ -316,6 +316,17 @@ async function main() {
     const { sessions, discardedSessions, unmatchedStarts, unmatchedEnds } = reconstructSessions(events);
 
     console.log(`\n${sessions.length} sesi live berhasil direkonstruksi (start+end kepasangin).`);
+    if (sessions.length > 0) {
+      console.log("Detail sesi yang berhasil direkonstruksi (urut dari yang paling awal):");
+      [...sessions]
+        .sort((a, b) => a.startedAtUnix - b.startedAtUnix)
+        .forEach((s, i) => {
+          const startedAt = new Date(s.startedAtUnix * 1000).toISOString();
+          const endedAt = new Date(s.endedAtUnix * 1000).toISOString();
+          const durationMin = Math.round((s.endedAtUnix - s.startedAtUnix) / 60);
+          console.log(`  ${i + 1}. ${s.name} (${s.username}) - ${startedAt} s/d ${endedAt} (${durationMin} menit)`);
+        });
+    }
     if (discardedSessions.length > 0) {
       console.log(
         `${discardedSessions.length} sesi DIBUANG karena durasinya gak masuk akal (>${MAX_PLAUSIBLE_LIVE_DURATION_MS / 3600000} jam - kemungkinan pairing start/end yang salah, mis. notif "selesai"-nya sempet kehapus manual):`,
