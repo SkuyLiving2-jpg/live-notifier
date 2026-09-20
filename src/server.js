@@ -139,17 +139,35 @@ function handleBackfillLiveHistory(req, res, body) {
   const accepted = validSessions.filter((s) => s.endedAtUnix < cutoffUnix);
 
   const dryRun = Boolean(payload.dryRun);
+  let durationHistoryBackfilled = 0;
   if (!dryRun) {
     for (const s of accepted) {
       recordLiveEnded(s.name, s.username, new Date(s.startedAtUnix * 1000), new Date(s.endedAtUnix * 1000), null);
-      // Sama "accepted" (BUKAN validSessions) dipake di sini juga - live-duration-history.json
-      // (dipake "cok stats"/"cok kapan ... live") kena masalah dobel yang
-      // sama kayak daily-log kalau ini jalan 2x, jadi dia ikut pola cutoff
-      // yang sama biar tetep idempotent. recordLiveDurationAt (bukan
-      // recordLiveDuration biasa) soalnya butuh `at` HISTORIS, bukan "sekarang"
-      // - kalau enggak, pola jam/hari yang dihitung replySchedulePattern jadi ngaco.
-      recordLiveDurationAt(s.username, s.name, (s.endedAtUnix - s.startedAtUnix) * 1000, new Date(s.endedAtUnix * 1000));
     }
+
+    // live-duration-history.json (dipake "cok stats"/"cok kapan ... live")
+    // SENGAJA dicek idempotent-nya independen dari cutoff daily-log di atas
+    // (dedup per-entry lewat `at` yang UDAH ADA, bukan ikut cutoff yang
+    // sama) - soalnya kalau endpoint ini sendiri dapet bugfix belakangan
+    // (persis yang kejadian: versi pertama endpoint ini lupa nulis ke sini
+    // sama sekali), re-run abis fix-nya HARUS tetap bisa ngisi celah yang
+    // ketinggalan itu, walau daily-log-nya sendiri udah gak nerima sesi yang
+    // sama lagi (cutoff-nya udah kelewat). recordLiveDurationAt (bukan
+    // recordLiveDuration biasa) soalnya butuh `at` HISTORIS, bukan "sekarang"
+    // - kalau enggak, pola jam/hari yang dihitung replySchedulePattern jadi ngaco.
+    const seenAtByUsername = new Map(
+      Object.entries(loadDurationHistory()).map(([username, entries]) => [username, new Set(entries.map((e) => e.at))]),
+    );
+    for (const s of validSessions) {
+      const atIso = new Date(s.endedAtUnix * 1000).toISOString();
+      const seen = seenAtByUsername.get(s.username) || new Set();
+      if (seen.has(atIso)) continue;
+      recordLiveDurationAt(s.username, s.name, (s.endedAtUnix - s.startedAtUnix) * 1000, new Date(s.endedAtUnix * 1000));
+      seen.add(atIso);
+      seenAtByUsername.set(s.username, seen);
+      durationHistoryBackfilled++;
+    }
+
     // Direbuild dari SELURUH sesi valid yang dikirim (bukan cuma yang
     // accepted ke daily-log) - histori pesan Discord nyakup seluruh linimasa
     // bot jalan, jadi ini otoritatif buat total ALL-TIME, gak cuma buat
@@ -166,6 +184,7 @@ function handleBackfillLiveHistory(req, res, body) {
       cutoffDateWIB,
       acceptedIntoDailyLog: accepted.length,
       skippedAlreadyCovered: validSessions.length - accepted.length,
+      durationHistoryBackfilled,
     }),
   );
 }

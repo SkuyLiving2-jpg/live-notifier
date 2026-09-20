@@ -245,6 +245,55 @@ test("POST /api/backfill-live-history - dryRun:false juga ngisi live-duration-hi
   }
 });
 
+// Skenario NYATA yang kejadian ke user: backfill sempet dijalanin pas
+// endpoint-nya masih versi LAMA (sebelum recordLiveDurationAt ditambahin) -
+// daily-log.json udah ke-isi, tapi live-duration-history.json KOSONG buat
+// sesi itu. Cutoff daily-log bakal NOLAK sesi yang sama di run berikutnya
+// (bener, itu emang udah tercatet di situ) - tapi live-duration-history
+// HARUS tetep berhasil ke-isi lewat pengecekan idempotent-nya sendiri
+// (independen dari cutoff daily-log), soalnya di situ dia BENERAN belum ada.
+test("POST /api/backfill-live-history - re-run setelah bugfix TETAP bisa ngisi live-duration-history yang ketinggalan dari run sebelum fix", async () => {
+  const startFn = freshStartServerForBackfillTest();
+
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const nowSec = Math.floor(Date.now() / 1000);
+  const daysAgo = (n) => nowSec - n * 24 * 60 * 60;
+  const sessions = [20, 15, 10].map((d) => ({
+    name: "Lily",
+    username: "jkt48_lily_rerunfix",
+    startedAtUnix: daysAgo(d),
+    endedAtUnix: daysAgo(d) + 3600,
+  }));
+  // Seed daily-log.json LANGSUNG, mensimulasikan "endpoint versi lama udah
+  // pernah jalan" - live-duration-history.json SENGAJA dibiarin kosong.
+  sessions.forEach((s) => recordLiveEnded(s.name, s.username, new Date(s.startedAtUnix * 1000), new Date(s.endedAtUnix * 1000), null));
+
+  const server = await startTestServer(startFn);
+  try {
+    const { port } = server.address();
+    const body = JSON.stringify({ dryRun: false, sessions });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    const result = await res.json();
+
+    assert.equal(result.acceptedIntoDailyLog, 0, "daily-log udah ke-isi duluan (simulasi run lama) - cutoff harus nolak lagi");
+    assert.equal(result.durationHistoryBackfilled, 3, "tapi live-duration-history HARUS tetep ke-isi, independen dari cutoff daily-log");
+
+    const { timestamp: t2, signature: s2 } = sign("");
+    const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
+      headers: { "X-Api-Timestamp": t2, "X-Api-Signature": s2 },
+    });
+    const backup = await backupRes.json();
+    assert.equal(backup.durationHistory.jkt48_lily_rerunfix.length, 3);
+  } finally {
+    server.close();
+  }
+});
+
 test("POST /api/backfill-live-history - request tanpa signature ditolak (401)", async () => {
   const server = await startTestServer();
   try {
