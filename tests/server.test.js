@@ -118,7 +118,7 @@ test("POST /api/backfill-live-history - dryRun:true gak nulis apa-apa, cuma prev
     const data = await res.json();
     assert.equal(data.dryRun, true);
     assert.equal(data.totalValid, 1);
-    assert.equal(data.acceptedIntoDailyLog, 1); // arsip masih kosong -> cutoff Infinity -> ke-accept
+    assert.equal(data.acceptedIntoDailyLog, 1); // arsip masih kosong -> belum ada yang bisa dobel -> ke-accept
 
     // Beneran gak nulis - /api/backup masih harus nunjukkin arsip kosong.
     const { timestamp: t2, signature: s2 } = sign("");
@@ -216,11 +216,11 @@ test("POST /api/backfill-live-history - dryRun:false beneran nulis, dan aman dip
     }
 
     const first = await callBackfill(false);
-    assert.equal(first.acceptedIntoDailyLog, 2); // arsip kosong dulunya -> cutoff Infinity -> dua-duanya ke-accept
+    assert.equal(first.acceptedIntoDailyLog, 2); // arsip kosong dulunya -> belum ada yang bisa dobel -> dua-duanya ke-accept
 
-    // Panggil PERSIS SAMA lagi - dailyLog's earliest date sekarang mundur ke
-    // sesi yang barusan dibackfill, jadi cutoff-nya juga ikut mundur, dan
-    // dua sesi yang SAMA ini seharusnya udah "tertutup" sama cutoff barunya.
+    // Panggil PERSIS SAMA lagi - dua sesi yang SAMA (username + endedAtUnix
+    // identik) sekarang udah ada di daily-log, jadi dedup-nya harus nolak
+    // dua-duanya lagi.
     const second = await callBackfill(false);
     assert.equal(second.acceptedIntoDailyLog, 0);
 
@@ -282,10 +282,10 @@ test("POST /api/backfill-live-history - dryRun:false juga ngisi live-duration-hi
 // Skenario NYATA yang kejadian ke user: backfill sempet dijalanin pas
 // endpoint-nya masih versi LAMA (sebelum recordLiveDurationAt ditambahin) -
 // daily-log.json udah ke-isi, tapi live-duration-history.json KOSONG buat
-// sesi itu. Cutoff daily-log bakal NOLAK sesi yang sama di run berikutnya
-// (bener, itu emang udah tercatet di situ) - tapi live-duration-history
-// HARUS tetep berhasil ke-isi lewat pengecekan idempotent-nya sendiri
-// (independen dari cutoff daily-log), soalnya di situ dia BENERAN belum ada.
+// sesi itu. Dedup daily-log bakal NOLAK sesi yang SAMA PERSIS di run
+// berikutnya (bener, itu emang udah tercatet di situ) - tapi
+// live-duration-history HARUS tetep berhasil ke-isi lewat pengecekan
+// idempotent-nya sendiri, soalnya di situ dia BENERAN belum ada.
 test("POST /api/backfill-live-history - re-run setelah bugfix TETAP bisa ngisi live-duration-history yang ketinggalan dari run sebelum fix", async () => {
   const startFn = freshStartServerForBackfillTest();
 
@@ -314,8 +314,8 @@ test("POST /api/backfill-live-history - re-run setelah bugfix TETAP bisa ngisi l
     });
     const result = await res.json();
 
-    assert.equal(result.acceptedIntoDailyLog, 0, "daily-log udah ke-isi duluan (simulasi run lama) - cutoff harus nolak lagi");
-    assert.equal(result.durationHistoryBackfilled, 3, "tapi live-duration-history HARUS tetep ke-isi, independen dari cutoff daily-log");
+    assert.equal(result.acceptedIntoDailyLog, 0, "daily-log udah ke-isi duluan (simulasi run lama) - dedup harus nolak lagi");
+    assert.equal(result.durationHistoryBackfilled, 3, "tapi live-duration-history HARUS tetep ke-isi, independen dari dedup daily-log");
 
     const { timestamp: t2, signature: s2 } = sign("");
     const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
@@ -323,6 +323,92 @@ test("POST /api/backfill-live-history - re-run setelah bugfix TETAP bisa ngisi l
     });
     const backup = await backupRes.json();
     assert.equal(backup.durationHistory.jkt48_lily_rerunfix.length, 3);
+  } finally {
+    server.close();
+  }
+});
+
+// BUG FATAL yang dilaporin user: "kapan Nala/Lily/Levi live sebelum 19
+// September" gak pernah nongol di "cok rekap", walau parsernya udah
+// dibenerin dan count-priority-notifs.js udah nemuin notifnya. Root cause-nya
+// versi CUTOFF-TANGGAL lama: begitu satu run backfill berhasil masukin SATU
+// SAJA sesi dari periode awal (mis. sesi non-prioritas), "sesi paling tua
+// yang udah ada" jadi mundur ke situ - run backfill BERIKUTNYA yang nemuin
+// sesi TAMBAHAN dari periode yang SAMA (mis. sesi prioritas yang baru
+// kebaca abis parser embed-nya dibenerin) bakal DITOLAK KELIRU, walau sesi
+// itu beneran belum pernah kesimpen, cuma karena endedAtUnix-nya "lewat"
+// cutoff. Dedup per-sesi (bukan per-tanggal) gak punya masalah ini.
+test("POST /api/backfill-live-history - sesi BARU dari periode yang SAMA kayak yang udah pernah ke-backfill sebelumnya TETAP ke-accept (bukan ketolak gara-gara cutoff tanggal)", async () => {
+  const startFn = freshStartServerForBackfillTest();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const nowSec = Math.floor(Date.now() / 1000);
+  const daysAgo = (n) => nowSec - n * 24 * 60 * 60;
+
+  // Simulasiin: run backfill PERTAMA berhasil masukin 1 sesi non-prioritas
+  // dari 20 hari lalu - ini yang bikin "sesi paling tua yang udah ada"
+  // mundur ke tanggal itu di versi cutoff lama.
+  recordLiveEnded("Aralie", "jkt48_cutoffbug_aralie", new Date(daysAgo(20) * 1000), new Date((daysAgo(20) + 3600) * 1000), null);
+
+  const server = await startTestServer(startFn);
+  try {
+    const { port } = server.address();
+    // Run KEDUA nemuin sesi TAMBAHAN dari periode yang SAMA (19 hari lalu,
+    // beda member & waktu) - versi cutoff lama bakal nolak ini (endedAtUnix
+    // udah "lewat" cutoff 20 hari lalu), padahal ini sesi yang beneran belum
+    // pernah kesimpen.
+    const newlyFoundSession = { name: "Nala", username: "jkt48_cutoffbug_nala", startedAtUnix: daysAgo(19), endedAtUnix: daysAgo(19) + 3600 };
+    const body = JSON.stringify({ dryRun: false, sessions: [newlyFoundSession] });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    const result = await res.json();
+    assert.equal(result.acceptedIntoDailyLog, 1, "sesi baru dari periode yang sama harus TETAP ke-accept, bukan ketolak cutoff");
+
+    const { timestamp: t2, signature: s2 } = sign("");
+    const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
+      headers: { "X-Api-Timestamp": t2, "X-Api-Signature": s2 },
+    });
+    const backup = await backupRes.json();
+    assert.ok(
+      backup.dailyLog.sessions.some((s) => s.username === "jkt48_cutoffbug_nala"),
+      "sesi Nala yang baru ketemu harus ada di daily-log, siap dipakai 'cok rekap'",
+    );
+  } finally {
+    server.close();
+  }
+});
+
+// Kebalikan dari tes di atas - dedup per-sesi HARUS tetep nolak sesi yang
+// BENERAN udah ada, walau endedAtUnix-nya beda beberapa detik dari yang
+// udah tersimpan (wajar - beda antara timestamp live-tracker's Date.now()
+// SAMA timestamp pesan Discord createdTimestamp buat sesi live yang SAMA).
+test("POST /api/backfill-live-history - sesi yang endedAtUnix-nya beda beberapa detik dari yang UDAH ADA (drift timestamp wajar) tetep kedeteksi dobel", async () => {
+  const startFn = freshStartServerForBackfillTest();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const nowSec = Math.floor(Date.now() / 1000);
+  const daysAgo = (n) => nowSec - n * 24 * 60 * 60;
+
+  // Sesi yang UDAH ke-track live sama bot sendiri (real-time).
+  recordLiveEnded("Nala", "jkt48_drifttest", new Date(daysAgo(5) * 1000), new Date((daysAgo(5) + 3600) * 1000), 50);
+
+  const server = await startTestServer(startFn);
+  try {
+    const { port } = server.address();
+    // Sesi "sama" yang direkonstruksi dari pesan Discord - endedAtUnix-nya
+    // 7 detik lebih telat dari yang di-track live-tracker (wajar).
+    const nearDuplicate = { name: "Nala", username: "jkt48_drifttest", startedAtUnix: daysAgo(5), endedAtUnix: daysAgo(5) + 3600 + 7 };
+    const body = JSON.stringify({ dryRun: false, sessions: [nearDuplicate] });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    const result = await res.json();
+    assert.equal(result.acceptedIntoDailyLog, 0, "sesi yang cuma beda beberapa detik dari yang udah ada harus ketahuan dobel, bukan numpuk");
   } finally {
     server.close();
   }

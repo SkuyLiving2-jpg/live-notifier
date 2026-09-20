@@ -4,7 +4,7 @@ const { API_SECRET, PORT, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config")
 const { activeLives } = require("./storage/activeLives");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
 const { loadDurationHistory, saveDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
-const { loadDailyLog, saveDailyLog, recordLiveEnded, getEarliestSessionDate } = require("./storage/dailyLog");
+const { loadDailyLog, saveDailyLog, recordLiveEnded } = require("./storage/dailyLog");
 const { loadCustomPriorityMembers } = require("./storage/priorityStore");
 const { loadSubscriptions } = require("./storage/subscriptions");
 const { rebuildLiveCountFromSessions } = require("./storage/liveCount");
@@ -85,6 +85,20 @@ function handleBackupExport(req, res) {
   );
 }
 
+// Toleransi buat nganggep sesi backfill "udah ada" di daily-log - beda
+// beberapa detik antara timestamp live-tracker (Date.now() pas poll loop
+// NGEDETEKSI live-nya selesai) sama timestamp pesan Discord (createdTimestamp,
+// beberapa saat setelahnya) itu wajar, BUKAN sesi yang beda. 2 menit jauh
+// lebih longgar dari itu tapi masih jauh lebih pendek dibanding jarak antar
+// 2 sesi live BEDA dari member yang sama (biasanya berjam-jam/berhari-hari).
+const SESSION_DEDUP_TOLERANCE_SEC = 120;
+
+function isAlreadyInDailyLog(endedAtByUsername, session) {
+  const existing = endedAtByUsername.get(session.username);
+  if (!existing) return false;
+  return existing.some((endedAtUnix) => Math.abs(endedAtUnix - session.endedAtUnix) <= SESSION_DEDUP_TOLERANCE_SEC);
+}
+
 // Nerima riwayat live yang direkonstruksi dari histori pesan notif Discord
 // (lihat scripts/backfill-live-history.js) - satu-satunya cara ngisi
 // SEBELUM daily-log.json jadi arsip beneran (16c4b7c, 2026-09-19), soalnya
@@ -93,12 +107,21 @@ function handleBackupExport(req, res) {
 // pernah kecatet - satu-satunya sumber yang lebih lengkap dari kode kita
 // sendiri adalah histori pesan Discord-nya sendiri (kalau belum dihapus).
 //
-// Cuma nerima sesi yang SELESAI-nya sebelum sesi PALING TUA yang UDAH ADA
-// sekarang - biar gak dobel sama yang udah beneran ke-track live oleh bot
-// sendiri (lihat getEarliestSessionDate). Ini juga bikin endpoint-nya aman
-// dipanggil ulang (idempotent): abis backfill pertama sukses, earliest date
-// arsip jadi mundur ke histori yang baru ditambahin, jadi panggilan kedua
-// otomatis nolak nyisipin ulang sesi yang sama.
+// Idempotency-nya DEDUP PER SESI (username + endedAtUnix, lihat
+// isAlreadyInDailyLog), BUKAN cutoff tanggal kayak versi sebelumnya. Versi
+// cutoff kelihatan aman di awal (nolak apa pun yang selesainya SETELAH sesi
+// paling tua yang udah ada, biar gak dobel sama yang beneran ke-track live
+// sama bot sendiri), tapi rusak begitu backfill perlu dijalanin LEBIH DARI
+// SEKALI buat periode yang SAMA - persis yang kejadian ke owner: parser embed
+// prioritasnya sendiri dibenerin 2x (§10's bug ketujuh & kesepuluh), dan
+// tiap kali abis dibenerin, "sesi paling tua yang udah ada" itu UDAH KADUNG
+// mundur ke sesi yang berhasil ke-backfill di run SEBELUMNYA - jadi cutoff-nya
+// OTOMATIS nolak sesi TAMBAHAN dari periode yang SAMA walau sesi itu beneran
+// belum pernah kesimpen (persis "kapan Nala/Lily/Levi live sebelum 19
+// September" yang gak pernah nongol di "cok rekap", padahal count-priority-notifs.js
+// udah nemuin notifnya). Dedup per sesi gak punya masalah ini - setiap sesi
+// dicek sendiri-sendiri terlepas dari tanggalnya, jadi aman dipanggil ULANG
+// berkali-kali seiring parsernya dibenerin bertahap.
 function handleBackfillLiveHistory(req, res, body) {
   if (req.method !== "POST") {
     res.writeHead(405, { "Content-Type": "application/json" });
@@ -141,9 +164,24 @@ function handleBackfillLiveHistory(req, res, body) {
       (s.endedAtUnix - s.startedAtUnix) * 1000 <= MAX_PLAUSIBLE_LIVE_DURATION_MS,
   );
 
-  const cutoffDateWIB = getEarliestSessionDate();
-  const cutoffUnix = cutoffDateWIB ? Math.floor(new Date(`${cutoffDateWIB}T00:00:00+07:00`).getTime() / 1000) : Infinity;
-  const accepted = validSessions.filter((s) => s.endedAtUnix < cutoffUnix);
+  const endedAtByUsername = new Map();
+  for (const s of loadDailyLog().sessions) {
+    const list = endedAtByUsername.get(s.username) || [];
+    list.push(s.endedAtUnix);
+    endedAtByUsername.set(s.username, list);
+  }
+  const accepted = [];
+  for (const s of validSessions) {
+    if (isAlreadyInDailyLog(endedAtByUsername, s)) continue;
+    accepted.push(s);
+    // Ditambahin ke set yang sama SEKARANG (bukan cuma dari daily-log yang
+    // udah ada) - biar 2 sesi identik yang KEBETULAN dobel dalam satu
+    // payload yang SAMA (mis. tumpang-tindih channel/DM di sekitar momen
+    // 0bd317e cutover) juga kesaring, bukan cuma dobel-cek terhadap data lama.
+    const list = endedAtByUsername.get(s.username) || [];
+    list.push(s.endedAtUnix);
+    endedAtByUsername.set(s.username, list);
+  }
 
   const dryRun = Boolean(payload.dryRun);
   let durationHistoryBackfilled = 0;
@@ -152,16 +190,14 @@ function handleBackfillLiveHistory(req, res, body) {
       recordLiveEnded(s.name, s.username, new Date(s.startedAtUnix * 1000), new Date(s.endedAtUnix * 1000), null);
     }
 
-    // live-duration-history.json (dipake "cok stats"/"cok kapan ... live")
-    // SENGAJA dicek idempotent-nya independen dari cutoff daily-log di atas
-    // (dedup per-entry lewat `at` yang UDAH ADA, bukan ikut cutoff yang
-    // sama) - soalnya kalau endpoint ini sendiri dapet bugfix belakangan
-    // (persis yang kejadian: versi pertama endpoint ini lupa nulis ke sini
-    // sama sekali), re-run abis fix-nya HARUS tetap bisa ngisi celah yang
-    // ketinggalan itu, walau daily-log-nya sendiri udah gak nerima sesi yang
-    // sama lagi (cutoff-nya udah kelewat). recordLiveDurationAt (bukan
-    // recordLiveDuration biasa) soalnya butuh `at` HISTORIS, bukan "sekarang"
-    // - kalau enggak, pola jam/hari yang dihitung replySchedulePattern jadi ngaco.
+    // live-duration-history.json (dipake "cok stats"/"cok kapan ... live") -
+    // dedup-nya sendiri, per-entry lewat `at` yang UDAH ADA (mirip pola
+    // daily-log di atas, tapi exact-match bukan toleransi - `at` selalu
+    // sama persis kalau sesi yang sama direkonstruksi ulang, gak kayak
+    // endedAtUnix daily-log yang bisa beda dikit sama timestamp live-tracker).
+    // recordLiveDurationAt (bukan recordLiveDuration biasa) soalnya butuh
+    // `at` HISTORIS, bukan "sekarang" - kalau enggak, pola jam/hari yang
+    // dihitung replySchedulePattern jadi ngaco.
     const seenAtByUsername = new Map(
       Object.entries(loadDurationHistory()).map(([username, entries]) => [username, new Set(entries.map((e) => e.at))]),
     );
@@ -188,7 +224,6 @@ function handleBackfillLiveHistory(req, res, body) {
       dryRun,
       totalReceived: sessions.length,
       totalValid: validSessions.length,
-      cutoffDateWIB,
       acceptedIntoDailyLog: accepted.length,
       skippedAlreadyCovered: validSessions.length - accepted.length,
       durationHistoryBackfilled,
