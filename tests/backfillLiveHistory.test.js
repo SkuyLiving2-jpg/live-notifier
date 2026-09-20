@@ -2,7 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { extractWebhookIds, parseEvents, reconstructSessions } = require("../scripts/backfill-live-history");
+const { extractWebhookIds, parseEvents, parsePriorityEmbedEvent, reconstructSessions } = require("../scripts/backfill-live-history");
 
 test("extractWebhookIds - narik id & token dari DISCORD_WEBHOOK_URL, error kalau formatnya gak dikenali", () => {
   const { webhookId, webhookToken } = extractWebhookIds("https://discord.com/api/webhooks/123456789/abcDEF-token_123");
@@ -55,6 +55,80 @@ test("parseEvents - pesan dari webhook LAIN (mis. orang ngetik teks mirip) diaba
 test("parseEvents - pesan chat biasa (bukan format notif) diabaikan", () => {
   const messages = [fakeMessage({ content: "cok siapa yang live?", createdTimestamp: 1000 })];
   assert.equal(parseEvents(messages, "wh-1").length, 0);
+});
+
+// FORMAT LAMA (sebelum commit 0bd317e, 2026-09-18 11:40 WIB): notif channel
+// buat member PRIORITAS (Nala/Levi/Lily/custom) dulu pake EMBED
+// (priority/index.js's buildPriorityPayload), bukan plain content kayak
+// buildNormalPayload - persis bug yang dilaporin user (histori Nala gak
+// ke-track sama sekali walau jelas sering live, soalnya SEMUA live-nya
+// sebelum tanggal itu make format ini).
+function fakePriorityStartMessage({ name = "Nala", username = "jkt48_nala", createdTimestamp = 1000 } = {}) {
+  return {
+    webhookId: "wh-1",
+    content: `<@owner-id> 🚨🔥🚨🚨🔥🚨 **JANGAN SAMPE KETINGGALAN!** 🚨🔥🚨🚨🔥🚨`,
+    embeds: [
+      {
+        title: "⚡ PRIORITAS #1: NALA LIVE SEKARANG! ⚡",
+        description: `**${name}** baru aja mulai live di IDN Live.`,
+        url: `https://idn.app/${username}/live/slug-abc`,
+        color: 0x1abc9c,
+      },
+    ],
+    createdTimestamp,
+  };
+}
+
+function fakePriorityEndMessage({ name = "Nala", username = "jkt48_nala", createdTimestamp = 2000, withThankYou = false } = {}) {
+  return {
+    webhookId: "wh-1",
+    content: `<@owner-id> 🚨🔥🚨 Live prioritas **#1 NALA** udah selesai.${withThankYou ? " 💌" : ""}`,
+    embeds: [
+      {
+        title: withThankYou ? "💚 NALA sudah selesai live - makasih ya!" : "NALA sudah selesai live",
+        description: name,
+        color: 0x1abc9c,
+        url: `https://idn.app/${username}/live/slug-abc`,
+        ...(withThankYou ? { fields: [{ name: "💌 Pesan dari NALA", value: "Makasih ya!" }] } : {}),
+      },
+    ],
+    createdTimestamp,
+  };
+}
+
+test("parsePriorityEmbedEvent - format embed lama buat start/end member prioritas ke-parse bener (nama + username dari embed, bukan content)", () => {
+  const startEvent = parsePriorityEmbedEvent(fakePriorityStartMessage({ name: "Nala", username: "jkt48_nala", createdTimestamp: 1000 }));
+  assert.deepEqual(startEvent, { type: "start", name: "Nala", username: "jkt48_nala", atMs: 1000 });
+
+  const endEvent = parsePriorityEmbedEvent(fakePriorityEndMessage({ name: "Nala", createdTimestamp: 2000 }));
+  assert.deepEqual(endEvent, { type: "end", name: "Nala", atMs: 2000 });
+
+  // Varian "makasih ya" (endMessagePool, khusus Nala) - title-nya beda tapi tetep harus ke-parse.
+  const endWithThankYou = parsePriorityEmbedEvent(fakePriorityEndMessage({ name: "Nala", createdTimestamp: 3000, withThankYou: true }));
+  assert.deepEqual(endWithThankYou, { type: "end", name: "Nala", atMs: 3000 });
+});
+
+test("parsePriorityEmbedEvent - pesan tanpa embed atau embed yang gak cocok pola balikin null", () => {
+  assert.equal(parsePriorityEmbedEvent({ embeds: [], content: "halo" }), null);
+  assert.equal(parsePriorityEmbedEvent({ embeds: [{ title: "Judul random", description: "apa aja" }] }), null);
+});
+
+test("parseEvents - format embed prioritas LAMA dan format plain BARU bisa ketangkep bareng dalam 1 channel yang sama", () => {
+  const messages = [
+    fakePriorityStartMessage({ name: "Nala", username: "jkt48_nala", createdTimestamp: 1000 }),
+    fakePriorityEndMessage({ name: "Nala", createdTimestamp: 2000 }),
+    fakeMessage({
+      content: "🚨 **Aralie** lagi live di IDN Live!\nNonton di sini: https://idn.app/jkt48_aralie/live/slug-123",
+      createdTimestamp: 3000,
+    }),
+    fakeMessage({ content: "✅ **Aralie** udah selesai live di IDN Live.", createdTimestamp: 4000 }),
+  ];
+
+  const { sessions } = reconstructSessions(parseEvents(messages, "wh-1"));
+  assert.equal(sessions.length, 2);
+  const byName = Object.fromEntries(sessions.map((s) => [s.name, s]));
+  assert.equal(byName.Nala.username, "jkt48_nala");
+  assert.equal(byName.Aralie.username, "jkt48_aralie");
 });
 
 test("reconstructSessions - pasangin start->end per nama (FIFO), termasuk 2x live berturut-turut buat member yang SAMA", () => {

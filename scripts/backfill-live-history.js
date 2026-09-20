@@ -42,6 +42,41 @@ const API_SECRET = process.env.API_SECRET || "";
 const START_RE = /^🚨 \*\*(.+?)\*\* lagi live di IDN Live!\nNonton di sini: https:\/\/idn\.app\/([^/]+)\/live\/\S+/;
 const END_RE = /^✅ \*\*(.+?)\*\* udah selesai live di IDN Live\./;
 
+// FORMAT LAMA (sebelum commit 0bd317e, 2026-09-18 11:40 WIB): notif flashy
+// buat member PRIORITAS (Nala/Levi/Lily/custom) DULU keposting ke channel
+// bersama ini juga (bukan DM kayak sekarang), pake EMBED (priority/index.js's
+// buildPriorityPayload) - bukan plain `content` kayak buildNormalPayload.
+// Histori live member prioritas dari SEBELUM tanggal itu nggak kebaca sama
+// sekali kalau cuma ngecek `content` doang (persis bug yang dilaporin user:
+// "Nala" keliatan gak pernah live padahal jelas udah sering) - jadi embed-nya
+// juga perlu dicek. Nama member ada di embeds[0].description (bukan title -
+// itu isinya label/rank generik, bukan nama), username ditarik dari
+// embeds[0].url (link live-nya, format sama kayak yang di START_RE).
+const PRIORITY_START_TITLE_RE = /^⚡ PRIORITAS #\d+: .+ LIVE SEKARANG! ⚡$/;
+const PRIORITY_START_DESC_RE = /^\*\*(.+?)\*\* baru aja mulai live di IDN Live\.$/;
+const PRIORITY_END_TITLE_RE = /sudah selesai live/;
+const PRIORITY_EMBED_URL_RE = /^https:\/\/idn\.app\/([^/]+)\/live\//;
+
+function parsePriorityEmbedEvent(msg) {
+  const embed = msg.embeds && msg.embeds[0];
+  if (!embed || typeof embed.title !== "string") return null;
+
+  const urlMatch = typeof embed.url === "string" && embed.url.match(PRIORITY_EMBED_URL_RE);
+
+  if (PRIORITY_START_TITLE_RE.test(embed.title) && typeof embed.description === "string" && urlMatch) {
+    const descMatch = embed.description.match(PRIORITY_START_DESC_RE);
+    if (descMatch) {
+      return { type: "start", name: descMatch[1], username: urlMatch[1], atMs: msg.createdTimestamp };
+    }
+  }
+
+  if (PRIORITY_END_TITLE_RE.test(embed.title) && typeof embed.description === "string" && embed.description.trim()) {
+    return { type: "end", name: embed.description.trim(), atMs: msg.createdTimestamp };
+  }
+
+  return null;
+}
+
 function extractWebhookIds(webhookUrl) {
   const match = webhookUrl.match(/\/webhooks\/(\d+)\/([^/?]+)/);
   if (!match) throw new Error("DISCORD_WEBHOOK_URL formatnya nggak dikenali (harusnya .../webhooks/<id>/<token>)");
@@ -74,6 +109,10 @@ async function fetchAllMessages(channel) {
 
 // Cuma percaya pesan yang BENERAN dari webhook ini (message.webhookId cocok)
 // - biar gak ketipu kalau ada orang iseng ngetik teks yang mirip formatnya.
+// Dicek 2 format: plain (buildNormalPayload, SEMUA member sejak 0bd317e) dan
+// embed lama (buildPriorityPayload, CUMA member prioritas, CUMA sebelum
+// 0bd317e) - lihat komentar di parsePriorityEmbedEvent buat kenapa dua-duanya
+// perlu, bukan cuma salah satu.
 function parseEvents(messages, webhookId) {
   const events = [];
   for (const msg of messages) {
@@ -88,7 +127,11 @@ function parseEvents(messages, webhookId) {
     const endMatch = content.match(END_RE);
     if (endMatch) {
       events.push({ type: "end", name: endMatch[1], atMs: msg.createdTimestamp });
+      continue;
     }
+
+    const priorityEvent = parsePriorityEmbedEvent(msg);
+    if (priorityEvent) events.push(priorityEvent);
   }
   events.sort((a, b) => a.atMs - b.atMs);
   return events;
@@ -222,4 +265,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { extractWebhookIds, parseEvents, reconstructSessions };
+module.exports = { extractWebhookIds, parseEvents, parsePriorityEmbedEvent, reconstructSessions };
