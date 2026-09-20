@@ -359,6 +359,31 @@ test("tryHandleRecapPageShortcut - bisa maju ('y') DAN mundur ('mundur') bolak-b
   assert.match(pastFirst, /halaman pertama, gak bisa mundur lagi/);
 });
 
+// Owner minta "y" bisa diganti jadi kata yang lebih jelas kayak "maju"/
+// "forward" - ditambahin sebagai ALTERNATIF (bukan gantiin "y", biar gak
+// ngerusak kebiasaan lama).
+test("tryHandleRecapPageShortcut - 'maju'/'forward' juga jalan buat ke halaman berikutnya (alternatif dari 'y')", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange, tryHandleRecapPageShortcut } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 45; i++) {
+    freshRecordLiveEnded(`Fwd${i}`, `jkt48_fwdtest${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
+  }
+
+  const channelId = "c-fwdtest";
+  const authorId = "u-fwdtest";
+
+  const page0 = await freshReplyRecapRange(7, "minggu ini", channelId, authorId);
+  assert.match(page0, /Halaman 1\/3/);
+
+  const page1 = await tryHandleRecapPageShortcut("maju", channelId, authorId);
+  assert.match(page1, /Halaman 2\/3/);
+
+  const page2 = await tryHandleRecapPageShortcut("forward", channelId, authorId);
+  assert.match(page2, /Halaman 3\/3/);
+});
+
 test("tryHandleRecapPageShortcut - 'n' tetep ngebatalin navigasi sepenuhnya (beda dari 'mundur')", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange, tryHandleRecapPageShortcut } = freshRepliesForRecapRange();
 

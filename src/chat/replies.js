@@ -26,6 +26,7 @@ const {
   stripTrailingLiveWord,
   YES_PATTERN,
   NO_PATTERN,
+  NEXT_PAGE_PATTERN,
   PREV_PAGE_PATTERN,
 } = require("../utils");
 
@@ -262,9 +263,9 @@ function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = nu
 
   let footer;
   if (result.hasMore && hasPrev) {
-    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - balas "y" buat lanjut, atau "mundur" buat balik ke halaman sebelumnya)_`;
+    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - balas "y"/"maju" buat lanjut, atau "mundur" buat balik ke halaman sebelumnya)_`;
   } else if (result.hasMore) {
-    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - masih ada lagi, mau liat halaman berikutnya? Balas "y")_`;
+    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - masih ada lagi, mau liat halaman berikutnya? Balas "y"/"maju")_`;
   } else if (hasPrev) {
     footer = `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir. Balas "mundur" buat balik ke halaman sebelumnya)_`;
   } else {
@@ -279,9 +280,9 @@ function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = nu
 }
 
 // Dicek di awal chat/router.js's buildChatReply (sama pola kayak
-// menu.js's tryHandleWatchConfirmShortcut) - jawaban "y"/"mundur"/"n" polos
-// buat navigasi halaman rekap gak nyebut "cok"/"live", jadi harus ditangkep
-// sebelum gerbang wake-word.
+// menu.js's tryHandleWatchConfirmShortcut) - jawaban "y"/"maju"/"mundur"/"n"
+// polos buat navigasi halaman rekap gak nyebut "cok"/"live", jadi harus
+// ditangkep sebelum gerbang wake-word.
 async function tryHandleRecapPageShortcut(text, channelId, authorId) {
   if (!channelId || !authorId) return null;
   const key = `${channelId}:${authorId}`;
@@ -293,7 +294,10 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
     return null;
   }
 
-  const isNext = YES_PATTERN.test(text);
+  // "y" tetep didukung (biar gak ngerusak kebiasaan lama) - NEXT_PAGE_PATTERN
+  // ("maju"/"forward"/dst) itu TAMBAHAN, bukan gantiin. Lihat komentar di
+  // NEXT_PAGE_PATTERN (utils.js) buat kenapa dipisah dari YES_PATTERN.
+  const isNext = YES_PATTERN.test(text) || NEXT_PAGE_PATTERN.test(text);
   const isPrev = PREV_PAGE_PATTERN.test(text);
   const isStop = NO_PATTERN.test(text);
   if (!isNext && !isPrev && !isStop) return null;
@@ -307,7 +311,7 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
     return 'Cok, ini udah halaman paling akhir. Balas "mundur" kalau mau balik.';
   }
   if (isPrev && pending.currentPage <= 0) {
-    return 'Cok, ini udah halaman pertama, gak bisa mundur lagi. Balas "y" kalau mau lanjut.';
+    return 'Cok, ini udah halaman pertama, gak bisa mundur lagi. Balas "y"/"maju" kalau mau lanjut.';
   }
 
   const targetPage = isNext ? pending.currentPage + 1 : pending.currentPage - 1;

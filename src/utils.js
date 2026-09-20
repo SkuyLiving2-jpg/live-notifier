@@ -141,13 +141,14 @@ function pickRandom(list) {
 const YES_PATTERN = /^(y|ya|iya|iyah|iy|yes|yup|yoi|oke|ok|gas|mau|boleh)$/i;
 const NO_PATTERN = /^(n|no|ga|gak|kaga|nggak|enggak|tidak|males|ga\s*mau|nggak\s*mau)$/i;
 
-// Khusus buat navigasi MUNDUR di halaman rekap (chat/replies.js's
+// Khusus buat navigasi MAJU/MUNDUR di halaman rekap (chat/replies.js's
 // tryHandleRecapPageShortcut) - dipisah dari YES_PATTERN/NO_PATTERN (yang
-// tetep dipake apa adanya buat "lanjut ke halaman berikutnya"/"udahan") biar
-// gak nabrak flow konfirmasi lain yang juga makein YES_PATTERN/NO_PATTERN
-// (mis. watch-confirm di chat/menu.js) - "n"/"nggak" DI SITU artinya "gak
-// jadi nonton", BUKAN "mundur halaman", jadi harus tetep kata kunci
-// terpisah, bukan dobel-arti dari NO_PATTERN.
+// tetep dipake apa adanya di flow konfirmasi LAIN, mis. watch-confirm di
+// chat/menu.js) biar gak nabrak arti "y"/"n" di situ ("mau nonton?"/"gak
+// jadi nonton", BUKAN "maju/mundur halaman"). NEXT_PAGE_PATTERN ini
+// TAMBAHAN buat "y" (bukan gantiin) - "y" tetep jalan biar gak ngerusak
+// kebiasaan yang udah ada, cuma sekarang "maju"/"forward"/dst juga diterima.
+const NEXT_PAGE_PATTERN = /^(maju|forward|lanjut|lanjutkan|next|berikutnya)$/i;
 const PREV_PAGE_PATTERN = /^(mundur|balik|kembali|sebelumnya|prev|previous|back)$/i;
 
 module.exports = {
@@ -170,5 +171,6 @@ module.exports = {
   pickRandom,
   YES_PATTERN,
   NO_PATTERN,
+  NEXT_PAGE_PATTERN,
   PREV_PAGE_PATTERN,
 };

@@ -17,6 +17,8 @@ const {
   pickRandom,
   YES_PATTERN,
   NO_PATTERN,
+  NEXT_PAGE_PATTERN,
+  PREV_PAGE_PATTERN,
 } = require("../src/utils");
 
 test("formatDuration - jam & menit", () => {
@@ -117,4 +119,16 @@ test("YES_PATTERN / NO_PATTERN", () => {
   for (const no of ["n", "gak", "nggak", "tidak", "males"]) assert.match(no, NO_PATTERN);
   assert.doesNotMatch("kapan", YES_PATTERN);
   assert.doesNotMatch("kapan", NO_PATTERN);
+});
+
+// NEXT_PAGE_PATTERN/PREV_PAGE_PATTERN - alternatif kata kunci navigasi
+// halaman rekap (chat/replies.js's tryHandleRecapPageShortcut), TERPISAH
+// dari YES_PATTERN/NO_PATTERN biar gak nabrak arti "y"/"n" di flow
+// konfirmasi lain (mis. watch-confirm di chat/menu.js).
+test("NEXT_PAGE_PATTERN / PREV_PAGE_PATTERN", () => {
+  for (const next of ["maju", "forward", "lanjut", "next", "berikutnya"]) assert.match(next, NEXT_PAGE_PATTERN);
+  for (const prev of ["mundur", "balik", "kembali", "prev", "back"]) assert.match(prev, PREV_PAGE_PATTERN);
+  assert.doesNotMatch("y", NEXT_PAGE_PATTERN); // "y" tetep cuma di YES_PATTERN, gak dobel di sini
+  assert.doesNotMatch("kapan", NEXT_PAGE_PATTERN);
+  assert.doesNotMatch("kapan", PREV_PAGE_PATTERN);
 });
