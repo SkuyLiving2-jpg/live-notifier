@@ -160,6 +160,40 @@ test("POST /api/backfill-live-history - sesi invalid (kurang field/endedAt <= st
   }
 });
 
+// Bug fatal yang dilaporin user: rekap nunjukkin durasi ratusan jam (121j,
+// 122j, dll) - root cause-nya reconstructSessions di scripts/backfill-live-history.js
+// yang FIFO-pairing-nya salah pas ada "start" numpuk tanpa "end" (udah
+// diperbaiki, lihat tests/backfillLiveHistory.test.js). Ini jaring pengaman
+// KEDUA di sisi server - bahkan kalau kliennya somehow ngirim sesi durasi
+// implausible (mis. dari script versi lama sebelum fix), server HARUS
+// nolaknya sendiri, bukan percaya buta ke apa yang dikirim.
+test("POST /api/backfill-live-history - sesi durasi implausible (>12 jam) ditolak juga di sisi server, gak ikut ke-accept", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const body = JSON.stringify({
+      dryRun: true,
+      sessions: [
+        { name: "Wajar", username: "jkt48_wajar", startedAtUnix: nowSec - 3600, endedAtUnix: nowSec },
+        { name: "Ngaco", username: "jkt48_ngaco", startedAtUnix: nowSec - 122 * 60 * 60, endedAtUnix: nowSec }, // 122 jam
+      ],
+    });
+    const { timestamp, signature } = sign(body);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    const data = await res.json();
+    assert.equal(data.totalReceived, 2);
+    assert.equal(data.totalValid, 1, "cuma sesi yang durasinya wajar yang harusnya lolos valid");
+  } finally {
+    server.close();
+  }
+});
+
 test("POST /api/backfill-live-history - dryRun:false beneran nulis, dan aman dipanggil ULANG (idempotent, gak dobel)", async () => {
   const server = await startTestServer();
   try {
@@ -301,6 +335,105 @@ test("POST /api/backfill-live-history - request tanpa signature ditolak (401)", 
     const res = await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
       method: "POST",
       body: JSON.stringify({ sessions: [] }),
+    });
+    assert.equal(res.status, 401);
+  } finally {
+    server.close();
+  }
+});
+
+// scripts/repair-live-history.js's server-side counterpart - buat beresin
+// data yang UDAH TERLANJUR korup (durasi implausible) dari backfill versi
+// lama, sebelum reconstructSessions-nya diperbaiki. Seed daily-log +
+// duration-history LANGSUNG (bukan lewat /api/backfill-live-history, yang
+// sekarang udah nolak durasi implausible sejak dites - ini mensimulasikan
+// data yang kesimpen SEBELUM validasi itu ada).
+test("POST /api/repair-live-history - dryRun:true cuma preview, gak beneran ngubah data", async () => {
+  const startFn = freshStartServerForBackfillTest();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { recordLiveDurationAt } = require("../src/storage/durationHistory");
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  recordLiveEnded("Wajar", "jkt48_repair_wajar", new Date((nowSec - 3600) * 1000), new Date(nowSec * 1000), null);
+  recordLiveEnded("Ngaco", "jkt48_repair_ngaco", new Date((nowSec - 122 * 60 * 60) * 1000), new Date(nowSec * 1000), null);
+  recordLiveDurationAt("jkt48_repair_ngaco", "Ngaco", 122 * 60 * 60 * 1000, new Date(nowSec * 1000));
+
+  const server = await startTestServer(startFn);
+  try {
+    const { port } = server.address();
+    const body = JSON.stringify({ dryRun: true });
+    const { timestamp, signature } = sign(body);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/repair-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    const data = await res.json();
+    assert.equal(data.dryRun, true);
+    assert.equal(data.dailyLogRemoved, 1);
+    assert.equal(data.durationHistoryRemoved, 1);
+
+    const { timestamp: t2, signature: s2 } = sign("");
+    const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
+      headers: { "X-Api-Timestamp": t2, "X-Api-Signature": s2 },
+    });
+    const backup = await backupRes.json();
+    assert.equal(backup.dailyLog.sessions.length, 2, "dryRun harusnya gak beneran ngehapus apa-apa");
+  } finally {
+    server.close();
+  }
+});
+
+test("POST /api/repair-live-history - dryRun:false beneran buang sesi/entry durasi implausible, dan rebuild live-count dari sisanya", async () => {
+  const startFn = freshStartServerForBackfillTest();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { recordLiveDurationAt } = require("../src/storage/durationHistory");
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  recordLiveEnded("Wajar", "jkt48_repair2_wajar", new Date((nowSec - 3600) * 1000), new Date(nowSec * 1000), null);
+  recordLiveEnded("Ngaco", "jkt48_repair2_ngaco", new Date((nowSec - 122 * 60 * 60) * 1000), new Date(nowSec * 1000), null);
+  recordLiveDurationAt("jkt48_repair2_wajar", "Wajar", 3600 * 1000, new Date(nowSec * 1000));
+  recordLiveDurationAt("jkt48_repair2_ngaco", "Ngaco", 122 * 60 * 60 * 1000, new Date(nowSec * 1000));
+
+  const server = await startTestServer(startFn);
+  try {
+    const { port } = server.address();
+    const body = JSON.stringify({ dryRun: false });
+    const { timestamp, signature } = sign(body);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/repair-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    const data = await res.json();
+    assert.equal(data.dryRun, false);
+    assert.equal(data.dailyLogRemoved, 1);
+    assert.equal(data.dailyLogSessionsRemaining, 1);
+    assert.equal(data.durationHistoryRemoved, 1);
+
+    const { timestamp: t2, signature: s2 } = sign("");
+    const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
+      headers: { "X-Api-Timestamp": t2, "X-Api-Signature": s2 },
+    });
+    const backup = await backupRes.json();
+    assert.equal(backup.dailyLog.sessions.length, 1);
+    assert.equal(backup.dailyLog.sessions[0].name, "Wajar");
+    assert.equal(backup.durationHistory.jkt48_repair2_ngaco, undefined);
+    assert.equal(backup.durationHistory.jkt48_repair2_wajar.length, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test("POST /api/repair-live-history - request tanpa signature ditolak (401)", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const res = await fetch(`http://127.0.0.1:${port}/api/repair-live-history`, {
+      method: "POST",
+      body: JSON.stringify({ dryRun: true }),
     });
     assert.equal(res.status, 401);
   } finally {

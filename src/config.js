@@ -51,6 +51,15 @@ const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID || "";
 // buat member itu). Bisa di-override lewat env var, satuannya menit.
 const DEFAULT_ENDING_SOON_THRESHOLD_MS = (Number(process.env.ENDING_SOON_THRESHOLD_MINUTES) || 40) * 60 * 1000;
 
+// Live IDN paling lama yang REALISTIS masih masuk akal (generous - live
+// beneran hampir gak pernah lebih dari beberapa jam). Dipake buat nyaring
+// sesi yang durasinya jelas-jelas ngaco (ratusan jam) - baik pas backfill
+// ngerekonstruksi sesi dari histori pesan Discord (scripts/backfill-live-history.js)
+// maupun pas server nerima hasilnya (server.js's handleBackfillLiveHistory),
+// biar data korup gak ke-simpen dua kali di dua tempat yang beda. Lihat
+// ARCHITECTURE.md §10 buat cerita lengkap bug-nya.
+const MAX_PLAUSIBLE_LIVE_DURATION_MS = 12 * 60 * 60 * 1000;
+
 if (!DISCORD_WEBHOOK_URL) {
   console.error("DISCORD_WEBHOOK_URL belum diset di environment variable. Bot berhenti.");
   process.exit(1);
@@ -147,6 +156,7 @@ module.exports = {
   DISCORD_BOT_TOKEN,
   BOT_CHANNEL_ID,
   DEFAULT_ENDING_SOON_THRESHOLD_MS,
+  MAX_PLAUSIBLE_LIVE_DURATION_MS,
   JKT48_USERNAME_WHITELIST,
   NALA_END_MESSAGE_POOL,
   PRIORITY_MEMBERS,

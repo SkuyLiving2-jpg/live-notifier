@@ -29,7 +29,7 @@ const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const { signPayload } = require("../src/security");
 const { createDiscordClient } = require("../src/discordClient");
-const { PRIORITY_PING_USER_ID } = require("../src/config");
+const { PRIORITY_PING_USER_ID, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("../src/config");
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
@@ -164,38 +164,69 @@ function parseDmEvents(messages, botUserId) {
   return events;
 }
 
-// Pasangin "start" -> "end" PER NAMA, FIFO (start paling tua dipasangin ke
-// end paling tua berikutnya buat nama yang sama) - cukup buat pola normal
-// (1 live berjalan per member di satu waktu). "start" tanpa "end" (mis. live
-// yang masih jalan pas histori diambil) dan "end" tanpa "start" (mis. pesan
-// start-nya kehapus manual) SENGAJA dilewatin, bukan ditebak-tebak.
+// Pasangin "start" -> "end" PER NAMA - SATU sesi terbuka per nama di satu
+// waktu (member yang sama gak mungkin live 2x bersamaan), BUKAN antrian FIFO
+// kayak versi sebelumnya. Versi FIFO lama nyimpen SEMUA "start" yang belum
+// kepasangin dalam array per nama, dan "end" berikutnya selalu masangin ke
+// yang PALING TUA di antrian itu - kalau ada 2 "start" numpuk tanpa "end" di
+// antaranya (mis. bot sempet restart di tengah live terus notif "mulai live"
+// kekirim ULANG buat live yang sama, atau notif "selesai" yang lama kehapus
+// manual), "end" yang beneran buat "start" YANG BARU malah kepasangin ke
+// "start" YANG LAMA - durasinya jadi ngaco parah (bisa ratusan jam), dan
+// "start" yang baru masih nyangkut di antrian buat "end" SETERUSNYA, jadi
+// makin lama makin ngaco (efek berantai). Ini PERSIS bug fatal yang
+// dilaporin user (rekap nunjukkin durasi 121 jam, 122 jam, dll).
+//
+// Sekarang: "start" baru buat nama yang UDAH punya sesi terbuka nge-CLOSE
+// (buang, bukan pasangin) sesi lama itu ke unmatchedStarts - lebih baik
+// kehilangan satu histori yang emang gak lengkap (gak ada "end"-nya) daripada
+// masangin ke "end" yang salah dan ngerusak durasi.
 function reconstructSessions(events) {
-  const openByName = new Map();
+  const openByName = new Map(); // name -> { username, atMs } - CUMA satu slot per nama
   const sessions = [];
+  const discardedSessions = [];
   const unmatchedEnds = [];
+  const unmatchedStarts = [];
 
   for (const ev of events) {
     if (ev.type === "start") {
-      if (!openByName.has(ev.name)) openByName.set(ev.name, []);
-      openByName.get(ev.name).push({ username: ev.username, atMs: ev.atMs });
+      const orphaned = openByName.get(ev.name);
+      if (orphaned) unmatchedStarts.push({ name: ev.name, ...orphaned });
+      openByName.set(ev.name, { username: ev.username, atMs: ev.atMs });
       continue;
     }
-    const queue = openByName.get(ev.name);
-    if (queue && queue.length > 0) {
-      const start = queue.shift();
-      sessions.push({
-        name: ev.name,
-        username: start.username,
-        startedAtUnix: Math.floor(start.atMs / 1000),
-        endedAtUnix: Math.floor(ev.atMs / 1000),
-      });
-    } else {
+
+    const open = openByName.get(ev.name);
+    if (!open) {
       unmatchedEnds.push(ev);
+      continue;
+    }
+    openByName.delete(ev.name);
+
+    const session = {
+      name: ev.name,
+      username: open.username,
+      startedAtUnix: Math.floor(open.atMs / 1000),
+      endedAtUnix: Math.floor(ev.atMs / 1000),
+    };
+    // Jaring pengaman TERAKHIR - bahkan dengan pairing satu-slot di atas,
+    // durasi implausible (mis. dari kombinasi pesan yang aneh/rusak) tetap
+    // dibuang di sini, bukan diloloskan ke server (yang juga ngecek ulang,
+    // tapi mending dicegah sedini mungkin & kelihatan di log lokal).
+    const durationMs = (session.endedAtUnix - session.startedAtUnix) * 1000;
+    if (durationMs > 0 && durationMs <= MAX_PLAUSIBLE_LIVE_DURATION_MS) {
+      sessions.push(session);
+    } else {
+      discardedSessions.push(session);
     }
   }
 
-  const unmatchedStarts = [...openByName.entries()].flatMap(([name, queue]) => queue.map((s) => ({ name, ...s })));
-  return { sessions, unmatchedStarts, unmatchedEnds };
+  for (const [name, open] of openByName.entries()) {
+    unmatchedStarts.push({ name, ...open });
+  }
+  unmatchedStarts.sort((a, b) => a.atMs - b.atMs);
+
+  return { sessions, discardedSessions, unmatchedStarts, unmatchedEnds };
 }
 
 async function pushToBot(sessions, dryRun) {
@@ -268,9 +299,17 @@ async function main() {
       events.sort((a, b) => a.atMs - b.atMs);
     }
 
-    const { sessions, unmatchedStarts, unmatchedEnds } = reconstructSessions(events);
+    const { sessions, discardedSessions, unmatchedStarts, unmatchedEnds } = reconstructSessions(events);
 
     console.log(`\n${sessions.length} sesi live berhasil direkonstruksi (start+end kepasangin).`);
+    if (discardedSessions.length > 0) {
+      console.log(
+        `${discardedSessions.length} sesi DIBUANG karena durasinya gak masuk akal (>${MAX_PLAUSIBLE_LIVE_DURATION_MS / 3600000} jam - kemungkinan pairing start/end yang salah, mis. notif "selesai"-nya sempet kehapus manual):`,
+      );
+      discardedSessions.forEach((s) =>
+        console.log(`  - ${s.name}: ${new Date(s.startedAtUnix * 1000).toISOString()} -> ${new Date(s.endedAtUnix * 1000).toISOString()}`),
+      );
+    }
     if (unmatchedStarts.length > 0) {
       console.log(`${unmatchedStarts.length} "mulai live" tanpa pasangan "selesai" (dilewatin, mis. live yang masih jalan pas histori diambil):`);
       unmatchedStarts.forEach((s) => console.log(`  - ${s.name} (${new Date(s.atMs).toISOString()})`));

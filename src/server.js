@@ -1,10 +1,10 @@
 const http = require("http");
 const { requireSignedRequest } = require("./security");
-const { API_SECRET, PORT } = require("./config");
+const { API_SECRET, PORT, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 const { activeLives } = require("./storage/activeLives");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
-const { loadDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
-const { loadDailyLog, recordLiveEnded, getEarliestSessionDate } = require("./storage/dailyLog");
+const { loadDurationHistory, saveDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
+const { loadDailyLog, saveDailyLog, recordLiveEnded, getEarliestSessionDate } = require("./storage/dailyLog");
 const { loadCustomPriorityMembers } = require("./storage/priorityStore");
 const { loadSubscriptions } = require("./storage/subscriptions");
 const { rebuildLiveCountFromSessions } = require("./storage/liveCount");
@@ -122,6 +122,12 @@ function handleBackfillLiveHistory(req, res, body) {
     return;
   }
 
+  // s.endedAtUnix - s.startedAtUnix dibatasin ke MAX_PLAUSIBLE_LIVE_DURATION_MS
+  // - jaring pengaman KEDUA (script pengirimnya sendiri, scripts/backfill-live-history.js,
+  // udah nyaring ini duluan di reconstructSessions) buat kasus sesi durasi
+  // ratusan jam yang ternyata masih bisa lolos ke sini (mis. dari script versi
+  // lama sebelum fix-nya, atau sumber lain di masa depan) - lihat ARCHITECTURE.md
+  // §10 buat cerita lengkap bug fatalnya (FIFO pairing start/end yang salah).
   const validSessions = sessions.filter(
     (s) =>
       s &&
@@ -131,7 +137,8 @@ function handleBackfillLiveHistory(req, res, body) {
       s.username &&
       typeof s.startedAtUnix === "number" &&
       typeof s.endedAtUnix === "number" &&
-      s.endedAtUnix > s.startedAtUnix,
+      s.endedAtUnix > s.startedAtUnix &&
+      (s.endedAtUnix - s.startedAtUnix) * 1000 <= MAX_PLAUSIBLE_LIVE_DURATION_MS,
   );
 
   const cutoffDateWIB = getEarliestSessionDate();
@@ -189,6 +196,77 @@ function handleBackfillLiveHistory(req, res, body) {
   );
 }
 
+// Nerima-nya sengaja gak validasi durasi (§ handleBackfillLiveHistory di atas
+// yang sekarang udah nyaring itu duluan) TAPI data yang KADUNG kesimpen dari
+// SEBELUM validasi itu ada masih korup di Volume Railway - endpoint ini buat
+// beresin data yang UDAH TERLANJUR nyangkut, bukan nyaring data baru.
+// Dipanggil sekali lewat scripts/repair-live-history.js abis fix-nya deploy.
+//
+// Beresin 3 tempat: (1) daily-log.json - buang sesi durasinya implausible,
+// (2) live-duration-history.json - buang entry implausible per username,
+// (3) live-count.json - di-REBUILD ULANG dari daily-log.json yang UDAH
+// dibersihin di langkah (1) (bukan dari data lama yang mungkin masih ngitung
+// sesi korup yang udah dibuang) - retention daily-log 35 hari lebih dari
+// cukup nyakup seluruh histori bot ini sejauh ini, jadi aman dipake sebagai
+// sumber REBUILD total, bukan cuma partial.
+function handleRepairLiveHistory(req, res, body) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed, pakai POST" }));
+    return;
+  }
+
+  let payload;
+  try {
+    payload = body ? JSON.parse(body) : {};
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body bukan JSON valid" }));
+    return;
+  }
+  const dryRun = Boolean(payload?.dryRun);
+
+  const isImplausible = (durationMs) => !(durationMs > 0) || durationMs > MAX_PLAUSIBLE_LIVE_DURATION_MS;
+
+  const log = loadDailyLog();
+  const cleanedSessions = log.sessions.filter((s) => !isImplausible((s.endedAtUnix - s.startedAtUnix) * 1000));
+  const dailyLogRemoved = log.sessions.length - cleanedSessions.length;
+
+  const durationHistory = loadDurationHistory();
+  let durationHistoryRemoved = 0;
+  for (const username of Object.keys(durationHistory)) {
+    durationHistoryRemoved += durationHistory[username].filter((e) => isImplausible(e.durationMs)).length;
+  }
+
+  if (!dryRun) {
+    log.sessions = cleanedSessions;
+    saveDailyLog(log);
+
+    for (const username of Object.keys(durationHistory)) {
+      const cleaned = durationHistory[username].filter((e) => !isImplausible(e.durationMs));
+      if (cleaned.length === 0) delete durationHistory[username];
+      else durationHistory[username] = cleaned;
+    }
+    saveDurationHistory(durationHistory);
+
+    rebuildLiveCountFromSessions(cleanedSessions);
+
+    console.log(
+      `Repair live-history: ${dailyLogRemoved} sesi dibuang dari daily-log, ${durationHistoryRemoved} entry dibuang dari duration-history, live-count direbuild dari ${cleanedSessions.length} sesi.`,
+    );
+  }
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      dryRun,
+      dailyLogSessionsRemaining: cleanedSessions.length,
+      dailyLogRemoved,
+      durationHistoryRemoved,
+    }),
+  );
+}
+
 // Dipake tiap endpoint /api/* yang butuh signature - dedup dari 3 blok
 // "kalau API_SECRET belum diset, 503" + requireSignedRequest yang sebelumnya
 // (sebelum backup ditambah) udah diulang 2x identik.
@@ -231,6 +309,11 @@ function startServer() {
 
       if (req.url === "/api/backfill-live-history") {
         signedEndpoint(handleBackfillLiveHistory)(req, res);
+        return;
+      }
+
+      if (req.url === "/api/repair-live-history") {
+        signedEndpoint(handleRepairLiveHistory)(req, res);
         return;
       }
 

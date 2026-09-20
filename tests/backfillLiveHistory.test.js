@@ -159,7 +159,7 @@ test("parseDmEvents - pesan DM dari bot sendiri (author.id cocok) ke-parse, pesa
   assert.equal(events[0].username, "jkt48_nala");
 });
 
-test("reconstructSessions - pasangin start->end per nama (FIFO), termasuk 2x live berturut-turut buat member yang SAMA", () => {
+test("reconstructSessions - pasangin start->end per nama, termasuk 2x live berturut-turut buat member yang SAMA", () => {
   const events = [
     { type: "start", name: "Nala", username: "jkt48_nala", atMs: 1000 },
     { type: "end", name: "Nala", atMs: 2000 },
@@ -207,4 +207,52 @@ test("reconstructSessions - dua member BEDA live bersamaan gak saling ketuker pa
   assert.equal(byName.Nala.endedAtUnix, 2);
   assert.equal(byName.Levi.startedAtUnix, 1);
   assert.equal(byName.Levi.endedAtUnix, 2);
+});
+
+// BUG FATAL yang dilaporin user: rekap nunjukkin durasi ratusan jam (121j,
+// 122j, dll). Root cause-nya versi FIFO lama - kalau ada 2 "start" numpuk
+// tanpa "end" di antaranya buat member yang SAMA (mis. bot sempet restart di
+// tengah live, notif "mulai live" kekirim ULANG), "end" berikutnya kepasangin
+// ke "start" YANG PALING TUA di antrian, bukan yang paling relevan (paling
+// baru) - durasinya jadi ngaco parah. Regresi ini mastiin start KEDUA (bukan
+// yang pertama) yang menang, dan start pertama yang "ke-orphan" masuk
+// unmatchedStarts, BUKAN diam-diam ilang atau kepasangin salah.
+test("reconstructSessions - 2 'start' numpuk tanpa 'end' di antaranya (member sama) TIDAK kepasangin ke end yang salah - ini bug fatal yang dilaporin user", () => {
+  const events = [
+    { type: "start", name: "Aralie", username: "jkt48_aralie", atMs: 1000 },
+    { type: "start", name: "Aralie", username: "jkt48_aralie", atMs: 2000 }, // start kedua numpuk, gak ada 'end' di antara 1000 dan ini
+    { type: "end", name: "Aralie", atMs: 3000 },
+  ];
+
+  const { sessions, unmatchedStarts } = reconstructSessions(events);
+
+  // Sesi yang kebentuk HARUS pasangan start KEDUA (2000) + end (3000), BUKAN
+  // start PERTAMA (1000) + end (3000) - versi lama bakal ngasilin durasi 2
+  // detik yang salah (dari start 1000), bukan 1 detik yang bener (dari start
+  // kedua, 2000).
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].startedAtUnix, 2);
+  assert.equal(sessions[0].endedAtUnix, 3);
+
+  // Start pertama yang ke-orphan HARUS kecatet di unmatchedStarts, bukan
+  // ilang diem-diem atau kepasangin ke end yang salah.
+  assert.equal(unmatchedStarts.length, 1);
+  assert.equal(unmatchedStarts[0].atMs, 1000);
+});
+
+test("reconstructSessions - sesi dengan durasi implausible (>12 jam) dibuang ke discardedSessions, bukan diloloskan sebagai sesi beneran", () => {
+  const events = [
+    { type: "start", name: "Indah", username: "jkt48_indah", atMs: 0 },
+    { type: "end", name: "Indah", atMs: 13 * 60 * 60 * 1000 }, // 13 jam - implausible
+    { type: "start", name: "Jessi", username: "jkt48_jessi", atMs: 0 },
+    { type: "end", name: "Jessi", atMs: 60 * 60 * 1000 }, // 1 jam - wajar
+  ];
+
+  const { sessions, discardedSessions } = reconstructSessions(events);
+
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].name, "Jessi");
+
+  assert.equal(discardedSessions.length, 1);
+  assert.equal(discardedSessions[0].name, "Indah");
 });

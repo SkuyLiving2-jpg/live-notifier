@@ -12,7 +12,8 @@
     "format:check": "prettier --check .",
     "cek-gifter": "node scripts/cek-top-gifter.js",
     "backup-data": "node scripts/backup-data.js",
-    "backfill-live-history": "node scripts/backfill-live-history.js"
+    "backfill-live-history": "node scripts/backfill-live-history.js",
+    "repair-live-history": "node scripts/repair-live-history.js"
   },
   "engines": {
     "node": ">=18"
