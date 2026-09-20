@@ -350,4 +350,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { extractWebhookIds, parseEvents, parseDmEvents, parsePriorityEmbedEvent, reconstructSessions };
+module.exports = {
+  extractWebhookIds,
+  resolveWebhookChannelId,
+  fetchAllMessages,
+  parseEvents,
+  parseDmEvents,
+  parsePriorityEmbedEvent,
+  reconstructSessions,
+};

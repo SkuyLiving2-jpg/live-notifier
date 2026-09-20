@@ -13,7 +13,8 @@
     "cek-gifter": "node scripts/cek-top-gifter.js",
     "backup-data": "node scripts/backup-data.js",
     "backfill-live-history": "node scripts/backfill-live-history.js",
-    "repair-live-history": "node scripts/repair-live-history.js"
+    "repair-live-history": "node scripts/repair-live-history.js",
+    "count-priority-notifs": "node scripts/count-priority-notifs.js"
   },
   "engines": {
     "node": ">=18"
