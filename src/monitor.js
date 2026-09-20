@@ -57,6 +57,17 @@ async function checkLiveMembers() {
         }
         await maybeAlertEndingSoon(entry, durationHistory);
         await maybeAlertViewerMilestone(entry);
+        // BUG SEBELUMNYA: viewCount/peakViewCount di atas cuma dimutasi di
+        // Map in-memory - saveActiveLives() sebelumnya cuma kepanggil kalau
+        // maybeAlertEndingSoon/maybeAlertViewerMilestone kebetulan nge-trigger
+        // (nyimpen SENDIRI pas nulis flag alert-nya). Kalau bot restart
+        // (redeploy Railway, dll) SEBELUM itu ke-trigger lagi, active-lives-cache.json
+        // di disk masih punya peakViewCount BASI dari awal live-nya doang -
+        // abis restart, puncak penonton yang beneran udah dicapai sebelum
+        // restart itu HILANG (peak "reset" ke angka lama), bikin "cok siapa
+        // yang paling rame ditonton" salah buat live yang nyebrang restart.
+        // Disimpen tiap siklus sekarang, bukan cuma pas ada alert.
+        saveActiveLives();
       }
     }
 

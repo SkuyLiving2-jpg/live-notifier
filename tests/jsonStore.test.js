@@ -54,3 +54,28 @@ test("file JSON rusak -> load() fallback ke defaultValue, bukan throw", () => {
   const store = createJsonStore(filePath, { fallback: true });
   assert.deepEqual(store.load(), { fallback: true });
 });
+
+// BUG: sebelumnya save() nge-update cache in-memory DULUAN sebelum nulis ke
+// disk beneran - kalau writeFileSync gagal (disk penuh, permission, dll),
+// load() berikutnya (dalam proses yang SAMA) tetep balikin value yang GAGAL
+// ditulis itu, padahal file di disk masih isi yang lama. Dites dengan
+// nge-mock fs.writeFileSync biar throw, tanpa beneran butuh disk penuh.
+test("save() yang GAGAL nulis ke disk TIDAK ikut nge-update cache in-memory - load() abis itu masih balikin data lama", () => {
+  const filePath = tempFile("writefail.json");
+  const store = createJsonStore(filePath, { initial: true });
+  store.save({ version: 1 });
+  assert.deepEqual(store.load(), { version: 1 });
+
+  const original = fs.writeFileSync;
+  fs.writeFileSync = () => {
+    throw new Error("simulasi disk penuh");
+  };
+  try {
+    store.save({ version: 2 });
+  } finally {
+    fs.writeFileSync = original;
+  }
+
+  assert.deepEqual(store.load(), { version: 1 }, "cache HARUS tetap yang lama, bukan value yang gagal ditulis");
+  assert.deepEqual(JSON.parse(fs.readFileSync(filePath, "utf-8")), { version: 1 }, "file di disk juga harus tetap yang lama");
+});

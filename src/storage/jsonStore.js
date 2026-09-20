@@ -29,12 +29,19 @@ function createJsonStore(filePath, defaultValue, { errorLabel } = {}) {
     return cache;
   }
 
+  // `cache` CUMA di-update abis writeFileSync BENERAN sukses - sebelumnya
+  // cache di-update DULUAN (optimistic), jadi kalau nulis ke disk gagal
+  // (disk penuh, permission error, dll), proses yang lagi jalan tetep
+  // "percaya" data barunya udah ke-simpen (load() berikutnya balikin value
+  // yang GAGAL ditulis itu), padahal file di disk masih isi yang LAMA -
+  // silently out-of-sync sampai proses ini restart dan kehilangan data yang
+  // dikira udah aman tersimpan.
   function save(value) {
-    cache = value;
-    hasCache = true;
     try {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+      cache = value;
+      hasCache = true;
     } catch (error) {
       console.error(`Gagal nyimpen ${errorLabel || path.basename(filePath)}:`, error.message);
     }
