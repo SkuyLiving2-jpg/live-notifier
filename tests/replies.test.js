@@ -52,7 +52,11 @@ function freshRepliesForRecapRange() {
   }
   const dailyLog = require("../src/storage/dailyLog");
   const replies = require("../src/chat/replies");
-  return { recordLiveEnded: dailyLog.recordLiveEnded, replyRecapRange: replies.replyRecapRange };
+  return {
+    recordLiveEnded: dailyLog.recordLiveEnded,
+    replyRecapRange: replies.replyRecapRange,
+    tryHandleRecapPageShortcut: replies.tryHandleRecapPageShortcut,
+  };
 }
 
 function unixAt(dateWIB, timeHHMM) {
@@ -303,4 +307,81 @@ test("replyRecapRange - arsip UDAH nyakup rentang penuh -> TANPA catatan penjela
 
   const reply = await freshReplyRecapRange(7, "minggu ini", "c-fullarchive", "u-fullarchive");
   assert.doesNotMatch(reply, /pencatatan multi-hari baru mulai/);
+});
+
+// Bug yang dilaporin owner: "list-nya gak bisa dimundurin ya, kembali ke
+// halaman sebelumnya gitu?" - sebelumnya cuma ada navigasi MAJU ("y" buat
+// halaman berikutnya), dan begitu nyampe halaman TERAKHIR, pending state-nya
+// gak kebentuk sama sekali (nextPage-based, cuma diset pas hasMore true) -
+// jadi user yang lagi di halaman terakhir gak punya cara balik ke halaman
+// sebelumnya. Sekarang pending state-nya nyimpen currentPage dan tetep ada
+// selama totalPages > 1, jadi bisa mundur dari halaman manapun termasuk
+// yang terakhir.
+test("tryHandleRecapPageShortcut - bisa maju ('y') DAN mundur ('mundur') bolak-balik antar halaman", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange, tryHandleRecapPageShortcut } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  // 25 sesi -> 2 halaman (RECAP_TABLE_PAGE_SIZE = 20).
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Member${i}`,
+      `jkt48_pagetest${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-pagetest";
+  const authorId = "u-pagetest";
+
+  const page0 = await freshReplyRecapRange(7, "minggu ini", channelId, authorId);
+  assert.match(page0, /Halaman 1\/2/);
+  assert.match(page0, /mau liat halaman berikutnya\? Balas "y"/);
+
+  const page1 = await tryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.match(page1, /Halaman 2\/2/);
+  assert.match(page1, /udah paling akhir\. Balas "mundur"/);
+
+  // Coba maju lagi dari halaman terakhir - harus ditolak dengan sopan, BUKAN
+  // dianggap gak ngerti (null) atau nge-crash.
+  const pastLast = await tryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.match(pastLast, /udah halaman paling akhir/);
+
+  // Mundur balik ke halaman 1.
+  const backToPage0 = await tryHandleRecapPageShortcut("mundur", channelId, authorId);
+  assert.match(backToPage0, /Halaman 1\/2/);
+  assert.match(backToPage0, /mau liat halaman berikutnya\? Balas "y"/);
+
+  // Coba mundur lagi dari halaman pertama - harus ditolak dengan sopan juga.
+  const pastFirst = await tryHandleRecapPageShortcut("mundur", channelId, authorId);
+  assert.match(pastFirst, /halaman pertama, gak bisa mundur lagi/);
+});
+
+test("tryHandleRecapPageShortcut - 'n' tetep ngebatalin navigasi sepenuhnya (beda dari 'mundur')", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange, tryHandleRecapPageShortcut } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Batal${i}`,
+      `jkt48_stoptest${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-stoptest";
+  const authorId = "u-stoptest";
+  await freshReplyRecapRange(7, "minggu ini", channelId, authorId);
+
+  const stopped = await tryHandleRecapPageShortcut("n", channelId, authorId);
+  assert.match(stopped, /segitu aja ya/);
+
+  // Pending state-nya harus udah kehapus - "y" abis "n" gak boleh dianggep lanjut halaman lagi.
+  const afterStop = await tryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.equal(afterStop, null);
 });

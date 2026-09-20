@@ -26,6 +26,7 @@ const {
   stripTrailingLiveWord,
   YES_PATTERN,
   NO_PATTERN,
+  PREV_PAGE_PATTERN,
 } = require("../utils");
 
 function replyListLive() {
@@ -233,36 +234,53 @@ function getTodaySessionsForRecap() {
   return [...completed, ...ongoing];
 }
 
-// "channelId:authorId" -> { nextPage, at, rangeDays } - nunggu jawaban y/n
-// abis nunjukkin 1 halaman tabel rekap yang masih ada lanjutannya. Sama
-// pola-nya kayak pendingWatchConfirm (di chat/menu.js, di-key per orang
-// bukan per channel, biar jawaban orang lain di channel yang sama gak
-// nyasar ke halaman punya orang ini). `rangeDays` (null = "hari ini",
-// gabungan sama activeLives; angka = rekap mingguan/bulanan, cuma sesi yang
-// UDAH selesai) dicatet biar halaman BERIKUTNYA tau harus narik dari daftar
-// sesi yang SAMA, bukan default balik ke rekap hari ini - dulu (sebelum
-// rekap mingguan/bulanan ada) cuma ada 1 jenis rekap jadi ini gak masalah,
-// sekarang WAJIB biar lanjut halaman rekap minggu ini gak diem-diem ganti
-// jadi nunjukkin rekap hari ini.
+// "channelId:authorId" -> { currentPage, totalPages, at, rangeDays } - nunggu
+// jawaban y/mundur/n abis nunjukkin 1 halaman tabel rekap. Sama pola-nya
+// kayak pendingWatchConfirm (di chat/menu.js, di-key per orang bukan per
+// channel, biar jawaban orang lain di channel yang sama gak nyasar ke
+// halaman punya orang ini). `rangeDays` (null = "hari ini", gabungan sama
+// activeLives; angka = rekap mingguan/bulanan, cuma sesi yang UDAH selesai)
+// dicatet biar halaman lain tau harus narik dari daftar sesi yang SAMA,
+// bukan default balik ke rekap hari ini - dulu (sebelum rekap mingguan/
+// bulanan ada) cuma ada 1 jenis rekap jadi ini gak masalah, sekarang WAJIB
+// biar navigasi halaman rekap minggu ini gak diem-diem ganti jadi nunjukkin
+// rekap hari ini.
+//
+// SENGAJA nyimpen currentPage (bukan cuma nextPage kayak sebelumnya) dan
+// nyimpen pending state SELAMA totalPages > 1 - BUKAN cuma pas hasMore true
+// (ada halaman berikutnya). Sebelumnya, begitu user nyampe halaman TERAKHIR,
+// pending state-nya gak pernah kebentuk (hasMore-nya udah false), jadi user
+// yang lagi di halaman terakhir gak punya cara mundur balik ke halaman
+// sebelumnya sama sekali - itu bug yang dilaporin owner: "list-nya gak bisa
+// dimundurin ya?".
 const pendingRecapPage = new Map();
 const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 
 function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = null) {
   const result = buildRecapTablePage(sessions, page);
-  const footer = result.hasMore
-    ? `_(Halaman ${result.page + 1}/${result.totalPages} - masih ada lagi, mau liat halaman berikutnya? Balas "y")_`
-    : `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir)_`;
+  const hasPrev = result.page > 0;
 
-  if (result.hasMore && channelId && authorId) {
-    pendingRecapPage.set(`${channelId}:${authorId}`, { nextPage: result.page + 1, at: Date.now(), rangeDays });
+  let footer;
+  if (result.hasMore && hasPrev) {
+    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - balas "y" buat lanjut, atau "mundur" buat balik ke halaman sebelumnya)_`;
+  } else if (result.hasMore) {
+    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - masih ada lagi, mau liat halaman berikutnya? Balas "y")_`;
+  } else if (hasPrev) {
+    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir. Balas "mundur" buat balik ke halaman sebelumnya)_`;
+  } else {
+    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir)_`;
+  }
+
+  if (result.totalPages > 1 && channelId && authorId) {
+    pendingRecapPage.set(`${channelId}:${authorId}`, { currentPage: result.page, totalPages: result.totalPages, at: Date.now(), rangeDays });
   }
 
   return `${result.text}\n${footer}`;
 }
 
 // Dicek di awal chat/router.js's buildChatReply (sama pola kayak
-// menu.js's tryHandleWatchConfirmShortcut) - jawaban "y"/"n" polos buat
-// lanjut halaman rekap gak nyebut "cok"/"live", jadi harus ditangkep
+// menu.js's tryHandleWatchConfirmShortcut) - jawaban "y"/"mundur"/"n" polos
+// buat navigasi halaman rekap gak nyebut "cok"/"live", jadi harus ditangkep
 // sebelum gerbang wake-word.
 async function tryHandleRecapPageShortcut(text, channelId, authorId) {
   if (!channelId || !authorId) return null;
@@ -275,15 +293,26 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
     return null;
   }
 
-  const isYes = YES_PATTERN.test(text);
-  const isNo = NO_PATTERN.test(text);
-  if (!isYes && !isNo) return null;
+  const isNext = YES_PATTERN.test(text);
+  const isPrev = PREV_PAGE_PATTERN.test(text);
+  const isStop = NO_PATTERN.test(text);
+  if (!isNext && !isPrev && !isStop) return null;
 
-  pendingRecapPage.delete(key);
-  if (isNo) return "Oke, segitu aja ya.";
+  if (isStop) {
+    pendingRecapPage.delete(key);
+    return "Oke, segitu aja ya.";
+  }
 
+  if (isNext && pending.currentPage >= pending.totalPages - 1) {
+    return 'Cok, ini udah halaman paling akhir. Balas "mundur" kalau mau balik.';
+  }
+  if (isPrev && pending.currentPage <= 0) {
+    return 'Cok, ini udah halaman pertama, gak bisa mundur lagi. Balas "y" kalau mau lanjut.';
+  }
+
+  const targetPage = isNext ? pending.currentPage + 1 : pending.currentPage - 1;
   const sessions = pending.rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(pending.rangeDays);
-  return buildRecapPageBlock(sessions, pending.nextPage, channelId, authorId, pending.rangeDays);
+  return buildRecapPageBlock(sessions, targetPage, channelId, authorId, pending.rangeDays);
 }
 
 // Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00
