@@ -123,6 +123,13 @@ const PRIORITY_MEMBERS = [
     sirens: "🚨🔥🚨",
     buttonLabel: "➡️ GAS, INI LIVE PALING URGENT SEDUNIA! ➡️",
     endMessagePool: NALA_END_MESSAGE_POOL,
+    // startIntro/startHashtag (opsional, lihat priority/index.js's
+    // buildPriorityPayload) - sentuhan khusus di notif "mulai live" DM,
+    // sama kayak endMessagePool cuma di-opt-in buat Nala doang. Levi/Lily
+    // sengaja dibiarin kosong (undefined), jadi notif mereka tetap format
+    // standar.
+    startIntro: "Nala, si Best Friend mu lagi Live",
+    startHashtag: "#NaLex",
   },
   { rank: 2, keyword: "levi", label: "LEVI", color: 0xff0000, sirens: "🚨⚡🚨" },
   { rank: 3, keyword: "lily", label: "LILY", color: 0x3498db, sirens: "🚨✨🚨" },

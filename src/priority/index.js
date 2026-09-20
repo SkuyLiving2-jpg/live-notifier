@@ -98,8 +98,15 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, {
     };
   }
 
+  // startIntro/startHashtag (opsional, lihat config.js's PRIORITY_MEMBERS) -
+  // cuma diisi buat member yang mau dikasih sentuhan khusus di notif "mulai
+  // live"-nya (misal Nala). Kalau kosong, tetap format standar kayak
+  // Levi/Lily - sama pola opt-in kayak endMessagePool di atas.
+  const introLine = priority.startIntro ? `${priority.startIntro}\n` : "";
+  const hashtagSuffix = priority.startHashtag ? ` ${priority.startHashtag}` : "";
+
   return {
-    content: `${mention}${priority.sirens.repeat(2)} **JANGAN SAMPE KETINGGALAN!** ${priority.sirens.repeat(2)}`,
+    content: `${introLine}${mention}${priority.sirens.repeat(2)} **JANGAN SAMPE KETINGGALAN!** ${priority.sirens.repeat(2)}${hashtagSuffix}`,
     embeds: [
       {
         title: `⚡ PRIORITAS #${priority.rank}: ${priority.label} LIVE SEKARANG! ⚡`,

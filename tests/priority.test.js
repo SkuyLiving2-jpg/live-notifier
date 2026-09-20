@@ -94,3 +94,17 @@ test("buildPriorityPayload - status end pake endMessagePool kalau ada (Nala), pl
   const leviEnd = buildPriorityPayload("Levi", "https://idn.app/x", "end", levi, null);
   assert.equal(leviEnd.embeds[0].fields, undefined, "Levi gak punya endMessagePool, jadi gak ada field");
 });
+
+test("buildPriorityPayload - status start pake startIntro/startHashtag kalau ada (Nala), plain kalau enggak (Levi)", () => {
+  const nala = getAllPriorityMembers().find((m) => m.keyword === "nala");
+  const levi = getAllPriorityMembers().find((m) => m.keyword === "levi");
+
+  const nalaStart = buildPriorityPayload("Nala", "https://idn.app/x", "start", nala, null);
+  assert.match(nalaStart.content, /^Nala, si Best Friend mu lagi Live\n/);
+  assert.match(nalaStart.content, /JANGAN SAMPE KETINGGALAN/);
+  assert.match(nalaStart.content, /#NaLex$/);
+
+  const leviStart = buildPriorityPayload("Levi", "https://idn.app/x", "start", levi, null);
+  assert.doesNotMatch(leviStart.content, /Best Friend/);
+  assert.doesNotMatch(leviStart.content, /#NaLex/);
+});
