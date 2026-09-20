@@ -4,9 +4,10 @@ const { API_SECRET, PORT } = require("./config");
 const { activeLives } = require("./storage/activeLives");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
 const { loadDurationHistory } = require("./storage/durationHistory");
-const { loadDailyLog } = require("./storage/dailyLog");
+const { loadDailyLog, recordLiveEnded, getEarliestSessionDate } = require("./storage/dailyLog");
 const { loadCustomPriorityMembers } = require("./storage/priorityStore");
 const { loadSubscriptions } = require("./storage/subscriptions");
+const { rebuildLiveCountFromSessions } = require("./storage/liveCount");
 
 // Endpoint contoh yang dilindungi signature - nunjukkin data internal bot
 // yang lebih detail dibanding health-check publik. Pola ini yang dipake
@@ -84,6 +85,84 @@ function handleBackupExport(req, res) {
   );
 }
 
+// Nerima riwayat live yang direkonstruksi dari histori pesan notif Discord
+// (lihat scripts/backfill-live-history.js) - satu-satunya cara ngisi
+// SEBELUM daily-log.json jadi arsip beneran (16c4b7c, 2026-09-19), soalnya
+// kode sendiri nggak pernah nyimpen data selengkap itu (lihat ARCHITECTURE.md
+// §10's bug-history keempat). Kode ini gak bisa "nebak" data yang emang gak
+// pernah kecatet - satu-satunya sumber yang lebih lengkap dari kode kita
+// sendiri adalah histori pesan Discord-nya sendiri (kalau belum dihapus).
+//
+// Cuma nerima sesi yang SELESAI-nya sebelum sesi PALING TUA yang UDAH ADA
+// sekarang - biar gak dobel sama yang udah beneran ke-track live oleh bot
+// sendiri (lihat getEarliestSessionDate). Ini juga bikin endpoint-nya aman
+// dipanggil ulang (idempotent): abis backfill pertama sukses, earliest date
+// arsip jadi mundur ke histori yang baru ditambahin, jadi panggilan kedua
+// otomatis nolak nyisipin ulang sesi yang sama.
+function handleBackfillLiveHistory(req, res, body) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed, pakai POST" }));
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body bukan JSON valid" }));
+    return;
+  }
+
+  const sessions = Array.isArray(payload?.sessions) ? payload.sessions : null;
+  if (!sessions) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body harus punya sessions (array)" }));
+    return;
+  }
+
+  const validSessions = sessions.filter(
+    (s) =>
+      s &&
+      typeof s.name === "string" &&
+      s.name &&
+      typeof s.username === "string" &&
+      s.username &&
+      typeof s.startedAtUnix === "number" &&
+      typeof s.endedAtUnix === "number" &&
+      s.endedAtUnix > s.startedAtUnix,
+  );
+
+  const cutoffDateWIB = getEarliestSessionDate();
+  const cutoffUnix = cutoffDateWIB ? Math.floor(new Date(`${cutoffDateWIB}T00:00:00+07:00`).getTime() / 1000) : Infinity;
+  const accepted = validSessions.filter((s) => s.endedAtUnix < cutoffUnix);
+
+  const dryRun = Boolean(payload.dryRun);
+  if (!dryRun) {
+    for (const s of accepted) {
+      recordLiveEnded(s.name, s.username, new Date(s.startedAtUnix * 1000), new Date(s.endedAtUnix * 1000), null);
+    }
+    // Direbuild dari SELURUH sesi valid yang dikirim (bukan cuma yang
+    // accepted ke daily-log) - histori pesan Discord nyakup seluruh linimasa
+    // bot jalan, jadi ini otoritatif buat total ALL-TIME, gak cuma buat
+    // ngisi celah sebelum daily-log ada.
+    rebuildLiveCountFromSessions(validSessions);
+  }
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      dryRun,
+      totalReceived: sessions.length,
+      totalValid: validSessions.length,
+      cutoffDateWIB,
+      acceptedIntoDailyLog: accepted.length,
+      skippedAlreadyCovered: validSessions.length - accepted.length,
+    }),
+  );
+}
+
 // Dipake tiap endpoint /api/* yang butuh signature - dedup dari 3 blok
 // "kalau API_SECRET belum diset, 503" + requireSignedRequest yang sebelumnya
 // (sebelum backup ditambah) udah diulang 2x identik.
@@ -121,6 +200,11 @@ function startServer() {
 
       if (req.url === "/api/backup") {
         signedEndpoint(handleBackupExport)(req, res);
+        return;
+      }
+
+      if (req.url === "/api/backfill-live-history") {
+        signedEndpoint(handleBackfillLiveHistory)(req, res);
         return;
       }
 

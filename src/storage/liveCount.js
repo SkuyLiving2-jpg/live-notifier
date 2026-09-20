@@ -37,6 +37,32 @@ function recordLiveCompleted(username, name) {
   saveLiveCount(data);
 }
 
+// Nge-set ULANG seluruh live-count.json dari daftar sesi LENGKAP yang
+// direkonstruksi dari histori pesan notif Discord (lihat
+// scripts/backfill-live-history.js + server.js's handleBackfillLiveHistory)
+// - REPLACE total, BUKAN nambahin di atas data yang ada. Ini sengaja beda
+// dari recordLiveCompleted (yang nambahin satu-satu tiap live beneran
+// selesai): histori pesan Discord nyakup SELURUH linimasa dari awal bot
+// jalan (bukan cuma sejak fitur ini ada), jadi lebih otoritatif - hasil
+// rebuild dari situ SEHARUSNYA nggantiin counter yang mungkin baru mulai
+// kehitung belakangan, bukan ditambahin ke atasnya (nanti dobel).
+function rebuildLiveCountFromSessions(sessions) {
+  const data = {};
+  for (const session of sessions) {
+    if (!session.username || typeof session.endedAtUnix !== "number") continue;
+    const endedAtIso = new Date(session.endedAtUnix * 1000).toISOString();
+    const existing = data[session.username];
+    data[session.username] = {
+      name: session.name,
+      count: (existing?.count || 0) + 1,
+      firstLiveAt: existing && existing.firstLiveAt < endedAtIso ? existing.firstLiveAt : endedAtIso,
+      lastLiveAt: existing && existing.lastLiveAt > endedAtIso ? existing.lastLiveAt : endedAtIso,
+    };
+  }
+  saveLiveCount(data);
+  return data;
+}
+
 function findLiveCountByNameFragment(fragment) {
   const needle = (fragment || "").trim().toLowerCase();
   if (!needle) return null;
@@ -51,4 +77,10 @@ function findLiveCountByNameFragment(fragment) {
   return null;
 }
 
-module.exports = { loadLiveCount, saveLiveCount, recordLiveCompleted, findLiveCountByNameFragment };
+module.exports = {
+  loadLiveCount,
+  saveLiveCount,
+  recordLiveCompleted,
+  rebuildLiveCountFromSessions,
+  findLiveCountByNameFragment,
+};

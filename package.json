@@ -11,7 +11,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "cek-gifter": "node scripts/cek-top-gifter.js",
-    "backup-data": "node scripts/backup-data.js"
+    "backup-data": "node scripts/backup-data.js",
+    "backfill-live-history": "node scripts/backfill-live-history.js"
   },
   "engines": {
     "node": ">=18"
