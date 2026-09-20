@@ -64,6 +64,16 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 
   if (!mentionsBot && !looksLikeLiveQuestion) return null;
 
+  // Wake-word "cok" dibuang dari AWAL kalimat buat pola-pola di bawah yang
+  // nempatin nama member DULUAN (mis. "lily berapa kali live?") - tanpa ini,
+  // capture group yang gak dianchor bisa "kebablasan" ngambil "cok" juga
+  // jadi bagian dari nama ("cok lily" alih-alih "lily"). Pola yang nempatin
+  // keyword-nya DULUAN (kayak "berapa kali lily live?", "jadwal lily", dst)
+  // gak kepengaruh sama sekali - regex mereka nyari kata kuncinya duluan,
+  // apapun yang ada sebelum kata kunci itu (termasuk "cok") gak pernah ikut
+  // ke-capture.
+  const commandText = text.replace(/^cok[,.!?]?\s+/, "");
+
   const addPriorityMatch = text.match(/tambah(?:in|kan)?\s+prioritas\s+(.+)/);
   if (addPriorityMatch) {
     return handleAddPriority(addPriorityMatch[1], authorId);
@@ -99,13 +109,17 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return replyMemberStats(statsMatch[1]);
   }
 
-  // "berapa kali (si) <nama> live" - kata tanya "berapa kali" HARUS di depan
-  // nama (bukan pola "<nama> ... berapa kali" sebaliknya), soalnya beda dari
-  // jadwalMatch/statsMatch/gifterMatch, di sini gak ada literal keyword yang
-  // motong nama dari wake-word "cok" di depannya kalau namanya ditaro duluan
-  // - "cok nala udah berapa kali live" bakal ke-capture jadi "cok nala",
-  // bukan "nala", kalau capture groupnya ditaro sebelum literal "berapa kali".
-  const liveCountMatch = text.match(/berapa\s+kali\s+(?:si\s+)?(.+?)\s+live\b/);
+  // Dua cara natural buat nanya total hitungan live, sama pola dual-arah
+  // kayak jadwal/kapan-live di bawah: "berapa kali (si) <nama> live" (kata
+  // tanya duluan, dicek dari `text` biasa - literal "berapa kali" motong
+  // nama dari "cok" di depannya) ATAU "<nama> (udah/sudah) berapa kali live"
+  // (nama duluan - dicek dari `commandText`, yang wake-word-nya udah
+  // dibuang, DAN di-anchor ke awal string sama `^`, biar capture-nya beneran
+  // cuma "lily", bukan "cok lily" - ini bug beneran yang dilaporin user:
+  // "lily berapa kali live?" dulu gak match sama sekali karena cuma pola
+  // pertama yang ada, jatuh ke fallback "member gak lagi live" yang salah).
+  const liveCountMatch =
+    text.match(/berapa\s+kali\s+(?:si\s+)?(.+?)\s+live\b/) || commandText.match(/^(.+?)\s+(?:udah\s+|sudah\s+)?berapa\s+kali\s+live\b/);
   if (liveCountMatch) {
     return replyLiveCount(liveCountMatch[1]);
   }

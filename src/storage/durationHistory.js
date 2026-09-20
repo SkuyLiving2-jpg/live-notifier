@@ -22,9 +22,26 @@ function saveDurationHistory(history) {
 // stats & pengumuman rekor, biar bisa nyari riwayat orang yang LAGI NGGAK
 // live (activeLives udah kehapus begitu dia selesai live).
 function recordLiveDuration(username, name, durationMs) {
+  recordLiveDurationAt(username, name, durationMs, new Date());
+}
+
+// Versi recordLiveDuration yang nerima `at` (waktu SELESAI live) eksplisit,
+// bukan selalu "sekarang" - dipake scripts/backfill-live-history.js's
+// server-side endpoint buat ngisi riwayat dari sesi LAMA yang direkonstruksi
+// dari histori pesan Discord (recordLiveDuration biasa gak cocok buat itu,
+// soalnya dia hardcode `at: new Date()`, bakal nyatet histori lama seolah
+// baru aja kejadian - ngerusak pola jam/hari yang dipake replySchedulePattern).
+//
+// List di-SORT dulu berdasarkan `at` sebelum di-slice(-10) - beda dari
+// recordLiveDuration biasa (yang selalu nambahin di UJUNG paling baru, jadi
+// gak butuh sorting), backfill bisa nyisipin entry yang tanggalnya lebih TUA
+// dari entry yang udah ada, dan slice(-10) tanpa sorting bakal salah motong
+// (bisa-bisa malah mbuang entry yang lebih baru).
+function recordLiveDurationAt(username, name, durationMs, atDate) {
   const history = loadDurationHistory();
   const list = history[username] || [];
-  list.push({ name, durationMs, at: new Date().toISOString() });
+  list.push({ name, durationMs, at: atDate.toISOString() });
+  list.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
   history[username] = list.slice(-10);
   saveDurationHistory(history);
 }
@@ -63,6 +80,7 @@ module.exports = {
   loadDurationHistory,
   saveDurationHistory,
   recordLiveDuration,
+  recordLiveDurationAt,
   getAverageDuration,
   getPreviousMaxDuration,
   findDurationHistoryByNameFragment,

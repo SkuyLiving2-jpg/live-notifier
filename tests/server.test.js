@@ -6,20 +6,53 @@ require("./helpers/setupTestEnv");
 process.env.PORT = "0";
 process.env.API_SECRET = "test-secret-buat-server-test";
 
+const fs = require("fs");
+const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { signPayload } = require("../src/security");
+const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { startServer } = require("../src/server");
 
 // Server ini di-listen di localhost port OS-assigned doang - gak ada
 // koneksi keluar ke Discord/IDN/Railway sama sekali, jadi aman dijalanin
 // beneran di test (beda dari monitor.js's pollLoop yang sengaja DIHINDARIN
 // - lihat tests/monitor.test.js).
-function startTestServer() {
-  const server = startServer();
+function startTestServer(startFn = startServer) {
+  const server = startFn();
   return new Promise((resolve) => {
     server.on("listening", () => resolve(server));
   });
+}
+
+// server.js's handleBackfillLiveHistory nulis ke 3 storage module sekaligus
+// (dailyLog/durationHistory/liveCount), dan ke-3-nya (+ server.js sendiri,
+// yang capture reference fungsi mereka pas di-require) di-cache in-memory
+// buat seumur hidup proses test ini (sama alasannya kayak
+// tests/dailyLog.test.js/tests/replies.test.js's fresh-instance helper) -
+// jadi test yang assert TOTAL EXACT (bukan cuma "apakah username ini ada")
+// butuh server yang BENERAN fresh, gak numpang sisa data dari test lain di
+// file yang sama (mis. cutoff getEarliestSessionDate() ke-geser gara-gara
+// sesi yang dibackfill test SEBELUMNYA, walau username-nya beda).
+const SERVER_MODULE_PATH = require.resolve("../src/server");
+const BACKFILL_STORAGE_MODULE_PATHS = [
+  require.resolve("../src/storage/dailyLog"),
+  require.resolve("../src/storage/durationHistory"),
+  require.resolve("../src/storage/liveCount"),
+];
+const BACKFILL_STORAGE_FILES = ["daily-log.json", "live-duration-history.json", "live-count.json"];
+
+function freshStartServerForBackfillTest() {
+  delete require.cache[SERVER_MODULE_PATH];
+  BACKFILL_STORAGE_MODULE_PATHS.forEach((p) => delete require.cache[p]);
+  BACKFILL_STORAGE_FILES.forEach((f) => {
+    try {
+      fs.unlinkSync(path.join(tempCacheDir, f));
+    } catch {
+      // wajar kalau belum pernah ada file-nya
+    }
+  });
+  return require("../src/server").startServer;
 }
 
 function sign(body) {
@@ -163,6 +196,50 @@ test("POST /api/backfill-live-history - dryRun:false beneran nulis, dan aman dip
     });
     const backup = await backupRes.json();
     assert.equal(backup.dailyLog.sessions.length, 2, "dipanggil 2x tapi sesinya HARUS tetap cuma 2, bukan 4 (dobel)");
+  } finally {
+    server.close();
+  }
+});
+
+// Bug yang dilaporin user: "cok kapan lily live?" cuma nunjukkin 1 riwayat
+// walau lily udah 3x live sebelum backfill - ternyata backfill sebelumnya
+// CUMA ngisi daily-log.json + live-count.json, gak nyentuh
+// live-duration-history.json (yang dipake "cok kapan .../cok stats") sama
+// sekali. Dites di sini: sesi yang di-accept ke daily-log HARUS juga masuk
+// ke live-duration-history.json, dengan `at` HISTORIS (bukan waktu backfill
+// dijalanin) - lihat storage/durationHistory.js's recordLiveDurationAt.
+test("POST /api/backfill-live-history - dryRun:false juga ngisi live-duration-history.json (dipake 'cok kapan .../cok stats', bukan cuma daily-log)", async () => {
+  const server = await startTestServer(freshStartServerForBackfillTest());
+  try {
+    const { port } = server.address();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const daysAgo = (n) => nowSec - n * 24 * 60 * 60;
+    const sessions = [
+      { name: "Lily", username: "jkt48_lily_histtest", startedAtUnix: daysAgo(20), endedAtUnix: daysAgo(20) + 3600 },
+      { name: "Lily", username: "jkt48_lily_histtest", startedAtUnix: daysAgo(15), endedAtUnix: daysAgo(15) + 3600 },
+      { name: "Lily", username: "jkt48_lily_histtest", startedAtUnix: daysAgo(10), endedAtUnix: daysAgo(10) + 3600 },
+    ];
+    const body = JSON.stringify({ dryRun: false, sessions });
+    const { timestamp, signature } = sign(body);
+    await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+
+    const { timestamp: t2, signature: s2 } = sign("");
+    const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
+      headers: { "X-Api-Timestamp": t2, "X-Api-Signature": s2 },
+    });
+    const backup = await backupRes.json();
+    const entries = backup.durationHistory.jkt48_lily_histtest;
+    assert.equal(entries.length, 3);
+    // `at` harus deket sama waktu SESI-nya beneran SELESAI (endedAtUnix =
+    // daysAgo(20) + 3600), BUKAN deket "sekarang" (yang berarti
+    // recordLiveDuration biasa yang kepanggil, bukan recordLiveDurationAt).
+    const oldestAt = new Date(entries[0].at).getTime();
+    const expectedOldestEndedAtMs = (daysAgo(20) + 3600) * 1000;
+    assert.ok(Math.abs(oldestAt - expectedOldestEndedAtMs) < 5000, "`at` harus historis (~20 hari lalu), bukan waktu backfill dijalanin");
   } finally {
     server.close();
   }

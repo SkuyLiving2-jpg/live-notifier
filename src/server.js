@@ -3,7 +3,7 @@ const { requireSignedRequest } = require("./security");
 const { API_SECRET, PORT } = require("./config");
 const { activeLives } = require("./storage/activeLives");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
-const { loadDurationHistory } = require("./storage/durationHistory");
+const { loadDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
 const { loadDailyLog, recordLiveEnded, getEarliestSessionDate } = require("./storage/dailyLog");
 const { loadCustomPriorityMembers } = require("./storage/priorityStore");
 const { loadSubscriptions } = require("./storage/subscriptions");
@@ -142,6 +142,13 @@ function handleBackfillLiveHistory(req, res, body) {
   if (!dryRun) {
     for (const s of accepted) {
       recordLiveEnded(s.name, s.username, new Date(s.startedAtUnix * 1000), new Date(s.endedAtUnix * 1000), null);
+      // Sama "accepted" (BUKAN validSessions) dipake di sini juga - live-duration-history.json
+      // (dipake "cok stats"/"cok kapan ... live") kena masalah dobel yang
+      // sama kayak daily-log kalau ini jalan 2x, jadi dia ikut pola cutoff
+      // yang sama biar tetep idempotent. recordLiveDurationAt (bukan
+      // recordLiveDuration biasa) soalnya butuh `at` HISTORIS, bukan "sekarang"
+      // - kalau enggak, pola jam/hari yang dihitung replySchedulePattern jadi ngaco.
+      recordLiveDurationAt(s.username, s.name, (s.endedAtUnix - s.startedAtUnix) * 1000, new Date(s.endedAtUnix * 1000));
     }
     // Direbuild dari SELURUH sesi valid yang dikirim (bukan cuma yang
     // accepted ke daily-log) - histori pesan Discord nyakup seluruh linimasa

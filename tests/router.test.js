@@ -71,6 +71,29 @@ test("berapa kali si <nama> live - varian dengan 'si' juga jalan", async () => {
   assert.match(reply, /belum ada catatan live buat "livecountroutertest2"/);
 });
 
+// Bug beneran yang dilaporin user: "Lily berapa kali Live?" (NAMA duluan,
+// bukan "berapa kali" duluan) malah kepick up sebagai fuzzy-match nama
+// member (jatuh ke findDurationHistoryByNameFragment's "lagi nggak live
+// sekarang" fallback) soalnya dulu liveCountMatch cuma punya 1 arah
+// ("berapa kali <nama> live"). Ini pola sebaliknya - HARUS ketangkep
+// duluan sebagai replyLiveCount, BUKAN jatuh ke fallback member-not-live.
+test("<nama> berapa kali live - urutan NAMA duluan (laporan bug asli) dispatch ke replyLiveCount, BUKAN fallback 'lagi nggak live'", async () => {
+  const reply = await buildChatReply("livecountnamefirsttest berapa kali live?");
+  assert.match(reply, /belum ada catatan live buat "livecountnamefirsttest"/);
+  assert.doesNotMatch(reply, /lagi nggak live sekarang/);
+});
+
+test("<nama> berapa kali live - wake-word 'cok' di depan nama GAK ikut ke-capture jadi bagian nama", async () => {
+  const reply = await buildChatReply("cok livecountcoktest berapa kali live?");
+  assert.match(reply, /belum ada catatan live buat "livecountcoktest"/);
+  assert.doesNotMatch(reply, /"cok /); // fragment-nya harus "livecountcoktest" doang, bukan "cok livecountcoktest"
+});
+
+test("<nama> berapa kali live - varian 'udah berapa kali live'", async () => {
+  const reply = await buildChatReply("livecountudahtest udah berapa kali live?");
+  assert.match(reply, /belum ada catatan live buat "livecountudahtest"/);
+});
+
 test("gifter <nama> - dispatch ke replyGifterSnapshot", async () => {
   const reply = await buildChatReply("cok gifter giftertestmember");
   assert.match(reply, /belum ada data top gifter buat "giftertestmember"/);
