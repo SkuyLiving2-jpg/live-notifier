@@ -113,6 +113,30 @@ test("parsePriorityEmbedEvent - pesan tanpa embed atau embed yang gak cocok pola
   assert.equal(parsePriorityEmbedEvent({ embeds: [{ title: "Judul random", description: "apa aja" }] }), null);
 });
 
+// BUG (ditemuin owner lewat scripts/count-priority-notifs.js: keyword search
+// nemu 10 pesan "JANGAN SAMPE KETINGGALAN" di channel, tapi parse terstruktur
+// cuma dapet 0). 4 HARI PERTAMA fitur notif prioritas jalan (73ddeba,
+// 2026-09-13 19:13 WIB, sampai b595d90, 2026-09-17 21:49 WIB - sebelum link
+// "TONTON SEKARANG" dipindah jadi tombol), embeds[0].description masih
+// nyantumin baris link manual DI BELAKANG nama member. PRIORITY_START_DESC_RE
+// lama pake jangkar `$` di ujung, jadi HANYA cocok buat format PENDEK yang
+// lebih baru - format PANJANG (4 hari pertama) gagal total, bukan sebagian.
+test("parsePriorityEmbedEvent - format description LAMA (4 hari pertama fitur ini, masih nyantumin link 'TONTON SEKARANG' manual) tetap ke-parse", () => {
+  const msg = {
+    embeds: [
+      {
+        title: "⚡ PRIORITAS #1: NALA LIVE SEKARANG! ⚡",
+        description: "**Nala** baru aja mulai live di IDN Live.\n\n[🔴 **TONTON SEKARANG**](https://idn.app/jkt48_nala/live/slug-abc)",
+        url: "https://idn.app/jkt48_nala/live/slug-abc",
+      },
+    ],
+    createdTimestamp: 1000,
+  };
+
+  const event = parsePriorityEmbedEvent(msg);
+  assert.deepEqual(event, { type: "start", name: "Nala", username: "jkt48_nala", atMs: 1000 });
+});
+
 test("parseEvents - format embed prioritas LAMA dan format plain BARU bisa ketangkep bareng dalam 1 channel yang sama", () => {
   const messages = [
     fakePriorityStartMessage({ name: "Nala", username: "jkt48_nala", createdTimestamp: 1000 }),

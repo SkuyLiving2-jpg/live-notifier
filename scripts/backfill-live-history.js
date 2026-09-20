@@ -53,8 +53,22 @@ const END_RE = /^✅ \*\*(.+?)\*\* udah selesai live di IDN Live\./;
 // juga perlu dicek. Nama member ada di embeds[0].description (bukan title -
 // itu isinya label/rank generik, bukan nama), username ditarik dari
 // embeds[0].url (link live-nya, format sama kayak yang di START_RE).
+//
+// PENTING soal PRIORITY_START_DESC_RE: SENGAJA gak dikasih jangkar `$` di
+// akhir - embeds[0].description-nya sendiri berubah bentuk 2x sepanjang
+// histori fitur ini (dites lewat "git log -S" di src/priority/index.js):
+// dari commit 73ddeba (2026-09-13 19:13 WIB, fitur ini pertama ada) sampai
+// b595d90 (2026-09-17 21:49 WIB), deskripsinya masih nyantumin baris link
+// manual di belakang nama ("...di IDN Live.\n\n[🔴 **TONTON SEKARANG**](url)")
+// - baru abis b595d90 (link-nya pindah jadi tombol beneran) deskripsinya jadi
+// CUMA "...di IDN Live." doang. Versi SEBELUMNYA ini yang awalnya kelewat -
+// regex lama pake `$` di ujung, jadi CUMA cocok buat format PENDEK yang lebih
+// baru; format PANJANG (4 hari pertama fitur ini jalan) gagal ke-match sama
+// sekali, dan durasi 4 hari itu sendiri makes it high-impact (channel jadi 0
+// notif prioritas ke-parse walau keyword-nya jelas ada, lihat ARCHITECTURE.md
+// §10's bug kesepuluh).
 const PRIORITY_START_TITLE_RE = /^⚡ PRIORITAS #\d+: .+ LIVE SEKARANG! ⚡$/;
-const PRIORITY_START_DESC_RE = /^\*\*(.+?)\*\* baru aja mulai live di IDN Live\.$/;
+const PRIORITY_START_DESC_RE = /^\*\*(.+?)\*\* baru aja mulai live di IDN Live\./;
 const PRIORITY_END_TITLE_RE = /sudah selesai live/;
 const PRIORITY_EMBED_URL_RE = /^https:\/\/idn\.app\/([^/]+)\/live\//;
 

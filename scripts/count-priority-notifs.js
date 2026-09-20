@@ -73,22 +73,39 @@ async function main() {
       console.log(`  - ${key}: ${count}x`);
     }
 
-    const structuredEvents = messages
-      .filter((m) => m.webhookId === webhookId)
-      .map(parsePriorityEmbedEvent)
-      .filter((ev) => ev && ev.type === "start");
+    const botKeywordMatches = keywordMatches.filter((m) => m.webhookId === webhookId);
+    const parsedByMsg = new Map(botKeywordMatches.map((m) => [m, parsePriorityEmbedEvent(m)]));
+    const startEvents = [...parsedByMsg.values()].filter((ev) => ev && ev.type === "start");
     const byName = new Map();
-    for (const ev of structuredEvents) {
+    for (const ev of startEvents) {
       byName.set(ev.name, (byName.get(ev.name) || 0) + 1);
     }
     const structuredTotal = [...byName.values()].reduce((a, b) => a + b, 0);
 
     console.log(`\n=== Parse terstruktur (embed valid, dari webhook bot ini doang): ${structuredTotal} notif "mulai live" prioritas ===`);
+    console.log("Nama member yang ketemu di keyword ini:");
     [...byName.entries()].sort((a, b) => b[1] - a[1]).forEach(([name, count]) => console.log(`  - ${name}: ${count}x`));
+
+    // Buat pesan yang keyword-nya nyantol TAPI parsePriorityEmbedEvent masih
+    // gagal (embed.description formatnya beda dari yang udah dikenal) - dump
+    // detail mentahnya di sini, biar kecek manual bukannya diem-diem ilang
+    // dari hitungan.
+    const unparsed = botKeywordMatches.filter((m) => !parsedByMsg.get(m));
+    if (unparsed.length > 0) {
+      console.log(`\n=== ${unparsed.length} pesan keyword yang MASIH gagal ke-parse - detail mentahnya ===`);
+      unparsed.forEach((m, i) => {
+        const embed = m.embeds && m.embeds[0];
+        console.log(`[${i + 1}] ${new Date(m.createdTimestamp).toISOString()}`);
+        console.log(`    content: ${m.content}`);
+        console.log(`    embed.title: ${embed?.title}`);
+        console.log(`    embed.description: ${embed?.description}`);
+        console.log(`    embed.url: ${embed?.url}`);
+      });
+    }
 
     if (keywordMatches.length !== structuredTotal) {
       console.log(
-        `\nCatatan: angka keyword (${keywordMatches.length}) beda sama angka terstruktur (${structuredTotal}) - kemungkinan ada pesan yang embed-nya gak ke-parse (format beda/rusak) atau bukan dari webhook bot ini. Cek daftar per-pengirim di atas.`,
+        `\nCatatan: angka keyword (${keywordMatches.length}) beda sama angka terstruktur (${structuredTotal}) - ${unparsed.length > 0 ? "lihat detail pesan yang gagal ke-parse di atas" : "kemungkinan ada yang bukan dari webhook bot ini, lihat daftar per-pengirim di atas"}.`,
       );
     }
   } finally {
