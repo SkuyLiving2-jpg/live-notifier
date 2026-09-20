@@ -147,16 +147,27 @@ function tryHandleWatchConfirmShortcut(text, channelId, authorId) {
   const pending = pendingWatchConfirm.get(key);
   if (!pending) return null;
 
-  if (Date.now() - pending.at > PENDING_WATCH_CONFIRM_TTL_MS) {
-    pendingWatchConfirm.delete(key);
+  const expired = Date.now() - pending.at > PENDING_WATCH_CONFIRM_TTL_MS;
+  const isYes = YES_PATTERN.test(text);
+  const isNo = NO_PATTERN.test(text);
+  if (!isYes && !isNo) {
+    // Bukan jawaban y/n - biarin ke routing normal. Kalau kebetulan udah
+    // expired, bersihin sekalian biar gak numpuk selamanya nungguin jawaban
+    // yang gak bakal dateng, tapi jangan ganggu pesan yang emang gak
+    // relevan ini dengan pesan "kelamaan mikirnya".
+    if (expired) pendingWatchConfirm.delete(key);
     return null;
   }
 
-  const isYes = YES_PATTERN.test(text);
-  const isNo = NO_PATTERN.test(text);
-  if (!isYes && !isNo) return null; // bukan jawaban y/n, biarin ke routing normal
-
   pendingWatchConfirm.delete(key); // sekali pake abis itu clear
+
+  // Kalau udah expired, jangan diem-diem lanjut ke routing normal (bisa
+  // nyasar ke fallback menu di bot-channel gara-gara "y"/"n" polos jatuh ke
+  // situ, kesannya jawaban orangnya gak "nyambung" ke apa-apa) - kasih tau
+  // eksplisit daripada bikin bingung.
+  if (expired) {
+    return `Yah, kelamaan mikirnya buat **${pending.name}** - kalau masih mau cek, tanya lagi ya.`;
+  }
 
   // Re-cek status live-nya SEKARANG, jangan percaya data lama - bisa aja
   // dia udah selesai live selagi user mikir mau jawab y/n apa nggak.
@@ -188,7 +199,11 @@ async function handleFallbackMenuButton(interaction) {
   if (optionId === "4") {
     const sorted = getSortedActiveLives();
     if (sorted.length === 0) {
-      await interaction.reply({ content: "Cok, lagi nggak ada member JKT48 yang live nih.", ephemeral: true });
+      // PUBLIK (bukan ephemeral) - ini jawaban FINAL (gak ada dropdown lanjutan
+      // buat dipilih), sama kayak balesan "cok siapa yang live" biasa lewat
+      // teks (replyListLive), jadi visibility-nya juga harus konsisten sama itu,
+      // bukan cuma keliatan orang yang mimic tombolnya doang.
+      await interaction.reply(replyListLive());
       return;
     }
 
@@ -206,10 +221,12 @@ async function handleFallbackMenuButton(interaction) {
   if (optionId === "9") {
     const sorted = getSortedGifterSnapshotMembers();
     if (sorted.length === 0) {
-      await interaction.reply({
-        content: 'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
-        ephemeral: true,
-      });
+      // PUBLIK juga, sama alasannya kayak opsi 4 - ini jawaban final, bukan
+      // langkah milih, jadi konsisten sama balesan "cok gifter <nama>" biasa
+      // yang juga publik pas datanya kosong.
+      await interaction.reply(
+        'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
+      );
       return;
     }
 

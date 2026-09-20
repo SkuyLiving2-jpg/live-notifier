@@ -91,6 +91,23 @@ test("tryHandleWatchConfirmShortcut - jawaban bukan y/n diabaikan (null), pendin
   }
 });
 
+test("tryHandleWatchConfirmShortcut - jawaban y/n yang udah EXPIRED (>2 menit) dikasih pesan eksplisit, bukan diem-diem jatuh ke routing normal", () => {
+  activeLives.set("jkt48_expiredtest", { name: "Expiredtest", username: "jkt48_expiredtest", slug: "s", liveAt: new Date().toISOString() });
+  const originalNow = Date.now;
+  try {
+    startWatchConfirmForEntry(activeLives.get("jkt48_expiredtest"), "c-expired", "u-expired");
+    Date.now = () => originalNow() + 3 * 60_000; // lompat 3 menit ke depan, ngelewatin TTL 2 menit
+    const reply = tryHandleWatchConfirmShortcut("y", "c-expired", "u-expired");
+    assert.match(reply, /kelamaan mikirnya/);
+
+    // Pending-nya udah ke-consume walau expired (bukan cuma "diem"), jadi jawab lagi harus null.
+    assert.equal(tryHandleWatchConfirmShortcut("y", "c-expired", "u-expired"), null);
+  } finally {
+    Date.now = originalNow;
+    activeLives.delete("jkt48_expiredtest");
+  }
+});
+
 test("tryHandleWatchConfirmShortcut - member udah kelar live pas user baru jawab -> dikasih tau, bukan link basi", () => {
   activeLives.set("jkt48_menutest4", { name: "Menutest4", username: "jkt48_menutest4", slug: "s", liveAt: new Date().toISOString() });
   startWatchConfirmForEntry(activeLives.get("jkt48_menutest4"), "c-watch4", "u-watch4");
@@ -110,12 +127,13 @@ test("startWatchConfirm - fuzzy name search: ketemu -> tanya y/n, gak ketemu -> 
   }
 });
 
-test("handleFallbackMenuButton - opsi 4 (cek member) balikin dropdown kalau ada yang live, ephemeral kalau kosong", async () => {
+test("handleFallbackMenuButton - opsi 4 (cek member) balikin dropdown kalau ada yang live, jawaban final PUBLIK (bukan ephemeral) kalau kosong", async () => {
   const emptyInteraction = fakeInteraction({ customId: "fallback_menu:4" });
   await handleFallbackMenuButton(emptyInteraction);
   assert.equal(emptyInteraction.calls.length, 1);
-  assert.match(emptyInteraction.calls[0].content, /nggak ada member JKT48 yang live/);
-  assert.equal(emptyInteraction.calls[0].ephemeral, true);
+  assert.match(emptyInteraction.calls[0], /nggak ada member JKT48 yang live/);
+  // Bukan object {content, ephemeral} - ini string biasa (sama kayak replyListLive()
+  // via teks), jadi otomatis publik, konsisten sama balesan teks yang setara.
 
   activeLives.set("jkt48_dropdowntest", { name: "Dropdowntest", username: "jkt48_dropdowntest", slug: "s", liveAt: new Date().toISOString() });
   try {
@@ -128,10 +146,10 @@ test("handleFallbackMenuButton - opsi 4 (cek member) balikin dropdown kalau ada 
   }
 });
 
-test("handleFallbackMenuButton - opsi 9 (top gifter) balikin dropdown kalau ada data, ephemeral kalau kosong", async () => {
+test("handleFallbackMenuButton - opsi 9 (top gifter) balikin dropdown kalau ada data, jawaban final PUBLIK (bukan ephemeral) kalau kosong", async () => {
   const emptyInteraction = fakeInteraction({ customId: "fallback_menu:9" });
   await handleFallbackMenuButton(emptyInteraction);
-  assert.match(emptyInteraction.calls[0].content, /belum ada data top gifter buat siapapun/);
+  assert.match(emptyInteraction.calls[0], /belum ada data top gifter buat siapapun/);
 
   saveGifterSnapshot({ members: { jkt48_giftermenutest: { name: "Giftermenutest", gifters: [], checkedAt: new Date().toISOString() } } });
   const withDataInteraction = fakeInteraction({ customId: "fallback_menu:9" });
