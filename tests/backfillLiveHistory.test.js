@@ -2,7 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { extractWebhookIds, parseEvents, parsePriorityEmbedEvent, reconstructSessions } = require("../scripts/backfill-live-history");
+const { extractWebhookIds, parseEvents, parseDmEvents, parsePriorityEmbedEvent, reconstructSessions } = require("../scripts/backfill-live-history");
 
 test("extractWebhookIds - narik id & token dari DISCORD_WEBHOOK_URL, error kalau formatnya gak dikenali", () => {
   const { webhookId, webhookToken } = extractWebhookIds("https://discord.com/api/webhooks/123456789/abcDEF-token_123");
@@ -129,6 +129,34 @@ test("parseEvents - format embed prioritas LAMA dan format plain BARU bisa ketan
   const byName = Object.fromEntries(sessions.map((s) => [s.name, s]));
   assert.equal(byName.Nala.username, "jkt48_nala");
   assert.equal(byName.Aralie.username, "jkt48_aralie");
+});
+
+// SEJAK 0bd317e, notif flashy prioritas dikirim lewat DM (bot -> pemilik),
+// bukan lewat webhook ke channel - author-nya si bot sendiri, bukan
+// webhookId. parseDmEvents yang nge-handle ini (lihat komentarnya di
+// scripts/backfill-live-history.js).
+function fakeDmMessage({ botUserId = "bot-1", embeds, createdTimestamp }) {
+  return { author: { id: botUserId }, embeds, content: "", createdTimestamp };
+}
+
+test("parseDmEvents - pesan DM dari bot sendiri (author.id cocok) ke-parse, pesan dari user lain diabaikan", () => {
+  const startEmbed = fakePriorityStartMessage({ name: "Nala", username: "jkt48_nala", createdTimestamp: 5000 }).embeds;
+  const endEmbed = fakePriorityEndMessage({ name: "Nala", createdTimestamp: 6000 }).embeds;
+
+  const messages = [
+    fakeDmMessage({ botUserId: "bot-1", embeds: startEmbed, createdTimestamp: 5000 }),
+    fakeDmMessage({ botUserId: "bot-1", embeds: endEmbed, createdTimestamp: 6000 }),
+    // pesan dari user (bukan bot) - author.id BEDA, harus diabaikan walau embed-nya kebetulan mirip
+    fakeDmMessage({ botUserId: "user-lain", embeds: startEmbed, createdTimestamp: 7000 }),
+  ];
+
+  const events = parseDmEvents(messages, "bot-1");
+  assert.equal(events.length, 2);
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["start", "end"],
+  );
+  assert.equal(events[0].username, "jkt48_nala");
 });
 
 test("reconstructSessions - pasangin start->end per nama (FIFO), termasuk 2x live berturut-turut buat member yang SAMA", () => {

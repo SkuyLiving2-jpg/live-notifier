@@ -29,6 +29,7 @@ const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const { signPayload } = require("../src/security");
 const { createDiscordClient } = require("../src/discordClient");
+const { PRIORITY_PING_USER_ID } = require("../src/config");
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
@@ -137,6 +138,32 @@ function parseEvents(messages, webhookId) {
   return events;
 }
 
+// SEJAK commit 0bd317e (2026-09-18 11:40 WIB), notif flashy "JANGAN SAMPE
+// KETINGGALAN!" buat member prioritas UDAH GAK diposting ke channel bersama
+// sama sekali - dipindah jadi DM PRIBADI dari bot ke PRIORITY_PING_USER_ID
+// (lihat notify/priorityDm.js's sendPriorityDM). Artinya histori live
+// prioritas dari tanggal itu DAN SETERUSNYA cuma ada di thread DM ini, bukan
+// di channel yang dibaca parseEvents() di atas - makanya sebelum fix ini,
+// backfill selalu ngasih 0 buat live prioritas yang terjadi SETELAH tanggal
+// itu (histori SEBELUM tanggal itu tetep kebaca normal lewat parseEvents,
+// soalnya dulu masih diposting ke channel).
+//
+// DM-nya SELALU pake format embed (buildPriorityPayload - gak pernah plain
+// content kayak buildNormalPayload), jadi parsePriorityEmbedEvent yang sama
+// dipake lagi di sini, cuma bedanya "siapa yang dipercaya" ngirim pesannya:
+// author-nya bot sendiri (client.user.id), BUKAN webhookId (DM gak lewat
+// webhook sama sekali).
+function parseDmEvents(messages, botUserId) {
+  const events = [];
+  for (const msg of messages) {
+    if (msg.author?.id !== botUserId) continue;
+    const priorityEvent = parsePriorityEmbedEvent(msg);
+    if (priorityEvent) events.push(priorityEvent);
+  }
+  events.sort((a, b) => a.atMs - b.atMs);
+  return events;
+}
+
 // Pasangin "start" -> "end" PER NAMA, FIFO (start paling tua dipasangin ke
 // end paling tua berikutnya buat nama yang sama) - cukup buat pola normal
 // (1 live berjalan per member di satu waktu). "start" tanpa "end" (mis. live
@@ -204,6 +231,9 @@ async function main() {
     console.error(`Env var berikut harus diisi di .env dulu: ${missing.join(", ")}`);
     process.exit(1);
   }
+  if (!PRIORITY_PING_USER_ID) {
+    console.log("PRIORITY_PING_USER_ID belum diset di .env - histori DM prioritas bakal dilewatin (channel biasa tetep dibaca normal).");
+  }
 
   const { webhookId, webhookToken } = extractWebhookIds(DISCORD_WEBHOOK_URL);
 
@@ -222,6 +252,22 @@ async function main() {
     console.log(`Total ${messages.length} pesan ditarik dari channel.`);
 
     const events = parseEvents(messages, webhookId);
+
+    // Histori DM prioritas ("JANGAN SAMPE KETINGGALAN!") - lihat komentar di
+    // parseDmEvents buat kenapa ini thread TERPISAH dari channel di atas.
+    if (PRIORITY_PING_USER_ID) {
+      console.log("Narik histori DM prioritas dari pemilik bot...");
+      const owner = await client.users.fetch(PRIORITY_PING_USER_ID);
+      const dmChannel = await owner.createDM();
+      const dmMessages = await fetchAllMessages(dmChannel);
+      console.log(`Total ${dmMessages.length} pesan ditarik dari DM.`);
+
+      const dmEvents = parseDmEvents(dmMessages, client.user.id);
+      console.log(`${dmEvents.length} event prioritas ketemu di DM.`);
+      events.push(...dmEvents);
+      events.sort((a, b) => a.atMs - b.atMs);
+    }
+
     const { sessions, unmatchedStarts, unmatchedEnds } = reconstructSessions(events);
 
     console.log(`\n${sessions.length} sesi live berhasil direkonstruksi (start+end kepasangin).`);
@@ -265,4 +311,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { extractWebhookIds, parseEvents, parsePriorityEmbedEvent, reconstructSessions };
+module.exports = { extractWebhookIds, parseEvents, parseDmEvents, parsePriorityEmbedEvent, reconstructSessions };
