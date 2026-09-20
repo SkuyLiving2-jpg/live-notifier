@@ -116,6 +116,19 @@ function getCompletedSessionsSince(daysBack) {
   return loadDailyLog().sessions.filter((s) => s.endedAtUnix >= cutoffUnix);
 }
 
+// Tanggal WIB (YYYY-MM-DD) sesi TERTUA yang ada di arsip SAAT INI - dipake
+// chat/replies.js's replyRecapRange buat ngasih tau kalau arsipnya belum
+// nyakup rentang yang diminta secara penuh (mis. arsip baru mulai kecatet
+// H-3, tapi user nanya rekap 7 hari) - biar recap-nya jujur ngasih tau
+// KENAPA rentangnya keliatan pendek, bukan diem-diem keliatan kayak bug.
+// Null kalau arsipnya masih kosong sama sekali.
+function getEarliestSessionDate() {
+  const sessions = loadDailyLog().sessions;
+  if (sessions.length === 0) return null;
+  const earliestUnix = Math.min(...sessions.map((s) => s.endedAtUnix));
+  return getDateWIB(new Date(earliestUnix * 1000));
+}
+
 // Dipanggil monitor.js pas sebuah live SELESAI. startedAtDate/endedAtDate
 // dari activeLives's liveAt (udah akurat, independen total dari file ini -
 // gak pernah kena bug rollover/reset apapun yang sempet kejadian di sini).
@@ -151,5 +164,6 @@ module.exports = {
   fetchExternalTodayLiveHistory,
   getCompletedSessionsToday,
   getCompletedSessionsSince,
+  getEarliestSessionDate,
   recordLiveEnded,
 };

@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { getTodayWIB } = require("../src/utils");
+const { getTodayWIB, getDateWIB } = require("../src/utils");
 
 const DAILY_LOG_FILE = path.join(tempCacheDir, "daily-log.json");
 const MODULE_PATH = require.resolve("../src/storage/dailyLog");
@@ -143,4 +143,21 @@ test("getCompletedSessionsSince - filter berdasarkan jendela waktu (dipake buat 
 
   const last30Days = getCompletedSessionsSince(30).map((s) => s.username);
   assert.deepEqual(last30Days.sort(), ["jkt48_10dayago", "jkt48_2dayago"]);
+});
+
+test("getEarliestSessionDate - tanggal WIB sesi TERTUA di arsip (null kalau arsip kosong)", () => {
+  const { getEarliestSessionDate, recordLiveEnded } = freshDailyLog();
+
+  assert.equal(getEarliestSessionDate(), null); // arsip kosong
+
+  const now = Date.now();
+  const fiveDaysAgo = new Date(now - 5 * 24 * 60 * 60 * 1000);
+  const oneDayAgo = new Date(now - 1 * 24 * 60 * 60 * 1000);
+
+  // Dicatet gak berurutan (yang lebih BARU duluan) - getEarliestSessionDate
+  // harus tetep nemu yang paling TUA, bukan cuma ngandelin urutan array.
+  recordLiveEnded("Nala", "jkt48_baru", new Date(oneDayAgo.getTime() - 60_000), oneDayAgo, 10);
+  recordLiveEnded("Levi", "jkt48_tua", new Date(fiveDaysAgo.getTime() - 60_000), fiveDaysAgo, 20);
+
+  assert.equal(getEarliestSessionDate(), getDateWIB(fiveDaysAgo));
 });

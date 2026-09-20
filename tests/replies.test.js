@@ -14,10 +14,12 @@ const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
 const { saveDurationHistory } = require("../src/storage/durationHistory");
+const { recordLiveCompleted } = require("../src/storage/liveCount");
 const {
   buildRecapTablePage,
   getTodaySessionsForRecap,
   replyMemberStats,
+  replyLiveCount,
   replySchedulePattern,
   replyPriorityList,
   handleSubscribe,
@@ -170,6 +172,27 @@ test("replyMemberStats - belum ada riwayat sama sekali", () => {
   assert.match(replyMemberStats("member-tanpa-riwayat-sama-sekali"), /belum ada data riwayat live/);
 });
 
+test("replyLiveCount - total hitungan live (beda dari replyMemberStats yang dibatesin 10 data terakhir)", () => {
+  // Sengaja BUKAN nama yang diawali "live" (mis. "livecounttest") - kata
+  // "live" sendiri bisa fuzzy-match ke nama kayak gitu lewat prefix match di
+  // matchesNameFragment, dan bikin test "belum ada catatan" di bawah
+  // (fragment-nya ngandung kata "live") ketuker nyantol ke sini.
+  recordLiveCompleted("jkt48_hitungtest", "Hitungtest");
+  recordLiveCompleted("jkt48_hitungtest", "Hitungtest");
+  recordLiveCompleted("jkt48_hitungtest", "Hitungtest");
+
+  const reply = replyLiveCount("hitungtest");
+  assert.match(reply, /\*\*Hitungtest\*\* udah live \*\*3x\*\*/);
+});
+
+test("replyLiveCount - belum ada catatan sama sekali", () => {
+  assert.match(replyLiveCount("member-tanpa-live-sama-sekali"), /belum ada catatan live/);
+});
+
+test("replyLiveCount - fragment kosong nanya nama duluan", () => {
+  assert.match(replyLiveCount(""), /Live count siapa\?/);
+});
+
 test("replySchedulePattern - kurang dari 3 riwayat -> 'masih kurang', minimal 3 -> nebak pola jam", () => {
   saveDurationHistory({ jkt48_scheduletest: [{ name: "Scheduletest", durationMs: 3600_000, at: "2026-06-01T21:00:00+07:00" }] });
   assert.match(replySchedulePattern("scheduletest"), /masih kurang/);
@@ -243,4 +266,41 @@ test("replyRecapRange - agregasi sesi dalam rentang waktu, TANPA gabung activeLi
   } finally {
     activeLives.delete("jkt48_rangetest_ongoing");
   }
+});
+
+// Bug yang dilaporin user: "rekap minggu ini" cuma nunjukkin beberapa hari
+// terakhir walau bot udah jalan lebih dari 7 hari - ternyata BUKAN bug
+// filter (getCompletedSessionsSince beneran benar), tapi arsip multi-harinya
+// sendiri baru mulai kecatet belakangan (lihat git history: dailyLog.js
+// dulu reset session-nya TIAP HARI sampai ditulis ulang jadi arsip
+// beneran). Fix-nya bukan "benerin filter" (gak ada yang salah), tapi
+// nambahin catatan yang jujur ngejelasin kenapa rentangnya keliatan pendek.
+test("replyRecapRange - arsip belum nyakup rentang penuh -> dikasih catatan penjelasan, BUKAN diem-diem kayak bug", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
+  // Arsip cuma punya data dari 3 hari lalu - user minta rekap 7 hari, jadi
+  // 4 hari paling awal dari rentang itu emang beneran gak ada datanya.
+  freshRecordLiveEnded("Nala", "jkt48_shortarchive", new Date(threeDaysAgo.getTime() - 3600_000), threeDaysAgo, 50);
+
+  const reply = await freshReplyRecapRange(7, "minggu ini", "c-shortarchive", "u-shortarchive");
+  assert.match(reply, /pencatatan multi-hari baru mulai/);
+});
+
+test("replyRecapRange - arsip UDAH nyakup rentang penuh -> TANPA catatan penjelasan", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  // Sesi PALING TUA di arsip lebih tua dari rentang 7 hari yang diminta
+  // (10 hari lalu) - walau sesi ini sendiri gak ikut kehitung di rekap
+  // 7-harinya, KEBERADAANNYA nunjukkin arsip udah nyakup penuh, jadi gak
+  // perlu ada catatan "belum penuh".
+  const tenDaysAgo = new Date(now - 10 * 24 * 60 * 60 * 1000);
+  const twoDaysAgo = new Date(now - 2 * 24 * 60 * 60 * 1000);
+  freshRecordLiveEnded("Old", "jkt48_fullarchive_old", new Date(tenDaysAgo.getTime() - 3600_000), tenDaysAgo, 5);
+  freshRecordLiveEnded("Recent", "jkt48_fullarchive_recent", new Date(twoDaysAgo.getTime() - 3600_000), twoDaysAgo, 50);
+
+  const reply = await freshReplyRecapRange(7, "minggu ini", "c-fullarchive", "u-fullarchive");
+  assert.doesNotMatch(reply, /pencatatan multi-hari baru mulai/);
 });

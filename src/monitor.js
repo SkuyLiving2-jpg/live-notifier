@@ -2,6 +2,7 @@ const { fetchAllLivestreams, isJkt48Member } = require("./idnApi");
 const { activeLives, saveActiveLives } = require("./storage/activeLives");
 const { loadDurationHistory, recordLiveDuration } = require("./storage/durationHistory");
 const { recordLiveEnded } = require("./storage/dailyLog");
+const { recordLiveCompleted } = require("./storage/liveCount");
 const { getPriorityConfig } = require("./priority");
 const { sendDiscordNotif } = require("./notify/liveNotify");
 const { maybePartyModeAlert, maybeAlertEndingSoon } = require("./notify/priorityDm");
@@ -68,6 +69,7 @@ async function checkLiveMembers() {
             const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
             await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
             recordLiveDuration(username, memberData.name, durationMs);
+            recordLiveCompleted(username, memberData.name);
             recordLiveEnded(
               memberData.name,
               memberData.username,

@@ -61,6 +61,16 @@ test("stats <nama> - dispatch ke replyMemberStats", async () => {
   assert.match(reply, /belum ada data riwayat live buat "statstestmember"/);
 });
 
+test("berapa kali <nama> live - dispatch ke replyLiveCount", async () => {
+  const reply = await buildChatReply("cok berapa kali liveCountRoutertest live");
+  assert.match(reply, /belum ada catatan live buat "livecountroutertest"/);
+});
+
+test("berapa kali si <nama> live - varian dengan 'si' juga jalan", async () => {
+  const reply = await buildChatReply("cok berapa kali si liveCountRoutertest2 live");
+  assert.match(reply, /belum ada catatan live buat "livecountroutertest2"/);
+});
+
 test("gifter <nama> - dispatch ke replyGifterSnapshot", async () => {
   const reply = await buildChatReply("cok gifter giftertestmember");
   assert.match(reply, /belum ada data top gifter buat "giftertestmember"/);

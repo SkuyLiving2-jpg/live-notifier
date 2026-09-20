@@ -1,6 +1,12 @@
 const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
-const { getCompletedSessionsToday, getCompletedSessionsSince, fetchExternalTodayLiveHistory } = require("../storage/dailyLog");
+const {
+  getCompletedSessionsToday,
+  getCompletedSessionsSince,
+  getEarliestSessionDate,
+  fetchExternalTodayLiveHistory,
+} = require("../storage/dailyLog");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
+const { findLiveCountByNameFragment } = require("../storage/liveCount");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
@@ -125,6 +131,7 @@ function replyHelp() {
     '- "cok status"',
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
+    '- "cok berapa kali <nama member> live" - total berapa kali dia udah live semenjak bot ini jalan',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
@@ -351,6 +358,18 @@ async function replyRecapRange(daysBack, label, channelId, authorId) {
     `Total durasi gabungan: ${formatDuration(totalDurationMs)} | Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
   ];
 
+  // Arsip multi-hari ini masih baru (lihat storage/dailyLog.js's
+  // getEarliestSessionDate) - kalau rentang yang diminta (7/30 hari) mundur
+  // lebih jauh dari data paling tua yang beneran ada, kasih tau KENAPA
+  // rekapnya keliatan pendek daripada diem-diem keliatan kayak ada yang bug.
+  const windowStartDate = getDateWIB(new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000));
+  const earliestDate = getEarliestSessionDate();
+  if (earliestDate && earliestDate > windowStartDate) {
+    summaryLines.push(
+      `_(Catatan: pencatatan multi-hari baru mulai ${earliestDate}, jadi rentang ${daysBack} hari ini belum penuh - bakal lengkap sendirinya seiring bot jalan terus.)_`,
+    );
+  }
+
   return [summaryLines.join("\n"), buildRecapPageBlock(sessions, 0, channelId, authorId, daysBack)].join("\n");
 }
 
@@ -370,6 +389,22 @@ function replyMemberStats(fragment) {
     `- Rata-rata durasi: ${formatDuration(avg)}`,
     `- Rekor terlama: ${formatDuration(max)}`,
   ].join("\n");
+}
+
+// Beda dari replyMemberStats di atas (yang datanya dibatesin 10 live
+// TERAKHIR buat ngitung rata-rata/rekor) - ini counter TOTAL yang gak
+// pernah di-prune/reset (storage/liveCount.js), jadi bisa jawab "udah
+// berapa kali live SEMENJAK bot ini jalan", bukan cuma dari histori terbatas.
+function replyLiveCount(fragment) {
+  const name = (fragment || "").trim();
+  if (!name) return 'Live count siapa? Ketik nama membernya juga ya, misal "cok berapa kali nala live".';
+
+  const found = findLiveCountByNameFragment(name);
+  if (!found) return `Cok, belum ada catatan live buat "${name}" semenjak bot ini jalan.`;
+
+  const sinceText = getDateWIB(new Date(found.firstLiveAt));
+  const lastText = formatRelativeTime(new Date(found.lastLiveAt));
+  return `📊 **${found.name}** udah live **${found.count}x** semenjak bot ini mulai mantau (dari ${sinceText}). Terakhir live ${lastText}.`;
 }
 
 // PENTING: IDN nggak nyediain jadwal live resmi sama sekali (udah dicek
@@ -525,6 +560,7 @@ module.exports = {
   replyPriorityList,
   replyMySubscriptions,
   replyMemberStats,
+  replyLiveCount,
   replySchedulePattern,
   formatGifterSnapshotReply,
   replyGifterSnapshot,

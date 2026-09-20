@@ -15,6 +15,7 @@ const {
   replyPriorityList,
   replyMySubscriptions,
   replyMemberStats,
+  replyLiveCount,
   replySchedulePattern,
   replyGifterSnapshot,
   replyTodayRecapSoFar,
@@ -96,6 +97,17 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const statsMatch = text.match(/stat(?:s|istik)\s+(.+)/);
   if (statsMatch) {
     return replyMemberStats(statsMatch[1]);
+  }
+
+  // "berapa kali (si) <nama> live" - kata tanya "berapa kali" HARUS di depan
+  // nama (bukan pola "<nama> ... berapa kali" sebaliknya), soalnya beda dari
+  // jadwalMatch/statsMatch/gifterMatch, di sini gak ada literal keyword yang
+  // motong nama dari wake-word "cok" di depannya kalau namanya ditaro duluan
+  // - "cok nala udah berapa kali live" bakal ke-capture jadi "cok nala",
+  // bukan "nala", kalau capture groupnya ditaro sebelum literal "berapa kali".
+  const liveCountMatch = text.match(/berapa\s+kali\s+(?:si\s+)?(.+?)\s+live\b/);
+  if (liveCountMatch) {
+    return replyLiveCount(liveCountMatch[1]);
   }
 
   const gifterMatch = text.match(/gifter\s+(.+)/);
