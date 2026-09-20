@@ -1,7 +1,6 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
 const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
 const { getSortedGifterSnapshotMembers } = require("../storage/gifterSnapshot");
-const { PRIORITY_PING_USER_ID } = require("../config");
 const { getGreeting, describeElapsed, YES_PATTERN, NO_PATTERN } = require("../utils");
 const {
   replyListLive,
@@ -57,24 +56,15 @@ function buildFallbackMenuComponents() {
 // pemanggilnya. Nomor 1-9 ketik manual TETEP jalan (lewat
 // pendingState.js's tryHandleMenuShortcut) - tombol ini cuma nambahin cara
 // yang lebih gampang, bukan gantiin.
+//
+// Teks sengaja diringkes (dulu nge-list ulang 9 opsi + instruksi ketik
+// manual + kontak owner jadi satu blok panjang) - label di tombolnya sendiri
+// ("1. Siapa yang live", dst, lihat buildFallbackMenuComponents) udah nyebut
+// tiap opsi, jadi gak perlu diulang di teks. Instruksi ketik-manual/angka
+// (buat yang gak bisa klik tombol) dan kontak owner dipindah ke
+// replyHelp() - orang yang emang nyari itu biasanya nanya "cok bantuan" duluan.
 function replyFallbackMenu() {
-  const ownerContact = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}>` : "owner channel ini";
-  const content = [
-    `Halo, selamat ${getGreeting()}! Apa yang ingin kamu tanyakan?`,
-    "1. Siapa saja yang masih live?",
-    "2. Status live sekarang",
-    "3. Siapa yang paling lama live hari ini?",
-    "4. Apakah <nama member> masih live?",
-    "5. Siapa yang paling rame ditonton hari ini?",
-    "6. Daftar member prioritas",
-    "7. Reminder aku (siapa aja yang aku subscribe)",
-    "8. Rekap live hari ini",
-    "9. Cek top gifter <nama member> (data terakhir dari 'npm run cek-gifter', bukan real-time)",
-    "",
-    'Klik tombol di bawah, atau balas cukup ketik angkanya aja (misal "1" atau "4 Nala")',
-    "",
-    `Kalau ada pertanyaan lain, silakan hubungi ${ownerContact}.`,
-  ].join("\n");
+  const content = `Halo, selamat ${getGreeting()}! Klik salah satu di bawah, atau tanya "cok bantuan" buat command lengkapnya.`;
   return { content, components: buildFallbackMenuComponents() };
 }
 

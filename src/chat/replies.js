@@ -116,6 +116,7 @@ function replyMemberNotFound(fragment) {
 }
 
 function replyHelp() {
+  const ownerContact = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}>` : "owner channel ini";
   return [
     "Cok bisa jawab ini:",
     '- "cok ini yang masih live siapa aja?"',
@@ -133,6 +134,9 @@ function replyHelp() {
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
     '- "cok reminder aku" - lihat kamu subscribe reminder siapa aja',
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
+    "",
+    'Kalau abis muncul menu tombol, kamu juga bisa cukup balas angkanya doang (misal "1" atau "4 Nala") tanpa perlu klik.',
+    `Ada yang belum kejawab? Hubungi ${ownerContact}.`,
   ].join("\n");
 }
 
