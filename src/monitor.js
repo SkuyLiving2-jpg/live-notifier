@@ -9,6 +9,24 @@ const { maybePartyModeAlert, maybeAlertEndingSoon } = require("./notify/priority
 const { maybeAlertViewerMilestone, maybeAnnounceNewRecord, maybeSendDailyRecap } = require("./notify/publicAlerts");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
+// Berapa siklus polling BERTURUT-TURUT (30 detik/siklus) member harus ABSEN
+// dari respons IDN sebelum beneran dianggap "udah selesai live" - BUKAN
+// langsung pas ilang SEKALI doang. IDN API kadang ngasih respons 200 OK
+// yang KEBETULAN nggak nyantumin satu live yang beneran masih jalan (glitch
+// sesaat di sisi IDN, bukan error jaringan kayak yang udah ditangani
+// try/catch luar). Tanpa grace period ini, satu respons flaky kayak gitu
+// bikin bot nganggep live-nya "selesai" (kecatet durasi pendek ke stats +
+// notif "selesai" kekirim), terus pas dia balik muncul di siklus
+// BERIKUTNYA, dianggap "mulai baru" - satu live yang beneran nyambung
+// terus jadi kecatet PECAH jadi 2 sesi di rekap. Ini persis yang dilaporin
+// owner: member yang sama muncul 2x di tabel rekap dengan jam "Mulai" yang
+// SAMA PERSIS (soalnya `live_at` dari IDN buat live yang sama gak berubah)
+// tapi durasi beda. 2 siklus = harus absen 2x BERTURUT-TURUT (~1 menit)
+// baru dianggap beneran selesai - cukup buat nyaring glitch 1 siklus, tapi
+// gak nunda notif "selesai" yang beneran kelamaan (paling lama ~30 detik
+// lebih lambat dari sebelumnya).
+const ENDED_GRACE_POLLS = 2;
+
 async function checkLiveMembers() {
   try {
     const currentLives = await fetchAllLivestreams();
@@ -52,6 +70,7 @@ async function checkLiveMembers() {
         // milestone jumlah penonton (buat semua member JKT48)
         const entry = activeLives.get(username);
         entry.viewCount = live.view_count;
+        entry.missingStreak = 0; // beneran keliatan lagi di respons ini - reset penghitung absen (kalau ada) dari ENDED_GRACE_POLLS
         if (typeof live.view_count === "number") {
           entry.peakViewCount = Math.max(entry.peakViewCount ?? 0, live.view_count);
         }
@@ -74,6 +93,18 @@ async function checkLiveMembers() {
     // Kirim notif "sudah selesai" + bersihkan cache kalau member udah selesai live
     for (const [username, memberData] of activeLives) {
       if (!currentLiveUsernames.has(username)) {
+        memberData.missingStreak = (memberData.missingStreak || 0) + 1;
+        if (memberData.missingStreak < ENDED_GRACE_POLLS) {
+          // Baru absen 1x - kemungkinan glitch sesaat di respons IDN, bukan
+          // beneran selesai. Ditunggu 1 siklus lagi (lihat ENDED_GRACE_POLLS
+          // di atas) sebelum diproses sebagai "selesai" - kalau dia balik
+          // muncul di siklus berikutnya, missingStreak-nya di-reset di
+          // branch "udah live dari sebelumnya" di atas, jadi gak pernah
+          // sampe ke notif/pencatatan "selesai" sama sekali.
+          saveActiveLives();
+          continue;
+        }
+
         const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end", memberData.imageUrl);
         if (terkirim) {
           if (memberData.liveAt) {
