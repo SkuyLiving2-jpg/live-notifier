@@ -81,3 +81,31 @@ test("findLiveCountByNameFragment - fuzzy match by nama depan, null kalau gak ke
   assert.equal(findLiveCountByNameFragment("member-yang-gak-ada"), null);
   assert.equal(findLiveCountByNameFragment(""), null);
 });
+
+test("getLiveCountLeaderboard - diurutin count DESC, dibatesin limit-nya, kosong kalau belum ada data sama sekali", () => {
+  const { recordLiveCompleted, getLiveCountLeaderboard } = freshLiveCount();
+
+  assert.deepEqual(getLiveCountLeaderboard(), []);
+
+  recordLiveCompleted("jkt48_nala", "Nala");
+  recordLiveCompleted("jkt48_nala", "Nala");
+  recordLiveCompleted("jkt48_nala", "Nala");
+  recordLiveCompleted("jkt48_levi", "Levi");
+  recordLiveCompleted("jkt48_levi", "Levi");
+  recordLiveCompleted("jkt48_lily", "Lily");
+
+  const top = getLiveCountLeaderboard();
+  assert.deepEqual(
+    top.map((e) => [e.username, e.count]),
+    [
+      ["jkt48_nala", 3],
+      ["jkt48_levi", 2],
+      ["jkt48_lily", 1],
+    ],
+  );
+
+  const top2 = getLiveCountLeaderboard(2);
+  assert.equal(top2.length, 2);
+  assert.equal(top2[0].username, "jkt48_nala");
+  assert.equal(top2[1].username, "jkt48_levi");
+});

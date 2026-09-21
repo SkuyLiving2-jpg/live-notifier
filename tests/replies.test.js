@@ -20,6 +20,7 @@ const {
   getTodaySessionsForRecap,
   replyMemberStats,
   replyLiveCount,
+  replyLiveCountLeaderboard,
   replySchedulePattern,
   replyPriorityList,
   handleSubscribe,
@@ -195,6 +196,24 @@ test("replyLiveCount - belum ada catatan sama sekali", () => {
 
 test("replyLiveCount - fragment kosong nanya nama duluan", () => {
   assert.match(replyLiveCount(""), /Live count siapa\?/);
+});
+
+// Nama membernya sengaja unik (bukan dipake test lain di file ini) - file
+// ini numpuk state live-count.json lintas test (gak ada fresh-reset kayak
+// tests/liveCount.test.js's freshLiveCount()), jadi assert-nya fokus ke
+// URUTAN RELATIF dua entry ini doang, bukan "siapa persis di posisi 1"
+// (yang bisa keganggu count dari test lain di file yang sama).
+test("replyLiveCountLeaderboard - diurutin dari yang paling sering live, format sesuai count-nya", () => {
+  for (let i = 0; i < 5; i++) recordLiveCompleted("jkt48_leaderboardtest_a", "LeaderboardTestA");
+  for (let i = 0; i < 3; i++) recordLiveCompleted("jkt48_leaderboardtest_b", "LeaderboardTestB");
+
+  const reply = replyLiveCountLeaderboard();
+  const posA = reply.indexOf("LeaderboardTestA");
+  const posB = reply.indexOf("LeaderboardTestB");
+  assert.ok(posA !== -1 && posB !== -1, "dua-duanya harus muncul di leaderboard");
+  assert.ok(posA < posB, "yang count-nya lebih banyak (5x) harus muncul LEBIH DULU dari yang lebih sedikit (3x)");
+  assert.match(reply, /LeaderboardTestA\*\* - 5x live/);
+  assert.match(reply, /LeaderboardTestB\*\* - 3x live/);
 });
 
 test("replySchedulePattern - kurang dari 3 riwayat -> 'masih kurang', minimal 3 -> nebak pola jam", () => {

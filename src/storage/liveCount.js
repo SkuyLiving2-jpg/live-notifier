@@ -63,6 +63,20 @@ function rebuildLiveCountFromSessions(sessions) {
   return data;
 }
 
+// Top N member berdasarkan TOTAL live count (bukan cuma yang lagi live
+// sekarang) - beda dari findLiveCountByNameFragment yang nyari SATU member
+// spesifik, ini buat "cok siapa yang paling sering live" (leaderboard semua
+// member sekaligus). Diurutin count DESC; kalau count-nya SAMA, urutannya
+// ngikutin urutan insersi di live-count.json (Array.prototype.sort JS
+// dijamin stabil sejak ES2019 - jadi deterministik, bukan random tiap kali
+// dipanggil).
+function getLiveCountLeaderboard(limit = 10) {
+  return Object.entries(loadLiveCount())
+    .map(([username, entry]) => ({ username, name: entry.name, count: entry.count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
 function findLiveCountByNameFragment(fragment) {
   const needle = (fragment || "").trim().toLowerCase();
   if (!needle) return null;
@@ -83,4 +97,5 @@ module.exports = {
   recordLiveCompleted,
   rebuildLiveCountFromSessions,
   findLiveCountByNameFragment,
+  getLiveCountLeaderboard,
 };

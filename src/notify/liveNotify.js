@@ -14,13 +14,28 @@ const { PRIORITY_PING_USER_ID } = require("../config");
 // rekap) dicatet dari BOOKKEEPING internal bot, bukan di-parse dari teks
 // notif channel - jadi nambahin intro/hashtag di sini aman, gak ngubah
 // struktur pesan yang bisa bikin sesi Nala "kelewatan" dari rekap.
-function buildNormalPayload(memberName, liveUrl, status, priority = null) {
+// imageUrl (opsional) - thumbnail live dari IDN (field image_url di
+// getLivestreams, sama field yang dipake priority/index.js's embed flashy).
+// Sebelumnya CUMA member prioritas yang dapet gambar di notifnya (channel
+// notif biasa selalu polos teks doang) - sekarang semua member dapet gambar
+// juga kalau IDN nyediain (kadang null di detik-detik pertama live baru
+// mulai, sebelum thumbnail-nya sempet ke-generate). Ditaro di `embeds`
+// (BUKAN nambahin title/color/field apapun - cuma field `image` doang),
+// jadi TETEP "plain" secara isi (gak ada yang bikin notif ini keliatan
+// spesial dibanding member lain, beda sama priority's embed flashy), cuma
+// visualnya lebih enak diliat. `content` (dan makanya parsing backfill yang
+// baca message.content) sama sekali gak kesentuh oleh ini.
+function buildNormalPayload(memberName, liveUrl, status, priority = null, imageUrl = null) {
   if (status === "end") {
     return { content: `✅ **${memberName}** udah selesai live di IDN Live.` };
   }
   const introLine = priority?.startIntro ? `${priority.startIntro}\n` : "";
   const hashtagSuffix = priority?.startHashtag ? ` ${priority.startHashtag}` : "";
-  return { content: `${introLine}🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}${hashtagSuffix}` };
+  const payload = { content: `${introLine}🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}${hashtagSuffix}` };
+  if (imageUrl) {
+    payload.embeds = [{ image: { url: imageUrl } }];
+  }
+  return payload;
 }
 
 // User yang udah dapet DM prioritas (PRIORITY_PING_USER_ID, lihat
@@ -48,7 +63,7 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   // udah ke-install, bukan buka browser).
   const liveUrl = `https://idn.app/${username}/live/${slug}`;
   const priority = getPriorityConfig(memberName, username);
-  const payload = buildNormalPayload(memberName, liveUrl, status, priority);
+  const payload = buildNormalPayload(memberName, liveUrl, status, priority, imageUrl);
 
   if (status === "start") {
     const subscriberIds = getSubscribersFor(memberName, username);

@@ -2,6 +2,22 @@ const path = require("path");
 
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
+// Helper buat baca env var numerik dengan fallback - BUKAN sekadar
+// `Number(process.env.X) || fallback`, yang punya bug halus: `0 || fallback`
+// di JS balikin `fallback` (0 itu falsy), jadi env var yang SENGAJA di-set
+// ke "0" (misalnya DAILY_RECAP_HOUR=0 buat rekap jam 00:00 WIB tepat)
+// diam-diam ke-timpa fallback-nya, bukan beneran kepake. Ditemukan pas
+// nulis test buat fitur rekap embed (butuh angka jam yang kepastian ke-pick
+// SELALU lolos gerbang "getHourWIBOf() < DAILY_RECAP_HOUR" apapun jam
+// aslinya) - env var unset/string kosong/bukan angka valid tetap fallback
+// seperti biasa, cuma "0" doang yang sebelumnya salah kena timpa.
+function envInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const IDN_API_URL = "https://api.idn.app/graphql";
 const POLL_INTERVAL_MS = 30000;
@@ -49,7 +65,7 @@ const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID || "";
 // Perkiraan "kemungkinan mendekati akhir" buat member prioritas dipicu kalau
 // durasi live udah ngelewatin ambang ini (kalau belum ada riwayat durasi
 // buat member itu). Bisa di-override lewat env var, satuannya menit.
-const DEFAULT_ENDING_SOON_THRESHOLD_MS = (Number(process.env.ENDING_SOON_THRESHOLD_MINUTES) || 40) * 60 * 1000;
+const DEFAULT_ENDING_SOON_THRESHOLD_MS = envInt("ENDING_SOON_THRESHOLD_MINUTES", 40) * 60 * 1000;
 
 // Live IDN paling lama yang REALISTIS masih masuk akal (generous - live
 // beneran hampir gak pernah lebih dari beberapa jam). Dipake buat nyaring
@@ -150,7 +166,14 @@ const PRIORITY_PING_USER_ID = process.env.PRIORITY_PING_USER_ID || "";
 // Discord).
 const PRIORITY_COLOR_PALETTE = [0x9b59b6, 0x2ecc71, 0xe91e63, 0xe67e22, 0xf1c40f];
 
-const DAILY_RECAP_HOUR = Number(process.env.DAILY_RECAP_HOUR) || 23; // jam WIB
+const DAILY_RECAP_HOUR = envInt("DAILY_RECAP_HOUR", 23); // jam WIB
+
+// Warna embed rekap harian otomatis (notify/publicAlerts.js's
+// maybeSendDailyRecap) - Discord "blurple", netral/gak nyerempet warna
+// member prioritas manapun (teal Nala 0x1abc9c, merah Levi 0xff0000, biru
+// Lily 0x3498db, atau PRIORITY_COLOR_PALETTE di atas), soalnya rekap ini
+// ngerangkum SEMUA member bareng, bukan punya satu orang.
+const DAILY_RECAP_COLOR = 0x5865f2;
 
 const PORT = process.env.PORT || 3000;
 
@@ -170,5 +193,6 @@ module.exports = {
   PRIORITY_PING_USER_ID,
   PRIORITY_COLOR_PALETTE,
   DAILY_RECAP_HOUR,
+  DAILY_RECAP_COLOR,
   PORT,
 };

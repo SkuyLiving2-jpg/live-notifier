@@ -6,7 +6,7 @@ const {
   fetchExternalTodayLiveHistory,
 } = require("../storage/dailyLog");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
-const { findLiveCountByNameFragment } = require("../storage/liveCount");
+const { findLiveCountByNameFragment, getLiveCountLeaderboard } = require("../storage/liveCount");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
@@ -134,6 +134,7 @@ function replyHelp() {
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
     '- "cok berapa kali <nama member> live" - total berapa kali dia udah live semenjak bot ini jalan',
+    '- "cok siapa yang paling sering live" - leaderboard total live count semua member',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
@@ -440,6 +441,18 @@ function replyLiveCount(fragment) {
   return `📊 **${found.name}** udah live **${found.count}x** semenjak bot ini mulai mantau (dari ${sinceText}). Terakhir live ${lastText}.`;
 }
 
+// Beda lagi dari replyLiveCount (satu member spesifik) - ini leaderboard
+// SEMUA member sekaligus, diurutin dari yang paling sering live. Sumbernya
+// sama (storage/liveCount.js, counter TOTAL yang gak pernah di-prune).
+function replyLiveCountLeaderboard() {
+  const top = getLiveCountLeaderboard(10);
+  if (top.length === 0) return "Cok, belum ada catatan live sama sekali semenjak bot ini jalan.";
+
+  const medals = ["🥇", "🥈", "🥉"];
+  const lines = top.map((entry, i) => `${medals[i] || `${i + 1}.`} **${entry.name}** - ${entry.count}x live`);
+  return `📊 Paling sering live semenjak bot ini jalan:\n${lines.join("\n")}`;
+}
+
 // PENTING: IDN nggak nyediain jadwal live resmi sama sekali (udah dicek
 // langsung ke API-nya). Jadi ini PURE statistik dari histori kita SENDIRI
 // (live-duration-history.json, maks 10 entry terakhir per orang) - bukan
@@ -594,6 +607,7 @@ module.exports = {
   replyMySubscriptions,
   replyMemberStats,
   replyLiveCount,
+  replyLiveCountLeaderboard,
   replySchedulePattern,
   formatGifterSnapshotReply,
   replyGifterSnapshot,

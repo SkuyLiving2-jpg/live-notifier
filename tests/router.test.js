@@ -126,6 +126,21 @@ test("paling lama live hari ini - dispatch ke replyLongestLive", async () => {
   assert.match(reply, /Paling lama live hari ini|belum ada data live hari ini/);
 });
 
+// Dicek SEBELUM check "live" + "siapa" polos (replyListLive) di router.js -
+// kalimatnya juga ngandung "live" + "siapa", jadi harus ketangkep duluan
+// sama check leaderboard yang lebih spesifik. "cok siapa yang live" (tanpa
+// "paling sering") harus TETEP jatuh ke replyListLive seperti biasa.
+test("siapa yang paling sering live - dispatch ke replyLiveCountLeaderboard, BUKAN replyListLive (siapa yang LAGI live sekarang)", async () => {
+  const reply = await buildChatReply("cok siapa yang paling sering live");
+  assert.match(reply, /Paling sering live semenjak bot ini jalan|belum ada catatan live sama sekali/);
+  assert.doesNotMatch(reply, /ini yang lagi live \(urut dari paling lama\)|lagi nggak ada member JKT48 yang live nih/);
+});
+
+test("siapa yang live (tanpa 'paling sering') - TETAP dispatch ke replyListLive seperti biasa, gak keganggu check leaderboard baru", async () => {
+  const reply = await buildChatReply("cok siapa yang live");
+  assert.match(reply, /ini yang lagi live \(urut dari paling lama\)|Cok, lagi nggak ada member JKT48 yang live nih/);
+});
+
 // Beda dari "cok rekap" polos (replyTodayRecapSoFar) - replyRecapRange gak
 // nyentuh network (gak ada lookup arsip eksternal), jadi aman dites
 // langsung, dan penting buat mastiin urutan regex-nya bener: "rekap minggu

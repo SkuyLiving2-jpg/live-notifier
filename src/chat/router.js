@@ -16,6 +16,7 @@ const {
   replyMySubscriptions,
   replyMemberStats,
   replyLiveCount,
+  replyLiveCountLeaderboard,
   replySchedulePattern,
   replyGifterSnapshot,
   replyTodayRecapSoFar,
@@ -173,6 +174,22 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 
   if (containsWholeWord(text, "live") && (containsWholeWord(text, "paling lama") || containsWholeWord(text, "udah lama"))) {
     return replyLongestLive();
+  }
+
+  // Dicek SEBELUM check "siapa yang live" polos di bawah - kalimatnya juga
+  // ngandung "live" + "siapa", jadi harus ketangkep duluan sama check yang
+  // lebih spesifik ini (sama pola-nya kayak "rekap minggu/bulan" vs "rekap"
+  // polos di atas), biar "cok siapa yang paling sering live" (nanya total
+  // live count SEMUA member) gak kejawab kayak "cok siapa yang live"
+  // (nanya siapa yang LAGI live detik ini) - dua pertanyaan yang beda arti.
+  if (
+    containsWholeWord(text, "live") &&
+    (containsWholeWord(text, "paling sering") ||
+      containsWholeWord(text, "paling banyak") ||
+      containsWholeWord(text, "tersering") ||
+      containsWholeWord(text, "terbanyak"))
+  ) {
+    return replyLiveCountLeaderboard();
   }
 
   if (
