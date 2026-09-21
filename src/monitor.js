@@ -7,7 +7,7 @@ const { getPriorityConfig } = require("./priority");
 const { sendDiscordNotif } = require("./notify/liveNotify");
 const { maybePartyModeAlert, maybeAlertEndingSoon } = require("./notify/priorityDm");
 const { maybeAlertViewerMilestone, maybeAnnounceNewRecord, maybeSendDailyRecap } = require("./notify/publicAlerts");
-const { POLL_INTERVAL_MS } = require("./config");
+const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
 async function checkLiveMembers() {
   try {
@@ -78,16 +78,40 @@ async function checkLiveMembers() {
         if (terkirim) {
           if (memberData.liveAt) {
             const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
-            await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
-            recordLiveDuration(username, memberData.name, durationMs);
-            recordLiveCompleted(username, memberData.name);
-            recordLiveEnded(
-              memberData.name,
-              memberData.username,
-              new Date(memberData.liveAt),
-              new Date(),
-              memberData.peakViewCount ?? memberData.viewCount ?? null,
-            );
+            // BUG SEBELUMNYA: durationMs di sini gak pernah divalidasi sama
+            // sekali - beda dari server.js's handleBackfillLiveHistory/
+            // handleRepairLiveHistory yang UDAH nyaring durasi implausible
+            // (>MAX_PLAUSIBLE_LIVE_DURATION_MS, lihat ARCHITECTURE.md §10)
+            // dari jalur BACKFILL, tapi jalur LIVE normal ini (dipanggil tiap
+            // 30 detik selama bot jalan) kelewatan sama sekali. Kalau
+            // activeLives nyimpen `liveAt` yang udah basi (mis. bot mati
+            // berjam-jam - crash loop, Railway kena masalah, dll - terus
+            // member itu KEBETULAN masih/lagi live pas bot idup lagi), durasi
+            // yang keitung bakal ngelewatin downtime-nya juga, dan tanpa
+            // penyaringan ini bakal ke-tulis LANGSUNG ke daily-log/
+            // duration-history/pengumuman rekor - persis kelas bug "100+ jam
+            // live" yang dilaporin owner, cuma lewat pintu yang beda (live
+            // biasa, bukan backfill). Sesi implausible DIBUANG dari
+            // stats/rekor (gak nyoba nyimpen versi "diclamp" - gak ada cara
+            // ngebedain berapa dari durasi itu yang beneran live vs
+            // downtime), tapi notif "selesai" tetap udah kekirim & cache
+            // tetep dibersihin di bawah, biar gak nyangkut selamanya.
+            if (durationMs > 0 && durationMs <= MAX_PLAUSIBLE_LIVE_DURATION_MS) {
+              await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
+              recordLiveDuration(username, memberData.name, durationMs);
+              recordLiveCompleted(username, memberData.name);
+              recordLiveEnded(
+                memberData.name,
+                memberData.username,
+                new Date(memberData.liveAt),
+                new Date(),
+                memberData.peakViewCount ?? memberData.viewCount ?? null,
+              );
+            } else {
+              console.error(
+                `Durasi live ${memberData.name} implausible (${durationMs}ms) - kemungkinan cache activeLives basi (bot sempet mati lama). Sesi ini DIBUANG dari stats/rekap, gak dicatet.`,
+              );
+            }
           }
           activeLives.delete(username);
           saveActiveLives();
