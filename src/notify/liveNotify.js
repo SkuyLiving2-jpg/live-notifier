@@ -55,6 +55,11 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
     if (subscriberIds.length > 0) {
       const mentions = subscriberIds.map((id) => `<@${id}>`).join(" ");
       payload.content = `${payload.content}\n${mentions} kamu subscribe notif buat member ini!`;
+      // Satu-satunya mention yang BENERAN dimaksud di jalur ini - scoped
+      // eksplisit ke ID subscriber doang (lihat webhook.js's
+      // withDefaultMentionGuard), biar CUMA mereka yang ke-ping walau
+      // memberName kebetulan ngandung teks semacam "@everyone".
+      payload.allowed_mentions = { users: subscriberIds };
     }
   }
 

@@ -19,6 +19,7 @@ const {
   NO_PATTERN,
   NEXT_PAGE_PATTERN,
   PREV_PAGE_PATTERN,
+  safeReplyOptions,
 } = require("../src/utils");
 
 test("formatDuration - jam & menit", () => {
@@ -131,4 +132,21 @@ test("NEXT_PAGE_PATTERN / PREV_PAGE_PATTERN", () => {
   assert.doesNotMatch("y", NEXT_PAGE_PATTERN); // "y" tetep cuma di YES_PATTERN, gak dobel di sini
   assert.doesNotMatch("kapan", NEXT_PAGE_PATTERN);
   assert.doesNotMatch("kapan", PREV_PAGE_PATTERN);
+});
+
+// Regresi buat celah mention-abuse: chat/router.js & chat/menu.js's tiap
+// message.reply()/interaction.reply() WAJIB lewat sini biar allowedMentions
+// selalu ke-pasang, gak peduli reply-nya balikin string mentah atau object
+// {content, components, ...}.
+test("safeReplyOptions - selalu nempelin allowedMentions:{parse:[]}, baik reply-nya string maupun object", () => {
+  const fromString = safeReplyOptions("halo @everyone");
+  assert.deepEqual(fromString, { content: "halo @everyone", allowedMentions: { parse: [] } });
+
+  const fromObject = safeReplyOptions({ content: "pilih salah satu", components: ["dummy-row"], ephemeral: true });
+  assert.deepEqual(fromObject, {
+    content: "pilih salah satu",
+    components: ["dummy-row"],
+    ephemeral: true,
+    allowedMentions: { parse: [] },
+  });
 });

@@ -131,9 +131,13 @@ test("handleFallbackMenuButton - opsi 4 (cek member) balikin dropdown kalau ada 
   const emptyInteraction = fakeInteraction({ customId: "fallback_menu:4" });
   await handleFallbackMenuButton(emptyInteraction);
   assert.equal(emptyInteraction.calls.length, 1);
-  assert.match(emptyInteraction.calls[0], /nggak ada member JKT48 yang live/);
-  // Bukan object {content, ephemeral} - ini string biasa (sama kayak replyListLive()
-  // via teks), jadi otomatis publik, konsisten sama balesan teks yang setara.
+  assert.match(emptyInteraction.calls[0].content, /nggak ada member JKT48 yang live/);
+  // Gak ada `ephemeral` di payload-nya - sama kayak replyListLive() via teks,
+  // jadi otomatis publik, konsisten sama balesan teks yang setara. Semua
+  // reply (lewat safeReplyOptions, lihat utils.js) sekarang SELALU jadi
+  // object {content, ...}, gak pernah string mentah lagi - itu yang matiin
+  // allowedMentions implisit (@everyone/@here/role) dari teks yang di-echo.
+  assert.deepEqual(emptyInteraction.calls[0].allowedMentions, { parse: [] });
 
   activeLives.set("jkt48_dropdowntest", { name: "Dropdowntest", username: "jkt48_dropdowntest", slug: "s", liveAt: new Date().toISOString() });
   try {
@@ -149,7 +153,7 @@ test("handleFallbackMenuButton - opsi 4 (cek member) balikin dropdown kalau ada 
 test("handleFallbackMenuButton - opsi 9 (top gifter) balikin dropdown kalau ada data, jawaban final PUBLIK (bukan ephemeral) kalau kosong", async () => {
   const emptyInteraction = fakeInteraction({ customId: "fallback_menu:9" });
   await handleFallbackMenuButton(emptyInteraction);
-  assert.match(emptyInteraction.calls[0], /belum ada data top gifter buat siapapun/);
+  assert.match(emptyInteraction.calls[0].content, /belum ada data top gifter buat siapapun/);
 
   saveGifterSnapshot({ members: { jkt48_giftermenutest: { name: "Giftermenutest", gifters: [], checkedAt: new Date().toISOString() } } });
   const withDataInteraction = fakeInteraction({ customId: "fallback_menu:9" });
@@ -160,7 +164,7 @@ test("handleFallbackMenuButton - opsi 9 (top gifter) balikin dropdown kalau ada 
 test("handleFallbackMenuButton - opsi bare (mis. 1) langsung diteruskan ke resolveBareMenuChoice", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:2" });
   await handleFallbackMenuButton(interaction);
-  assert.match(interaction.calls[0], /Bot jalan normal/);
+  assert.match(interaction.calls[0].content, /Bot jalan normal/);
 });
 
 test("handleFallbackMemberSelect - opsi 4: member yang dipilih dari dropdown lagi live -> tanya y/n; udah gak live -> replyMemberNotFound", async () => {
@@ -168,14 +172,14 @@ test("handleFallbackMemberSelect - opsi 4: member yang dipilih dari dropdown lag
   try {
     const interaction = fakeInteraction({ customId: "fallback_select:4", values: ["jkt48_selecttest"] });
     await handleFallbackMemberSelect(interaction);
-    assert.match(interaction.calls[0], /Mau nonton sekarang/);
+    assert.match(interaction.calls[0].content, /Mau nonton sekarang/);
   } finally {
     activeLives.delete("jkt48_selecttest");
   }
 
   const goneInteraction = fakeInteraction({ customId: "fallback_select:4", values: ["jkt48_selecttest"] });
   await handleFallbackMemberSelect(goneInteraction);
-  assert.match(goneInteraction.calls[0], /nggak nemu member/);
+  assert.match(goneInteraction.calls[0].content, /nggak nemu member/);
 });
 
 test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown (bukan fuzzy search)", async () => {
@@ -186,5 +190,5 @@ test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown
   });
   const interaction = fakeInteraction({ customId: "fallback_select:9", values: ["jkt48_selectgiftertest"] });
   await handleFallbackMemberSelect(interaction);
-  assert.match(interaction.calls[0], /Top Gifter Selectgiftertest/);
+  assert.match(interaction.calls[0].content, /Top Gifter Selectgiftertest/);
 });

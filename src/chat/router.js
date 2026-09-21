@@ -1,7 +1,7 @@
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
-const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration } = require("../utils");
+const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions } = require("../utils");
 const { tryHandleWatchConfirmShortcut } = require("./menu");
 const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = require("./pendingState");
 const { replyFallbackMenu } = require("./menu");
@@ -242,7 +242,7 @@ function wireDiscordEvents(client) {
         channelId: message.channel.id,
         authorId: message.author.id,
       });
-      if (reply) await message.reply(reply);
+      if (reply) await message.reply(safeReplyOptions(reply));
     } catch (error) {
       console.error("Gagal balas chat:", error.message);
     }

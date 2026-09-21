@@ -1,7 +1,7 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
 const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
 const { getSortedGifterSnapshotMembers } = require("../storage/gifterSnapshot");
-const { getGreeting, describeElapsed, YES_PATTERN, NO_PATTERN } = require("../utils");
+const { getGreeting, describeElapsed, YES_PATTERN, NO_PATTERN, safeReplyOptions } = require("../utils");
 const {
   replyListLive,
   replyBotStatus,
@@ -193,7 +193,7 @@ async function handleFallbackMenuButton(interaction) {
       // buat dipilih), sama kayak balesan "cok siapa yang live" biasa lewat
       // teks (replyListLive), jadi visibility-nya juga harus konsisten sama itu,
       // bukan cuma keliatan orang yang mimic tombolnya doang.
-      await interaction.reply(replyListLive());
+      await interaction.reply(safeReplyOptions(replyListLive()));
       return;
     }
 
@@ -204,7 +204,7 @@ async function handleFallbackMenuButton(interaction) {
     const row = new ActionRowBuilder().addComponents(selectMenu);
     // Ephemeral (cuma keliatan yang mimic tombolnya) - ini baru langkah
     // milih, belum jawaban final, jadi gak perlu numpuk di channel publik.
-    await interaction.reply({ content: "Mau cek member yang mana?", components: [row], ephemeral: true });
+    await interaction.reply(safeReplyOptions({ content: "Mau cek member yang mana?", components: [row], ephemeral: true }));
     return;
   }
 
@@ -215,7 +215,9 @@ async function handleFallbackMenuButton(interaction) {
       // langkah milih, jadi konsisten sama balesan "cok gifter <nama>" biasa
       // yang juga publik pas datanya kosong.
       await interaction.reply(
-        'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
+        safeReplyOptions(
+          'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
+        ),
       );
       return;
     }
@@ -225,12 +227,12 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.reply({ content: "Mau cek top gifter member yang mana?", components: [row], ephemeral: true });
+    await interaction.reply(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row], ephemeral: true }));
     return;
   }
 
   const reply = await resolveBareMenuChoice(optionId, interaction.channelId, interaction.user.id);
-  if (reply) await interaction.reply(reply);
+  if (reply) await interaction.reply(safeReplyOptions(reply));
 }
 
 // Diklik abis milih member dari dropdown yang dimunculin handleFallbackMenuButton.
@@ -248,14 +250,14 @@ async function handleFallbackMemberSelect(interaction) {
     // nyangkut ke member lain yang kebetulan nama depannya mirip.
     const entry = activeLives.get(username);
     const reply = entry ? startWatchConfirmForEntry(entry, interaction.channelId, interaction.user.id) : replyMemberNotFound(username);
-    await interaction.reply(reply);
+    await interaction.reply(safeReplyOptions(reply));
     return;
   }
 
   // username di sini dijamin ada di gifter-snapshot.json - langsung dari
   // pilihan dropdown yang dibangun getSortedGifterSnapshotMembers(), bukan
   // dari activeLives kayak sebelumnya.
-  await interaction.reply(replyGifterSnapshotByUsername(username));
+  await interaction.reply(safeReplyOptions(replyGifterSnapshotByUsername(username)));
 }
 
 module.exports = {

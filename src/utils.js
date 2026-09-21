@@ -151,6 +151,27 @@ const NO_PATTERN = /^(n|no|ga|gak|kaga|nggak|enggak|tidak|males|ga\s*mau|nggak\s
 const NEXT_PAGE_PATTERN = /^(maju|forward|lanjut|lanjutkan|next|berikutnya)$/i;
 const PREV_PAGE_PATTERN = /^(mundur|balik|kembali|sebelumnya|prev|previous|back)$/i;
 
+// Dipake di TIAP message.reply()/interaction.reply() di chat/router.js dan
+// chat/menu.js - nyegah pesan bot ke-abuse buat mention massal. Banyak
+// balesan bot nge-echo teks ketikan user MENTAH ke dalam content (nama
+// member yang gak ketemu, keyword subscribe/prioritas, dst - lihat
+// chat/replies.js's replyMemberNotFound/replyMemberStats/replyLiveCount/
+// replyGifterSnapshot/replySchedulePattern/replyMySubscriptions dst), dan
+// SIAPA AJA di channel (bukan cuma owner - mis. "cok ingetin <apa aja>" gak
+// di-gate) bisa ngetik apapun sebagai argumennya. Tanpa allowedMentions,
+// discord.js by default TETEP parse & trigger @everyone/@here/mention role
+// di teks manapun yang kebetulan nyangkut di content - jadi orang bisa
+// nyuruh bot mention @everyone cuma dengan ngetik "cok ingetin @everyone"
+// (balesannya ngutip ulang argumennya mentah-mentah). `parse: []` matiin
+// SEMUA jenis mention implisit (everyone/here/role/user) dari teks - satu-
+// satunya mention yang beneran dimaksud dikirim explicit lewat field
+// `users`/`roles` di allowedMentions itu sendiri kalau memang perlu (gak
+// ada kasus itu di jalur chat-reply ini sekarang).
+function safeReplyOptions(reply) {
+  const base = typeof reply === "string" ? { content: reply } : reply;
+  return { ...base, allowedMentions: { parse: [] } };
+}
+
 module.exports = {
   formatDuration,
   formatRelativeTime,
@@ -173,4 +194,5 @@ module.exports = {
   NO_PATTERN,
   NEXT_PAGE_PATTERN,
   PREV_PAGE_PATTERN,
+  safeReplyOptions,
 };
