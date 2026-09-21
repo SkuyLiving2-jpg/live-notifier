@@ -43,16 +43,44 @@ function verifySignature({ secret, timestamp, signature, body }) {
   return { valid: true };
 }
 
+// Batas ukuran body request - tanpa ini, `body += chunk` di bawah numpuk
+// tanpa batas di memori selama koneksi TCP-nya masih ngirim data (endpoint
+// ini dilindungi signature, jadi bukan celah buat orang luar sembarangan,
+// tapi tetep aja gak ada alasan buat percaya body-nya "pasti kecil" tanpa
+// batas eksplisit). 5MB generus banget buat payload terbesar yang beneran
+// dikirim (backfill-live-history's sessions array, bisa ribuan entri ~150
+// byte/entri) tapi tetep ngebatesin, bukan dibiarin tanpa batas sama sekali.
+const MAX_REQUEST_BODY_BYTES = 5 * 1024 * 1024;
+
 // Bungkus handler HTTP mentah (Node http.createServer) biar cuma jalan kalau
 // request-nya punya signature yang valid. Pemanggil (client) perlu generate
 // timestamp + signature pake signPayload() dengan secret yang sama.
 function requireSignedRequest(secret, handler) {
   return (req, res) => {
     let body = "";
+    let tooLarge = false;
     req.on("data", (chunk) => {
+      if (tooLarge) return;
       body += chunk;
+      if (Buffer.byteLength(body) > MAX_REQUEST_BODY_BYTES) {
+        tooLarge = true;
+        body = ""; // buang biar buffer-nya gak nyangkut percuma di memori
+        // SENGAJA nggak req.destroy() di sini - motong socket paksa SEBELUM
+        // body sisanya abis kekirim bikin klien (khususnya undici/fetch)
+        // liat ini sebagai koneksi putus mentah (ECONNRESET / "fetch
+        // failed"), bukan respons 413 yang rapi - klien jadi gak pernah
+        // beneran "lihat" alasan penolakannya. "Connection: close" cukup:
+        // Node tetap ngabisin nguras body yang lagi ngalir (di-ignore aja,
+        // gak nambah ke `body` lagi jadi memori tetap kebatesin), kirim
+        // 413-nya, baru nutup socket-nya SETELAH respons itu beneran
+        // terkirim abis.
+        res.writeHead(413, { "Content-Type": "application/json", Connection: "close" });
+        res.end(JSON.stringify({ error: "Body kegedean" }));
+      }
     });
     req.on("end", () => {
+      if (tooLarge) return; // response udah dikirim pas nyadar kegedean, jangan diproses lagi
+
       const timestamp = req.headers["x-api-timestamp"];
       const signature = req.headers["x-api-signature"];
       const result = verifySignature({ secret, timestamp, signature, body });
@@ -68,4 +96,4 @@ function requireSignedRequest(secret, handler) {
   };
 }
 
-module.exports = { signPayload, verifySignature, requireSignedRequest, SIGNATURE_TTL_MS };
+module.exports = { signPayload, verifySignature, requireSignedRequest, SIGNATURE_TTL_MS, MAX_REQUEST_BODY_BYTES };

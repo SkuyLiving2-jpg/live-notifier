@@ -5,10 +5,22 @@ const { loadSubscriptions } = require("../storage/subscriptions");
 const { containsWholeWord } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
-function buildNormalPayload(memberName, liveUrl, status) {
-  return status === "end"
-    ? { content: `✅ **${memberName}** udah selesai live di IDN Live.` }
-    : { content: `🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}` };
+// priority (opsional) - kalau member ini punya startIntro/startHashtag (lihat
+// config.js's PRIORITY_MEMBERS, sekarang cuma Nala yang diisi) itu ikut
+// ditempel di notif CHANNEL juga, TAPI formatnya TETAP plain content kayak
+// notif member lain (bukan ganti jadi embed/tombol flashy kayak
+// priority/index.js's buildPriorityPayload, yang cuma dikirim ke DM pribadi
+// owner). Sengaja dipertahanin plain: activeLives/daily-log (yang dipake
+// rekap) dicatet dari BOOKKEEPING internal bot, bukan di-parse dari teks
+// notif channel - jadi nambahin intro/hashtag di sini aman, gak ngubah
+// struktur pesan yang bisa bikin sesi Nala "kelewatan" dari rekap.
+function buildNormalPayload(memberName, liveUrl, status, priority = null) {
+  if (status === "end") {
+    return { content: `✅ **${memberName}** udah selesai live di IDN Live.` };
+  }
+  const introLine = priority?.startIntro ? `${priority.startIntro}\n` : "";
+  const hashtagSuffix = priority?.startHashtag ? ` ${priority.startHashtag}` : "";
+  return { content: `${introLine}🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}${hashtagSuffix}` };
 }
 
 // User yang udah dapet DM prioritas (PRIORITY_PING_USER_ID, lihat
@@ -36,7 +48,7 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   // udah ke-install, bukan buka browser).
   const liveUrl = `https://idn.app/${username}/live/${slug}`;
   const priority = getPriorityConfig(memberName, username);
-  const payload = buildNormalPayload(memberName, liveUrl, status);
+  const payload = buildNormalPayload(memberName, liveUrl, status, priority);
 
   if (status === "start") {
     const subscriberIds = getSubscribersFor(memberName, username);

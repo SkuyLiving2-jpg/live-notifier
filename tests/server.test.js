@@ -428,6 +428,24 @@ test("POST /api/backfill-live-history - request tanpa signature ditolak (401)", 
   }
 });
 
+// security.js's MAX_REQUEST_BODY_BYTES - ditolak (413) SEBELUM sempet
+// diperiksa signature-nya sama sekali (jadi gak perlu beneran nge-sign body
+// segede ini di test) - nyegah body request numpuk tanpa batas di memori.
+test("POST /api/backfill-live-history - body ngelewatin batas ukuran ditolak (413), gak diproses sama sekali", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const oversizedBody = "x".repeat(6 * 1024 * 1024); // 6MB > MAX_REQUEST_BODY_BYTES (5MB)
+    const res = await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
+      method: "POST",
+      body: oversizedBody,
+    });
+    assert.equal(res.status, 413);
+  } finally {
+    server.close();
+  }
+});
+
 // scripts/repair-live-history.js's server-side counterpart - buat beresin
 // data yang UDAH TERLANJUR korup (durasi implausible) dari backfill versi
 // lama, sebelum reconstructSessions-nya diperbaiki. Seed daily-log +
