@@ -33,3 +33,23 @@ test("getChannelWebhookFor - EXACT match doang, bukan fuzzy/prefix kayak priorit
   saveChannelRouting({ jkt48_intan: "https://discord.com/api/webhooks/333/token-c" });
   assert.equal(getChannelWebhookFor("jkt48_intannia"), null, "username lain yang cuma MIRIP/prefix-nya sama harus TETEP null");
 });
+
+// Regresi nyata: owner ngisi channel-routing.local.json manual pake "jkt48_Aralie"
+// (huruf besar), padahal username ASLI dari IDN (yang dipake buat manggil
+// getChannelWebhookFor pas ada live) hampir pasti lowercase - tanpa
+// normalisasi ini, notif ke channel khususnya DIEM-DIEM gak pernah kekirim.
+test("saveChannelRouting/getChannelWebhookFor - case-insensitive, entry huruf besar di file lokal tetep kesambung ke username lowercase dari IDN", () => {
+  saveChannelRouting({ jkt48_Aralie: "https://discord.com/api/webhooks/444/token-d" });
+
+  assert.deepEqual(
+    loadChannelRouting(),
+    { jkt48_aralie: "https://discord.com/api/webhooks/444/token-d" },
+    "key HARUS ke-normalize lowercase pas disimpen",
+  );
+  assert.equal(getChannelWebhookFor("jkt48_aralie"), "https://discord.com/api/webhooks/444/token-d");
+
+  // Kebalikannya juga - kalau yang disimpen lowercase tapi lookup-nya (yang
+  // manggil) kebetulan dikasih campuran huruf, tetep harus nyambung.
+  saveChannelRouting({ jkt48_delynn: "https://discord.com/api/webhooks/555/token-e" });
+  assert.equal(getChannelWebhookFor("Jkt48_Delynn"), "https://discord.com/api/webhooks/555/token-e");
+});

@@ -24,13 +24,23 @@ function loadChannelRouting() {
 
 // Full REPLACE, bukan merge - file lokal yang di-push (scripts/set-channel-routing.js)
 // selalu dianggap sumber kebenaran yang lengkap, bukan tambahan parsial.
+//
+// Key-nya di-lowercase-in DI SINI (bukan ngandelin file lokal yang di-isi
+// manual sama owner selalu lowercase) - idnApi.js's isJkt48Member juga
+// nge-lowercase creator.username sebelum dibandingin, jadi udah ada preseden
+// kalau casing dari IDN nggak bisa dipercaya konsisten. Tanpa normalisasi
+// ini, entry kayak "jkt48_Aralie" (huruf besar) bakal DIEM-DIEM gak pernah
+// nyantol ke getChannelWebhookFor (yang dipanggil pake username asli dari
+// IDN, hampir pasti lowercase) - bukan error, notifnya cuma gak pernah
+// kekirim ke channel khusus tanpa penjelasan kenapa.
 function saveChannelRouting(map) {
-  store.save(map);
+  const normalized = Object.fromEntries(Object.entries(map).map(([username, url]) => [username.toLowerCase(), url]));
+  store.save(normalized);
 }
 
 function getChannelWebhookFor(username) {
   if (!username) return null;
-  return loadChannelRouting()[username] || null;
+  return loadChannelRouting()[username.toLowerCase()] || null;
 }
 
 module.exports = { loadChannelRouting, saveChannelRouting, getChannelWebhookFor };

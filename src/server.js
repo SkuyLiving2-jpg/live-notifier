@@ -14,7 +14,12 @@ const { loadChannelRouting, saveChannelRouting } = require("./storage/channelRou
 // bukan webhook URL SEDINI mungkin (pas di-push), bukan nyoba kirim ke situ
 // dulu baru ketauan gagal tiap kali ada notif. Persis pola yang dipake
 // scripts/backfill-live-history.js's extractWebhookIds buat narik id+token.
-const DISCORD_WEBHOOK_URL_RE = /^https:\/\/discord\.com\/api\/webhooks\/\d+\/[^/?]+$/;
+// Domain-nya terima "discord.com" (yang sekarang) ATAU "discordapp.com"
+// (domain lama - masih beneran jalan buat webhook, banyak URL lama/tutorial
+// masih makai ini) - ketauan pas owner nyoba push webhook URL yang dia
+// copy dan ternyata masih pake discordapp.com, ke-tolak duluan padahal
+// URL-nya beneran valid & bisa dipake.
+const DISCORD_WEBHOOK_URL_RE = /^https:\/\/discord(app)?\.com\/api\/webhooks\/\d+\/[^/?]+$/;
 
 // Endpoint contoh yang dilindungi signature - nunjukkin data internal bot
 // yang lebih detail dibanding health-check publik. Pola ini yang dipake

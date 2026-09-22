@@ -108,6 +108,28 @@ test("POST /api/channel-routing - request tanpa signature ditolak (401)", async 
   }
 });
 
+// Regresi: owner nyoba push webhook URL yang copy-annya masih pake domain
+// LAMA (discordapp.com, bukan discord.com) - itu masih beneran webhook yang
+// valid/jalan, tapi ke-tolak duluan sama regex yang cuma nerima discord.com.
+test("POST /api/channel-routing - webhook URL domain LAMA (discordapp.com) tetep diterima, bukan cuma discord.com", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const body = JSON.stringify({ jkt48_aralie: "https://discordapp.com/api/webhooks/111/token-aralie" });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.deepEqual(data, { ok: true, count: 1 });
+  } finally {
+    server.close();
+  }
+});
+
 test("POST /api/channel-routing - request yang di-sign bener nyimpen pemetaan, full REPLACE bukan merge", async () => {
   const server = await startTestServer();
   try {

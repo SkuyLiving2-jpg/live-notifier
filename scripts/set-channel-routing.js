@@ -35,10 +35,11 @@ const BOT_API_URL = process.env.BOT_API_URL || "";
 const API_SECRET = process.env.API_SECRET || "";
 const ROUTING_FILE = path.join(__dirname, "..", "channel-routing.local.json");
 
-// Sama pola validasinya kayak server.js's handleChannelRoutingUpload - dicek
-// juga di sini (bukan cuma ngandelin server) biar typo ketauan LANGSUNG di
+// Sama pola validasinya kayak server.js's handleChannelRoutingUpload (termasuk
+// nerima domain lama discordapp.com juga, masih beneran jalan) - dicek juga
+// di sini (bukan cuma ngandelin server) biar typo ketauan LANGSUNG di
 // komputer sendiri, bukan abis nunggu roundtrip network ke Railway dulu.
-const DISCORD_WEBHOOK_URL_RE = /^https:\/\/discord\.com\/api\/webhooks\/\d+\/[^/?]+$/;
+const DISCORD_WEBHOOK_URL_RE = /^https:\/\/discord(app)?\.com\/api\/webhooks\/\d+\/[^/?]+$/;
 
 async function main() {
   if (!BOT_API_URL || !API_SECRET) {
