@@ -23,6 +23,7 @@ const {
   replyLiveCountLeaderboard,
   replySchedulePattern,
   replyPriorityList,
+  replySpecificMember,
   handleSubscribe,
   handleUnsubscribe,
   isOwner,
@@ -214,6 +215,45 @@ test("replyLiveCountLeaderboard - diurutin dari yang paling sering live, format 
   assert.ok(posA < posB, "yang count-nya lebih banyak (5x) harus muncul LEBIH DULU dari yang lebih sedikit (3x)");
   assert.match(reply, /LeaderboardTestA\*\* - 5x live/);
   assert.match(reply, /LeaderboardTestB\*\* - 3x live/);
+});
+
+test("replySpecificMember - liveAt normal nyantumin jam mulai & elapsed time", () => {
+  const entry = {
+    name: "JamTest",
+    username: "jkt48_jamtest",
+    slug: "slug-jamtest",
+    liveAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    viewCount: 42,
+  };
+  const reply = replySpecificMember(entry);
+  assert.match(reply, /\*\*JamTest\*\* lagi live/);
+  assert.match(reply, /mulai jam \d{2}\.\d{2} WIB/);
+});
+
+// Regresi: entry.liveAt datang mentah dari live_at API IDN (idnApi.js gak
+// validasi format-nya) - formatClockWIB() (Intl.DateTimeFormat) THROW kalau
+// dikasih Invalid Date, beda dari formatDuration/describeElapsed yang cuma
+// ngasih teks "NaN" kalau dikasih angka aneh. Tanpa validasi ini, "cok siapa
+// yang live <nama>" bakal gagal total (gak ada balesan sama sekali, ke-catch
+// diem-diem sama router.js's try/catch) kalau live_at member itu kebetulan
+// rusak. Sama kelas bug yang ketemu di notify/liveNotify.js's sendDiscordNotif.
+test("replySpecificMember - liveAt RUSAK (bukan tanggal valid) gak bikin throw, jam mulai cuma di-skip dari balesan", () => {
+  const entry = {
+    name: "RusakTest",
+    username: "jkt48_rusaktest",
+    slug: "slug-rusaktest",
+    liveAt: "bukan-tanggal-valid",
+    viewCount: 10,
+  };
+  assert.doesNotThrow(() => replySpecificMember(entry));
+  const reply = replySpecificMember(entry);
+  assert.match(reply, /\*\*RusakTest\*\* lagi live/);
+  assert.doesNotMatch(reply, /mulai jam/, "jam mulai harus di-skip, bukan dipaksain nampilin data rusak");
+});
+
+test("replySpecificMember - liveAt null (member ada tapi belum sempet kecatet jam mulainya) gak throw juga", () => {
+  const entry = { name: "NullTest", username: "jkt48_nulltest", slug: "slug-nulltest", liveAt: null, viewCount: null };
+  assert.doesNotThrow(() => replySpecificMember(entry));
 });
 
 test("replySchedulePattern - kurang dari 3 riwayat -> 'masih kurang', minimal 3 -> nebak pola jam", () => {

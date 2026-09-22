@@ -2,7 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { buildNormalPayload } = require("../src/notify/liveNotify");
+const { buildNormalPayload, sendDiscordNotif } = require("../src/notify/liveNotify");
 const { getAllPriorityMembers } = require("../src/priority");
 const { formatClockWIB } = require("../src/utils");
 
@@ -60,4 +60,42 @@ test("buildNormalPayload - status start buat Levi (prioritas tapi TANPA startInt
   const levi = getAllPriorityMembers().find((m) => m.keyword === "levi");
   const payload = buildNormalPayload("Levi", "https://idn.app/x", "start", levi, null, FIXED_TIME);
   assert.equal(payload.content, `🚨 **Levi** lagi live di IDN Live!\nNonton di sini: https://idn.app/x\nMulai jam ${FIXED_CLOCK}`);
+});
+
+// Regresi: live_at datang MENTAH dari API IDN (idnApi.js gak validasi
+// format-nya sama sekali). Kalau suatu saat itu bukan string tanggal yang
+// keparse, `new Date(liveAt)` jadi Invalid Date - formatClockWIB()
+// (Intl.DateTimeFormat) THROW kalau dikasih itu, beda dari
+// formatDuration/describeElapsed yang cuma ngasih teks aneh ("NaN") tanpa
+// throw. Tanpa validasi di sendDiscordNotif, satu live_at yang rusak bikin
+// checkLiveMembers()'s siklus polling itu keputus lebih awal (member LAIN
+// yang belum sempet diproses di siklus yang sama ikut kelewat).
+test("sendDiscordNotif - liveAt RUSAK (bukan tanggal valid) gak bikin throw, jam mulai jatuh ke waktu sekarang", async () => {
+  const original = global.fetch;
+  let capturedBody = null;
+  global.fetch = async (url, options) => {
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await assert.doesNotReject(sendDiscordNotif("Gabby", "jkt48_gabby", "slug-x", "start", null, "bukan-tanggal-valid"));
+    assert.match(capturedBody.content, /\nMulai jam \d{2}\.\d{2} WIB$/, "tetep nyantumin jam mulai, jatuh ke waktu sekarang");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("sendDiscordNotif - liveAt null/kosong (belum ada data live_at) gak throw juga, jatuh ke waktu sekarang", async () => {
+  const original = global.fetch;
+  let capturedBody = null;
+  global.fetch = async (url, options) => {
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await assert.doesNotReject(sendDiscordNotif("Gabby", "jkt48_gabby", "slug-x", "start", null, null));
+    assert.match(capturedBody.content, /\nMulai jam \d{2}\.\d{2} WIB$/);
+  } finally {
+    global.fetch = original;
+  }
 });

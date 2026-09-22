@@ -112,8 +112,17 @@ function replyBotStatus() {
 }
 
 function replySpecificMember(entry) {
-  const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
-  const startText = entry.liveAt ? `, mulai jam ${formatClockWIB(new Date(entry.liveAt))}` : "";
+  // entry.liveAt datang MENTAH dari live_at API IDN (idnApi.js gak validasi
+  // format-nya) - divalidasi eksplisit di sini soalnya formatClockWIB()
+  // (Intl.DateTimeFormat) THROW kalau dikasih Invalid Date (bukan ngasih
+  // teks aneh kayak formatDuration/describeElapsed dengan NaN) - tanpa ini,
+  // satu live_at yang kebetulan rusak bikin "cok siapa yang live <nama>"
+  // gagal total tanpa balesan sama sekali (lihat notify/liveNotify.js's
+  // sendDiscordNotif buat bug sekelas ini yang ketemu duluan).
+  const liveAtDate = entry.liveAt ? new Date(entry.liveAt) : null;
+  const liveAtValid = liveAtDate && !Number.isNaN(liveAtDate.getTime());
+  const elapsedText = describeElapsed(liveAtValid ? Date.now() - liveAtDate.getTime() : 0);
+  const startText = liveAtValid ? `, mulai jam ${formatClockWIB(liveAtDate)}` : "";
   const viewText = entry.viewCount != null ? ` | 👁️ ${formatViewCount(entry.viewCount)} penonton` : "";
   const liveUrl = `https://idn.app/${entry.username}/live/${entry.slug}`;
   return `**${entry.name}** lagi live, ${elapsedText}${startText}${viewText}. ${liveUrl}`;

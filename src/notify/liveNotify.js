@@ -75,7 +75,17 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   // udah ke-install, bukan buka browser).
   const liveUrl = `https://idn.app/${username}/live/${slug}`;
   const priority = getPriorityConfig(memberName, username);
-  const timestamp = status === "end" || !liveAt ? new Date() : new Date(liveAt);
+  // `liveAt` datang MENTAH dari respons API IDN (idnApi.js gak validasi
+  // format-nya sama sekali) - kalau IDN suatu saat ngasih string yang gak
+  // keparse (bukan cuma null/kosong, yang udah ke-cover sama `!liveAt`),
+  // `new Date(liveAt)` jadi Invalid Date. formatClockWIB() (Intl.DateTimeFormat)
+  // THROW kalau dikasih Invalid Date, bukan ngasih teks aneh - tanpa
+  // pengecekan Number.isNaN ini, satu live_at yang rusak bakal nge-throw
+  // sampe ke checkLiveMembers()'s try/catch LUAR, motong siklus polling itu
+  // lebih awal (member LAIN yang belum sempet diproses di siklus yang sama
+  // ikut kelewat, bukan cuma yang live_at-nya rusak).
+  const parsedLiveAt = liveAt ? new Date(liveAt) : null;
+  const timestamp = status === "start" && parsedLiveAt && !Number.isNaN(parsedLiveAt.getTime()) ? parsedLiveAt : new Date();
   const payload = buildNormalPayload(memberName, liveUrl, status, priority, imageUrl, timestamp);
 
   if (status === "start") {
