@@ -44,7 +44,7 @@ async function checkLiveMembers() {
 
       // Kirim notif cuma kalo member baru mulai live
       if (!activeLives.has(username)) {
-        const terkirim = await sendDiscordNotif(live.creator.name, live.creator.username, live.slug, "start", live.image_url);
+        const terkirim = await sendDiscordNotif(live.creator.name, live.creator.username, live.slug, "start", live.image_url, live.live_at);
         if (terkirim) {
           activeLives.set(username, {
             name: live.creator.name,

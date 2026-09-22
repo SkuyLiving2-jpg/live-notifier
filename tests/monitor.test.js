@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { stopPolling, checkLiveMembers } = require("../src/monitor");
 const { activeLives } = require("../src/storage/activeLives");
 const { getCompletedSessionsToday } = require("../src/storage/dailyLog");
+const { formatClockWIB } = require("../src/utils");
 
 // pollLoop() sendiri SENGAJA gak dites langsung di sini - checkLiveMembers()
 // di dalemnya manggil fetchAllLivestreams() yang nembak API IDN BENERAN.
@@ -116,11 +117,15 @@ test("checkLiveMembers - durasi WAJAR tetep kecatet normal ke daily-log (fix imp
 // mana dari dua kasus itu yang lagi kejadian, biar cycle SELANJUTNYA
 // (checkLiveMembers() panggilan berikutnya) mulai dari entry queue yang
 // BENER, bukan ketuker gara-gara nganggep semua cycle butuh 2 fetch call.
-function mockFetchIdnCycles(cycles) {
+// capturedWebhookBodies (opsional) - array yang di-push isi body tiap kali
+// mock ini "ngirim" ke webhook Discord, biar test bisa ngecek ISI notif yang
+// beneran keluar dari checkLiveMembers() (mis. baris "Mulai jam"/"Selesai
+// jam"), bukan cuma efek sampingnya doang di activeLives/daily-log.
+function mockFetchIdnCycles(cycles, capturedWebhookBodies = []) {
   const original = global.fetch;
   const queue = [...cycles];
   let awaitingTerminator = false;
-  global.fetch = async (url) => {
+  global.fetch = async (url, options) => {
     if (String(url).includes("idn.app")) {
       if (awaitingTerminator) {
         awaitingTerminator = false;
@@ -130,6 +135,7 @@ function mockFetchIdnCycles(cycles) {
       if (data.length > 0) awaitingTerminator = true;
       return { ok: true, json: async () => ({ data: { getLivestreams: data } }) };
     }
+    if (options?.body) capturedWebhookBodies.push(JSON.parse(options.body));
     return { ok: true, json: async () => ({}) }; // webhook Discord - anggap selalu sukses kekirim
   };
   return () => {
@@ -207,6 +213,50 @@ test("checkLiveMembers - member absen 2x BERTURUT-TURUT baru beneran dianggap se
 
     const recorded = getCompletedSessionsToday().some((s) => s.username === username);
     assert.equal(recorded, true, "sesi yang BENERAN selesai (2x absen berturut-turut) harus tetep kecatet normal ke daily-log");
+  } finally {
+    restoreFetch();
+    activeLives.delete(username);
+  }
+});
+
+// Regresi buat permintaan owner: notif "mulai live" harus nyantumin jam
+// mulai, notif "selesai" harus nyantumin jam selesai (lihat
+// notify/liveNotify.js's buildNormalPayload). Dicek END-TO-END lewat
+// checkLiveMembers() beneran (bukan langsung manggil buildNormalPayload,
+// yang udah dites terpisah di tests/liveNotify.test.js) - biar kepastian
+// monitor.js BENERAN nerusin live.live_at (jam mulai ASLI dari IDN, bukan
+// jam bot ngedetek-nya) ke sendDiscordNotif juga ke-cover.
+test("checkLiveMembers - notif start nyantumin jam mulai (dari live_at IDN), notif end nyantumin jam selesai (sekarang)", async () => {
+  const username = "jkt48_test_jamnotif";
+  const liveAtIso = new Date(Date.now() - 15 * 60_000).toISOString(); // 15 menit lalu
+  const liveEntry = fakeLiveEntry(username, "JamNotifTest", liveAtIso);
+  const capturedWebhookBodies = [];
+
+  const restoreFetch = mockFetchIdnCycles(
+    [
+      [liveEntry], // cycle 1: mulai live
+      [], // cycle 2: absen 1x
+      [], // cycle 3: absen 2x berturut-turut -> beneran selesai
+    ],
+    capturedWebhookBodies,
+  );
+  try {
+    await checkLiveMembers(); // notif "start" kekirim
+    await checkLiveMembers(); // absen 1x, belum ada notif "end"
+    await checkLiveMembers(); // absen 2x berturut-turut, notif "end" kekirim
+
+    assert.equal(capturedWebhookBodies.length, 2, "harus persis 2 notif kekirim: start & end");
+
+    const startBody = capturedWebhookBodies[0];
+    assert.match(startBody.content, /\nMulai jam \d{2}\.\d{2} WIB/, "notif start harus nyantumin jam mulai");
+    assert.match(
+      startBody.content,
+      new RegExp(`Mulai jam ${formatClockWIB(new Date(liveAtIso))}`),
+      "jam mulai yang ditampilin harus dari live_at ASLI IDN, bukan jam bot ngedetek",
+    );
+
+    const endBody = capturedWebhookBodies[1];
+    assert.match(endBody.content, /\nSelesai jam \d{2}\.\d{2} WIB/, "notif end harus nyantumin jam selesai");
   } finally {
     restoreFetch();
     activeLives.delete(username);

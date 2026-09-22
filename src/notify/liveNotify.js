@@ -2,7 +2,7 @@ const { postToWebhook } = require("./webhook");
 const { getPriorityConfig } = require("../priority");
 const { sendPriorityDM } = require("./priorityDm");
 const { loadSubscriptions } = require("../storage/subscriptions");
-const { containsWholeWord } = require("../utils");
+const { containsWholeWord, formatClockWIB } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
 // priority (opsional) - kalau member ini punya startIntro/startHashtag (lihat
@@ -25,13 +25,21 @@ const { PRIORITY_PING_USER_ID } = require("../config");
 // spesial dibanding member lain, beda sama priority's embed flashy), cuma
 // visualnya lebih enak diliat. `content` (dan makanya parsing backfill yang
 // baca message.content) sama sekali gak kesentuh oleh ini.
-function buildNormalPayload(memberName, liveUrl, status, priority = null, imageUrl = null) {
+// timestamp (Date) - jam mulai (status "start", idealnya live_at asli dari
+// IDN biar akurat) atau jam selesai (status "end", jam bot NGEDETEK
+// selesainya, soalnya IDN gak nyediain jam selesai beneran) - SELALU
+// ditempel sebagai baris TERAKHIR di content, biar backfill-live-history.js's
+// START_RE/END_RE (yang cuma ngecek AWAL string, gak ada jangkar `$` di
+// akhir) tetep bisa parsing pesan lama maupun baru tanpa perlu diubah.
+function buildNormalPayload(memberName, liveUrl, status, priority = null, imageUrl = null, timestamp = new Date()) {
   if (status === "end") {
-    return { content: `✅ **${memberName}** udah selesai live di IDN Live.` };
+    return { content: `✅ **${memberName}** udah selesai live di IDN Live.\nSelesai jam ${formatClockWIB(timestamp)}` };
   }
   const introLine = priority?.startIntro ? `${priority.startIntro}\n` : "";
   const hashtagSuffix = priority?.startHashtag ? ` ${priority.startHashtag}` : "";
-  const payload = { content: `${introLine}🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}${hashtagSuffix}` };
+  const payload = {
+    content: `${introLine}🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}${hashtagSuffix}\nMulai jam ${formatClockWIB(timestamp)}`,
+  };
   if (imageUrl) {
     payload.embeds = [{ image: { url: imageUrl } }];
   }
@@ -56,14 +64,19 @@ function getSubscribersFor(memberName, username) {
   return [...ids];
 }
 
-async function sendDiscordNotif(memberName, username, slug, status = "start", imageUrl = null) {
+// liveAt (opsional) - jam mulai ASLI dari IDN (field live_at di
+// getLivestreams, dikirim monitor.js cuma pas status "start"). Status "end"
+// gak butuh ini - jam selesainya selalu "sekarang" (kapan bot NGEDETEK live
+// itu udah gak ada lagi), bukan sesuatu yang IDN sediakan.
+async function sendDiscordNotif(memberName, username, slug, status = "start", imageUrl = null, liveAt = null) {
   // Tanpa "www" biar konsisten sama link yang di-generate tombol Share di
   // app IDN sendiri (lebih besar kemungkinan ke-handle sebagai App
   // Link/Universal Link, alias langsung buka app di HP kalau appnya
   // udah ke-install, bukan buka browser).
   const liveUrl = `https://idn.app/${username}/live/${slug}`;
   const priority = getPriorityConfig(memberName, username);
-  const payload = buildNormalPayload(memberName, liveUrl, status, priority, imageUrl);
+  const timestamp = status === "end" || !liveAt ? new Date() : new Date(liveAt);
+  const payload = buildNormalPayload(memberName, liveUrl, status, priority, imageUrl, timestamp);
 
   if (status === "start") {
     const subscriberIds = getSubscribersFor(memberName, username);
@@ -89,7 +102,7 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   // activeLives/riwayat tetap ke-track normal, cuma sisi flashy-nya yang
   // sempet kelewat sekali.
   if (priority) {
-    await sendPriorityDM(memberName, liveUrl, status, priority, imageUrl);
+    await sendPriorityDM(memberName, liveUrl, status, priority, imageUrl, timestamp);
   }
 
   return terkirim;

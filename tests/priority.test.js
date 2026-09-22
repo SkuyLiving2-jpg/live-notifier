@@ -13,6 +13,10 @@ const {
   generateEndMessage,
   buildPriorityPayload,
 } = require("../src/priority");
+const { formatClockWIB } = require("../src/utils");
+
+const FIXED_TIME = new Date("2026-09-22T08:50:00.000Z");
+const FIXED_CLOCK = formatClockWIB(FIXED_TIME);
 
 test("getAllPriorityMembers() awalnya cuma 3 yang hardcoded (Nala/Levi/Lily)", () => {
   // Test pertama di process/file ini - tempCacheDir baru dibikin fresh sama
@@ -84,27 +88,46 @@ test("buildPriorityPayload - includeMention:true nempelin mention, false enggak"
   assert.doesNotMatch(withoutMention.content, /<@999999999999999999>/);
 });
 
-test("buildPriorityPayload - status end pake endMessagePool kalau ada (Nala), plain kalau enggak (Levi)", () => {
+test("buildPriorityPayload - status end pake endMessagePool kalau ada (Nala), plain kalau enggak (Levi) - dua-duanya tetep dapet field jam selesai", () => {
   const nala = getAllPriorityMembers().find((m) => m.keyword === "nala");
   const levi = getAllPriorityMembers().find((m) => m.keyword === "levi");
 
-  const nalaEnd = buildPriorityPayload("Nala", "https://idn.app/x", "end", nala, null);
-  assert.ok(nalaEnd.embeds[0].fields, "Nala harus punya field pesan perpisahan");
+  const nalaEnd = buildPriorityPayload("Nala", "https://idn.app/x", "end", nala, null, { timestamp: FIXED_TIME });
+  assert.equal(nalaEnd.embeds[0].fields.length, 2, "Nala harus punya field jam selesai + field pesan perpisahan");
+  assert.deepEqual(nalaEnd.embeds[0].fields[0], { name: "🕐 Selesai", value: FIXED_CLOCK, inline: true });
+  assert.match(nalaEnd.embeds[0].fields[1].name, /Pesan dari/);
 
-  const leviEnd = buildPriorityPayload("Levi", "https://idn.app/x", "end", levi, null);
-  assert.equal(leviEnd.embeds[0].fields, undefined, "Levi gak punya endMessagePool, jadi gak ada field");
+  const leviEnd = buildPriorityPayload("Levi", "https://idn.app/x", "end", levi, null, { timestamp: FIXED_TIME });
+  assert.deepEqual(
+    leviEnd.embeds[0].fields,
+    [{ name: "🕐 Selesai", value: FIXED_CLOCK, inline: true }],
+    "Levi gak punya endMessagePool, jadi cuma field jam selesai doang",
+  );
+
+  // description dipake APA ADANYA sama scripts/backfill-live-history.js's
+  // parsePriorityEmbedEvent (nama member ditarik langsung dari situ buat
+  // status "end") - harus TETAP cuma nama doang, gak boleh ketempelan teks lain.
+  assert.equal(nalaEnd.embeds[0].description, "Nala");
 });
 
-test("buildPriorityPayload - status start pake startIntro/startHashtag kalau ada (Nala), plain kalau enggak (Levi)", () => {
+test("buildPriorityPayload - status start pake startIntro/startHashtag kalau ada (Nala), plain kalau enggak (Levi), dua-duanya dapet field jam mulai", () => {
   const nala = getAllPriorityMembers().find((m) => m.keyword === "nala");
   const levi = getAllPriorityMembers().find((m) => m.keyword === "levi");
 
-  const nalaStart = buildPriorityPayload("Nala", "https://idn.app/x", "start", nala, null);
+  const nalaStart = buildPriorityPayload("Nala", "https://idn.app/x", "start", nala, null, { timestamp: FIXED_TIME });
   assert.match(nalaStart.content, /^Nala, si Best Friend mu lagi Live\n/);
   assert.match(nalaStart.content, /JANGAN SAMPE KETINGGALAN/);
   assert.match(nalaStart.content, /#NaLex$/);
+  assert.deepEqual(nalaStart.embeds[0].fields, [{ name: "🕐 Mulai", value: FIXED_CLOCK, inline: true }]);
 
-  const leviStart = buildPriorityPayload("Levi", "https://idn.app/x", "start", levi, null);
+  const leviStart = buildPriorityPayload("Levi", "https://idn.app/x", "start", levi, null, { timestamp: FIXED_TIME });
   assert.doesNotMatch(leviStart.content, /Best Friend/);
   assert.doesNotMatch(leviStart.content, /#NaLex/);
+  assert.deepEqual(leviStart.embeds[0].fields, [{ name: "🕐 Mulai", value: FIXED_CLOCK, inline: true }]);
+});
+
+test("buildPriorityPayload - timestamp default (gak dikasih argumen) tetep aman, jatuh ke waktu sekarang", () => {
+  const levi = getAllPriorityMembers().find((m) => m.keyword === "levi");
+  const payload = buildPriorityPayload("Levi", "https://idn.app/x", "start", levi, null);
+  assert.match(payload.embeds[0].fields[0].value, /^\d{2}\.\d{2} WIB$/);
 });

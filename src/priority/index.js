@@ -1,4 +1,4 @@
-const { containsWholeWord, pickRandom } = require("../utils");
+const { containsWholeWord, pickRandom, formatClockWIB } = require("../utils");
 const { PRIORITY_MEMBERS, PRIORITY_COLOR_PALETTE, PRIORITY_PING_USER_ID } = require("../config");
 const { loadCustomPriorityMembers, saveCustomPriorityMembers } = require("../storage/priorityStore");
 
@@ -67,7 +67,14 @@ function generateEndMessage(priority) {
 // sendPriorityDM) - nge-mention diri sendiri di DM sendiri itu aneh/
 // redundant, mention cuma perlu dipasang kalau suatu saat payload ini
 // dipakai lagi buat posting ke channel bersama.
-function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, { includeMention = true } = {}) {
+// timestamp (opsional, default sekarang) - jam mulai/selesai, sama field yang
+// dipake notify/liveNotify.js's buildNormalPayload, biar konsisten antara
+// notif channel biasa & DM flashy prioritas. Ditaro di embeds[0].fields
+// (BUKAN di `description`) - description's isinya dipercaya APA ADANYA sama
+// scripts/backfill-live-history.js's parsePriorityEmbedEvent (nama member
+// buat status "end" ditarik LANGSUNG dari situ), jadi gak boleh ditempelin
+// teks lain.
+function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, { includeMention = true, timestamp = new Date() } = {}) {
   const mention = includeMention && PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}> ` : "";
 
   if (status === "end") {
@@ -79,6 +86,8 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, {
     // tiap kali fungsi ini dipanggil, jadi tiap live selesai kalimatnya
     // beda-beda.
     const endMessage = generateEndMessage(priority);
+    const fields = [{ name: "🕐 Selesai", value: formatClockWIB(timestamp), inline: true }];
+    if (endMessage) fields.push({ name: `💌 Pesan dari ${priority.label}`, value: endMessage });
     return {
       content: endMessage
         ? `${mention}${priority.sirens} Live prioritas **#${priority.rank} ${priority.label}** udah selesai. 💌`
@@ -90,9 +99,8 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, {
           color: priority.color,
           url: liveUrl,
           ...(imageUrl ? { thumbnail: { url: imageUrl } } : {}),
-          ...(endMessage
-            ? { fields: [{ name: `💌 Pesan dari ${priority.label}`, value: endMessage }], footer: { text: "Sampai jumpa di live berikutnya!" } }
-            : {}),
+          fields,
+          ...(endMessage ? { footer: { text: "Sampai jumpa di live berikutnya!" } } : {}),
         },
       ],
     };
@@ -117,7 +125,8 @@ function buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, {
         url: liveUrl,
         color: priority.color,
         footer: { text: "IDN Live Priority Alert" },
-        timestamp: new Date().toISOString(),
+        timestamp: timestamp.toISOString(),
+        fields: [{ name: "🕐 Mulai", value: formatClockWIB(timestamp), inline: true }],
         // "image" (bukan "thumbnail") sengaja dipilih di sini - dia nampilin
         // gambarnya BESAR di bawah embed, jauh lebih eye-catching buat notif
         // "baru mulai live" yang emang tujuannya bikin orang langsung notice.

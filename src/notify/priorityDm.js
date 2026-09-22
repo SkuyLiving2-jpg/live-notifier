@@ -15,11 +15,11 @@ const { formatDuration } = require("../utils");
 // "dipaksa" liat 3 member itu diistimewain. Versi flashy-nya dikirim
 // TERPISAH lewat DM pribadi ke pemilik doang (fungsi di bawah ini), gak
 // numpang tampil di channel sama sekali.
-async function sendPriorityDM(memberName, liveUrl, status, priority, imageUrl) {
+async function sendPriorityDM(memberName, liveUrl, status, priority, imageUrl, timestamp) {
   const client = getDiscordClient();
   if (!client || !PRIORITY_PING_USER_ID) return; // fitur bot token/owner ID belum diset - flashy DM dimatiin, channel tetap dapet notif biasa
 
-  const payload = buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, { includeMention: false });
+  const payload = buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, { includeMention: false, timestamp });
   try {
     const user = await client.users.fetch(PRIORITY_PING_USER_ID);
     await user.send(payload);
