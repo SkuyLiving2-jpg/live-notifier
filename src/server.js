@@ -8,6 +8,13 @@ const { loadDailyLog, saveDailyLog, recordLiveEnded } = require("./storage/daily
 const { loadCustomPriorityMembers } = require("./storage/priorityStore");
 const { loadSubscriptions } = require("./storage/subscriptions");
 const { rebuildLiveCountFromSessions } = require("./storage/liveCount");
+const { loadChannelRouting, saveChannelRouting } = require("./storage/channelRouting");
+
+// Format webhook Discord yang valid - dipake buat nolak entry yang jelas
+// bukan webhook URL SEDINI mungkin (pas di-push), bukan nyoba kirim ke situ
+// dulu baru ketauan gagal tiap kali ada notif. Persis pola yang dipake
+// scripts/backfill-live-history.js's extractWebhookIds buat narik id+token.
+const DISCORD_WEBHOOK_URL_RE = /^https:\/\/discord\.com\/api\/webhooks\/\d+\/[^/?]+$/;
 
 // Endpoint contoh yang dilindungi signature - nunjukkin data internal bot
 // yang lebih detail dibanding health-check publik. Pola ini yang dipake
@@ -65,6 +72,56 @@ function handleGifterSnapshotUpload(req, res, body) {
   res.end(JSON.stringify({ ok: true, username, gifterCount: gifters.length }));
 }
 
+// Nerima pemetaan username -> webhook URL channel KHUSUS per-member yang
+// di-push dari scripts/set-channel-routing.js (jalan di komputer lokal
+// owner). SELALU full REPLACE (bukan merge) - file lokal yang di-push
+// dianggep daftar LENGKAP yang paling baru, bukan tambahan parsial (lihat
+// storage/channelRouting.js's saveChannelRouting). Tiap value divalidasi
+// bentuknya webhook URL Discord SEDINI mungkin di sini - kalau nggak, entry
+// yang typo/salah tempel bakal diam-diam gagal terus tiap kali ada notif
+// buat member itu, baru ketauan pas ngecek log jauh belakangan.
+function handleChannelRoutingUpload(req, res, body) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed, pakai POST" }));
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body bukan JSON valid" }));
+    return;
+  }
+
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body harus berupa object { username: webhookUrl, ... }" }));
+    return;
+  }
+
+  const invalidEntries = Object.entries(payload).filter(([, url]) => typeof url !== "string" || !DISCORD_WEBHOOK_URL_RE.test(url));
+  if (invalidEntries.length > 0) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Ada value yang bukan webhook URL Discord yang valid",
+        invalidUsernames: invalidEntries.map(([username]) => username),
+      }),
+    );
+    return;
+  }
+
+  saveChannelRouting(payload);
+
+  const count = Object.keys(payload).length;
+  console.log(`Pemetaan channel per-member ke-update (${count} member)`);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, count }));
+}
+
 // Read-only - narik SEMUA data yang lagi kesimpen jadi satu file JSON,
 // buat scripts/backup-data.js narik backup manual ke komputer lokal (data
 // Railway cuma ada di Volume-nya, gak ada cadangan lain kalau itu ilang).
@@ -81,6 +138,7 @@ function handleBackupExport(req, res) {
       customPriority: loadCustomPriorityMembers(),
       subscriptions: loadSubscriptions(),
       gifterSnapshot: loadGifterSnapshot(),
+      channelRouting: loadChannelRouting(),
     }),
   );
 }
@@ -334,6 +392,11 @@ function startServer() {
 
       if (req.url === "/api/gifter-snapshot") {
         signedEndpoint(handleGifterSnapshotUpload)(req, res);
+        return;
+      }
+
+      if (req.url === "/api/channel-routing") {
+        signedEndpoint(handleChannelRoutingUpload)(req, res);
         return;
       }
 

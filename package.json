@@ -14,7 +14,8 @@
     "backup-data": "node scripts/backup-data.js",
     "backfill-live-history": "node scripts/backfill-live-history.js",
     "repair-live-history": "node scripts/repair-live-history.js",
-    "count-priority-notifs": "node scripts/count-priority-notifs.js"
+    "count-priority-notifs": "node scripts/count-priority-notifs.js",
+    "set-channel-routing": "node scripts/set-channel-routing.js"
   },
   "engines": {
     "node": ">=18"

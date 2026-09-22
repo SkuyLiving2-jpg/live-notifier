@@ -38,6 +38,40 @@ test("postToWebhook - body yang beneran dikirim ke Discord SELALU punya allowed_
   }
 });
 
+// Fitur channel khusus per-member (storage/channelRouting.js) - postToWebhook
+// sekarang nerima webhookUrl opsional buat ngirim ke tujuan LAIN dari
+// DISCORD_WEBHOOK_URL default, dipake buat kirim ke channel spesifik member.
+test("postToWebhook - webhookUrl dikasih eksplisit -> ngirim ke URL itu, BUKAN DISCORD_WEBHOOK_URL default", async () => {
+  const original = global.fetch;
+  let calledUrl = null;
+  global.fetch = async (url) => {
+    calledUrl = url;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const ok = await postToWebhook({ content: "x" }, "label", "https://discord.com/api/webhooks/999/channel-khusus");
+    assert.equal(ok, true);
+    assert.equal(calledUrl, "https://discord.com/api/webhooks/999/channel-khusus");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("postToWebhook - webhookUrl GAK dikasih -> tetep jatuh ke DISCORD_WEBHOOK_URL default (backward compatible)", async () => {
+  const original = global.fetch;
+  let calledUrl = null;
+  global.fetch = async (url) => {
+    calledUrl = url;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await postToWebhook({ content: "x" });
+    assert.equal(calledUrl, process.env.DISCORD_WEBHOOK_URL);
+  } finally {
+    global.fetch = original;
+  }
+});
+
 test("postToWebhook - allowed_mentions custom dari payload (subscriber ping) tetep sampe utuh ke body yang dikirim", async () => {
   const original = global.fetch;
   let capturedBody = null;

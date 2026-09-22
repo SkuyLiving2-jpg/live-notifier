@@ -91,6 +91,97 @@ test("GET /api/backup - request yang di-sign bener balikin agregasi semua storag
     assert.deepEqual(data.customPriority, []);
     assert.deepEqual(data.subscriptions, {});
     assert.deepEqual(data.gifterSnapshot, { members: {} });
+    assert.deepEqual(data.channelRouting, {});
+  } finally {
+    server.close();
+  }
+});
+
+test("POST /api/channel-routing - request tanpa signature ditolak (401)", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const res = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, { method: "POST", body: "{}" });
+    assert.equal(res.status, 401);
+  } finally {
+    server.close();
+  }
+});
+
+test("POST /api/channel-routing - request yang di-sign bener nyimpen pemetaan, full REPLACE bukan merge", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const body1 = JSON.stringify({ jkt48_aralie: "https://discord.com/api/webhooks/111/token-aralie" });
+    const { timestamp: t1, signature: s1 } = sign(body1);
+    const res1 = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": t1, "X-Api-Signature": s1, "Content-Type": "application/json" },
+      body: body1,
+    });
+    assert.equal(res1.status, 200);
+    const data1 = await res1.json();
+    assert.deepEqual(data1, { ok: true, count: 1 });
+
+    // Push KEDUA cuma nyantumin 1 username BEDA - harus jadi satu-satunya isi
+    // (REPLACE), aralie dari push pertama HARUS ilang, bukan numpuk (merge).
+    const body2 = JSON.stringify({ jkt48_delynn: "https://discord.com/api/webhooks/222/token-delynn" });
+    const { timestamp: t2, signature: s2 } = sign(body2);
+    const res2 = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": t2, "X-Api-Signature": s2, "Content-Type": "application/json" },
+      body: body2,
+    });
+    assert.equal(res2.status, 200);
+
+    const { timestamp: t3, signature: s3 } = sign("");
+    const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
+      headers: { "X-Api-Timestamp": t3, "X-Api-Signature": s3 },
+    });
+    const backup = await backupRes.json();
+    assert.deepEqual(backup.channelRouting, { jkt48_delynn: "https://discord.com/api/webhooks/222/token-delynn" });
+  } finally {
+    server.close();
+  }
+});
+
+test("POST /api/channel-routing - value yang bukan webhook URL valid ditolak (400), gak nimpa data yang udah ada", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+
+    // Baseline dulu (bukan ngandelin state sisa test lain di file yang sama)
+    // - dipush valid duluan, biar bisa dipastiin push yang INVALID setelahnya
+    // BENERAN gak nimpa apa-apa, bukan cuma kebetulan ketemu {} yang kosong.
+    const baselineBody = JSON.stringify({ jkt48_baseline: "https://discord.com/api/webhooks/777/token-baseline" });
+    const { timestamp: tb, signature: sb } = sign(baselineBody);
+    await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": tb, "X-Api-Signature": sb, "Content-Type": "application/json" },
+      body: baselineBody,
+    });
+
+    const body = JSON.stringify({ jkt48_aralie: "bukan-webhook-url-valid" });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.deepEqual(data.invalidUsernames, ["jkt48_aralie"]);
+
+    const { timestamp: t2, signature: s2 } = sign("");
+    const backupRes = await fetch(`http://127.0.0.1:${port}/api/backup`, {
+      headers: { "X-Api-Timestamp": t2, "X-Api-Signature": s2 },
+    });
+    const backup = await backupRes.json();
+    assert.deepEqual(
+      backup.channelRouting,
+      { jkt48_baseline: "https://discord.com/api/webhooks/777/token-baseline" },
+      "push invalid harus gak nimpa data baseline sama sekali, walau cuma satu dari banyak entry yang rusak",
+    );
   } finally {
     server.close();
   }

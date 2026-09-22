@@ -2,6 +2,7 @@ const { postToWebhook } = require("./webhook");
 const { getPriorityConfig } = require("../priority");
 const { sendPriorityDM } = require("./priorityDm");
 const { loadSubscriptions } = require("../storage/subscriptions");
+const { getChannelWebhookFor } = require("../storage/channelRouting");
 const { containsWholeWord, formatClockWIB } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
@@ -101,7 +102,25 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
     }
   }
 
-  const terkirim = await postToWebhook(payload);
+  // Channel KHUSUS member ini (fitur "Q2", storage/channelRouting.js) -
+  // kalau ada, payload yang SAMA juga dikirim ke situ, DUPLIKAT (bukan
+  // pengganti) dari channel gabungan di bawah. Dijalanin BARENGAN (bukan
+  // nunggu satu-satu) - dua-duanya independen, nunggu berurutan cuma bakal
+  // dobelin latensi tiap member yang punya channel khusus di tiap siklus
+  // polling monitor.js tanpa manfaat apa-apa. `terkirim` (yang nentuin
+  // activeLives/riwayat, lihat monitor.js) CUMA dari hasil channel gabungan
+  // - kegagalan kirim ke channel khusus (mis. webhook-nya keburu dihapus)
+  // dianggep best-effort, sama kayak sendPriorityDM di bawah, BUKAN dianggep
+  // "notif ini gagal" secara keseluruhan.
+  const dedicatedWebhookUrl = getChannelWebhookFor(username);
+  const [terkirim] = await Promise.all([
+    postToWebhook(payload),
+    dedicatedWebhookUrl
+      ? postToWebhook(payload, `Gagal ngirim notif ke channel khusus ${memberName}:`, dedicatedWebhookUrl).then((ok) => {
+          if (ok) console.log(`Notif ${status} terkirim ke channel khusus ${memberName}`);
+        })
+      : null,
+  ]);
   if (terkirim) {
     console.log(`Notif ${status} terkirim untuk ${memberName}`);
   }

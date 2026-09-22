@@ -64,12 +64,17 @@ async function getRetryAfterMs(response) {
 // yang sama buat kegagalan jenis itu cuma bakal gagal lagi dengan cara yang
 // sama (kalau payloadnya emang salah) atau nambah beban ke layanan yang
 // emang lagi bermasalah, bukan nolong apa-apa.
-async function postToWebhook(payload, errorLabel = "Gagal ngirim notif ke Discord:") {
+// webhookUrl (opsional, default DISCORD_WEBHOOK_URL/channel gabungan) - buat
+// fitur channel khusus per-member (lihat storage/channelRouting.js), yang
+// butuh kirim payload yang SAMA ke webhook LAIN (channel spesifik member
+// itu). Sengaja jadi parameter tambahan doang (bukan ubah signature yang
+// udah ada) - semua pemanggil lama tetep jalan identik tanpa perlu diubah.
+async function postToWebhook(payload, errorLabel = "Gagal ngirim notif ke Discord:", webhookUrl = DISCORD_WEBHOOK_URL) {
   const body = JSON.stringify(withDefaultMentionGuard(payload));
 
   for (let attempt = 1; attempt <= MAX_RATE_LIMIT_RETRIES + 1; attempt++) {
     try {
-      const response = await fetch(DISCORD_WEBHOOK_URL, {
+      const response = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body,
