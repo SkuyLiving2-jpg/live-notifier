@@ -155,6 +155,7 @@ function replyHelp() {
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
     "",
     'Kalau abis muncul menu tombol, kamu juga bisa cukup balas angkanya doang (misal "1" atau "4 Nala") tanpa perlu klik.',
+    '💡 Notif kerasa suka telat/gak keluar? Cek setting notifikasi channel-nya - klik nama channel > Notification Settings, pastiin di "All Messages" (bukan "Only @mentions"), soalnya notif live biasa emang gak nge-tag siapa-siapa kecuali kamu subscribe ("cok ingetin <nama>").',
     `Ada yang belum kejawab? Hubungi ${ownerContact}.`,
   ].join("\n");
 }

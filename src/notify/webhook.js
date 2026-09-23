@@ -29,9 +29,9 @@ function withDefaultMentionGuard(payload) {
 const MAX_RATE_LIMIT_RETRIES = 3;
 // Cap brapa lama nunggu per retry, TERLEPAS dari retry_after yang diminta
 // Discord - biar satu notif yang kena rate limit parah gak nyandera siklus
-// polling monitor.js (30 detik) kelamaan nunggu (semua pemanggil postToWebhook
-// di-await, jadi delay di sini nunda proses member berikutnya di siklus yang
-// sama juga).
+// polling monitor.js (POLL_INTERVAL_MS, default 20 detik) kelamaan nunggu
+// (semua pemanggil postToWebhook di-await, jadi delay di sini nunda proses
+// member berikutnya di siklus yang sama juga).
 const MAX_RATE_LIMIT_WAIT_MS = 5000;
 
 function sleep(ms) {

@@ -2,10 +2,11 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { stopPolling, checkLiveMembers } = require("../src/monitor");
+const { stopPolling, checkLiveMembers, computeNextPollDelay } = require("../src/monitor");
 const { activeLives } = require("../src/storage/activeLives");
 const { getCompletedSessionsToday } = require("../src/storage/dailyLog");
 const { formatClockWIB } = require("../src/utils");
+const { POLL_INTERVAL_MS } = require("../src/config");
 
 // pollLoop() sendiri SENGAJA gak dites langsung di sini - checkLiveMembers()
 // di dalemnya manggil fetchAllLivestreams() yang nembak API IDN BENERAN.
@@ -17,6 +18,26 @@ const { formatClockWIB } = require("../src/utils");
 test("stopPolling - aman dipanggil sebelum polling pernah jalan, dan idempoten (dipanggil 2x gak error)", () => {
   assert.doesNotThrow(() => stopPolling());
   assert.doesNotThrow(() => stopPolling());
+});
+
+// Regresi buat cadence polling yang molor: pollLoop dulu nunggu
+// POLL_INTERVAL_MS PENUH abis checkLiveMembers() kelar, bukan jadwal tetap
+// dari AWAL siklus - jadi siklus yang lambat (mis. kena retry rate-limit
+// Discord) bikin siklus BERIKUTNYA ikut mundur juga, numpuk keterlambatan
+// notif. computeNextPollDelay ngurangin waktu yang udah kepake siklus
+// barusan dari jeda ke siklus berikutnya.
+test("computeNextPollDelay - siklus cepet (elapsed kecil) -> jeda ke siklus berikutnya dikurangin sesuai waktu yang udah kepake", () => {
+  assert.equal(computeNextPollDelay(0), POLL_INTERVAL_MS);
+  assert.equal(computeNextPollDelay(5000), POLL_INTERVAL_MS - 5000);
+});
+
+test("computeNextPollDelay - siklus LAMBAT (elapsed >= POLL_INTERVAL_MS, mis. abis retry 429 beruntun) tetep dikasih jeda MINIMAL, gak langsung diulang tanpa jeda", () => {
+  assert.equal(computeNextPollDelay(POLL_INTERVAL_MS), 1000);
+  assert.equal(
+    computeNextPollDelay(POLL_INTERVAL_MS + 10_000),
+    1000,
+    "siklus yang jauh lebih lambat dari interval-nya tetep dikasih jeda minimal, bukan 0/negatif",
+  );
 });
 
 // checkLiveMembers() BENERAN dipanggil di 2 test di bawah (beda dari

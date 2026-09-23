@@ -24,6 +24,7 @@ const {
   replySchedulePattern,
   replyPriorityList,
   replySpecificMember,
+  replyHelp,
   handleSubscribe,
   handleUnsubscribe,
   isOwner,
@@ -278,6 +279,17 @@ test("replyPriorityList - urut rank, format '<rank>. **LABEL** (keyword: \"...\"
   assert.match(reply, /1\. \*\*NALA\*\* \(keyword: "nala"\)/);
   assert.match(reply, /2\. \*\*LEVI\*\* \(keyword: "levi"\)/);
   assert.match(reply, /3\. \*\*LILY\*\* \(keyword: "lily"\)/);
+});
+
+// Tip notification settings - dilaporin owner kalau notif "kadang gak
+// langsung keluar/gak muncul", ketauan kemungkinan besar penyebabnya
+// setting channel Discord ("Only @mentions" ngeblokir notif live biasa yang
+// emang gak nge-tag siapa-siapa), bukan bug di bot. Ditambahin ke
+// replyHelp() biar user nemu sendiri jawabannya tanpa perlu nanya owner.
+test("replyHelp - nyantumin tips soal setting notifikasi channel (All Messages vs Only @mentions)", () => {
+  const reply = replyHelp();
+  assert.match(reply, /All Messages/);
+  assert.match(reply, /Only @mentions/);
 });
 
 test("handleSubscribe / handleUnsubscribe - validasi & pesan", () => {

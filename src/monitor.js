@@ -9,22 +9,23 @@ const { maybePartyModeAlert, maybeAlertEndingSoon } = require("./notify/priority
 const { maybeAlertViewerMilestone, maybeAnnounceNewRecord, maybeSendDailyRecap } = require("./notify/publicAlerts");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
-// Berapa siklus polling BERTURUT-TURUT (30 detik/siklus) member harus ABSEN
-// dari respons IDN sebelum beneran dianggap "udah selesai live" - BUKAN
-// langsung pas ilang SEKALI doang. IDN API kadang ngasih respons 200 OK
-// yang KEBETULAN nggak nyantumin satu live yang beneran masih jalan (glitch
-// sesaat di sisi IDN, bukan error jaringan kayak yang udah ditangani
-// try/catch luar). Tanpa grace period ini, satu respons flaky kayak gitu
-// bikin bot nganggep live-nya "selesai" (kecatet durasi pendek ke stats +
-// notif "selesai" kekirim), terus pas dia balik muncul di siklus
-// BERIKUTNYA, dianggap "mulai baru" - satu live yang beneran nyambung
-// terus jadi kecatet PECAH jadi 2 sesi di rekap. Ini persis yang dilaporin
-// owner: member yang sama muncul 2x di tabel rekap dengan jam "Mulai" yang
-// SAMA PERSIS (soalnya `live_at` dari IDN buat live yang sama gak berubah)
-// tapi durasi beda. 2 siklus = harus absen 2x BERTURUT-TURUT (~1 menit)
-// baru dianggap beneran selesai - cukup buat nyaring glitch 1 siklus, tapi
-// gak nunda notif "selesai" yang beneran kelamaan (paling lama ~30 detik
-// lebih lambat dari sebelumnya).
+// Berapa siklus polling BERTURUT-TURUT (~POLL_INTERVAL_MS/siklus, default 20
+// detik - lihat config.js) member harus ABSEN dari respons IDN sebelum
+// beneran dianggap "udah selesai live" - BUKAN langsung pas ilang SEKALI
+// doang. IDN API kadang ngasih respons 200 OK yang KEBETULAN nggak
+// nyantumin satu live yang beneran masih jalan (glitch sesaat di sisi IDN,
+// bukan error jaringan kayak yang udah ditangani try/catch luar). Tanpa
+// grace period ini, satu respons flaky kayak gitu bikin bot nganggep
+// live-nya "selesai" (kecatet durasi pendek ke stats + notif "selesai"
+// kekirim), terus pas dia balik muncul di siklus BERIKUTNYA, dianggap
+// "mulai baru" - satu live yang beneran nyambung terus jadi kecatet PECAH
+// jadi 2 sesi di rekap. Ini persis yang dilaporin owner: member yang sama
+// muncul 2x di tabel rekap dengan jam "Mulai" yang SAMA PERSIS (soalnya
+// `live_at` dari IDN buat live yang sama gak berubah) tapi durasi beda. 2
+// siklus = harus absen 2x BERTURUT-TURUT baru dianggap beneran selesai -
+// cukup buat nyaring glitch 1 siklus, tapi gak nunda notif "selesai" yang
+// beneran kelamaan (paling lama satu siklus tambahan lebih lambat dari
+// sebelumnya).
 const ENDED_GRACE_POLLS = 2;
 
 async function checkLiveMembers() {
@@ -114,7 +115,7 @@ async function checkLiveMembers() {
             // handleRepairLiveHistory yang UDAH nyaring durasi implausible
             // (>MAX_PLAUSIBLE_LIVE_DURATION_MS, lihat ARCHITECTURE.md §10)
             // dari jalur BACKFILL, tapi jalur LIVE normal ini (dipanggil tiap
-            // 30 detik selama bot jalan) kelewatan sama sekali. Kalau
+            // POLL_INTERVAL_MS selama bot jalan) kelewatan sama sekali. Kalau
             // activeLives nyimpen `liveAt` yang udah basi (mis. bot mati
             // berjam-jam - crash loop, Railway kena masalah, dll - terus
             // member itu KEBETULAN masih/lagi live pas bot idup lagi), durasi
@@ -164,12 +165,42 @@ async function checkLiveMembers() {
 let pollTimeoutHandle = null;
 let stopped = false;
 
-// Jalankan polling tiap 30 detik (self-scheduling biar nggak tumpang tindih
-// kalau checkLiveMembers kebetulan lebih lambat dari interval-nya)
+// Jeda MINIMAL antar siklus, apapun yang kejadian - jaring pengaman biar
+// computeNextPollDelay gak pernah balikin 0 (atau negatif) yang bikin
+// checkLiveMembers() langsung diulang tanpa jeda sama sekali kalau siklus
+// sebelumnya somehow makan waktu >= POLL_INTERVAL_MS (mis. lagi kena retry
+// rate-limit Discord beruntun) - itu bisa nge-hammer API IDN pas dia/Discord
+// lagi kebetulan bermasalah, bukan nolong sama sekali.
+const MIN_POLL_DELAY_MS = 1000;
+
+// Berapa lama siklus BERIKUTNYA harus nunggu, dihitung dari berapa lama
+// siklus BARUSAN makan waktu - diekstrak jadi fungsi murni biar bisa dites
+// langsung tanpa perlu mock network/setTimeout beneran (sama pola kayak
+// buildDailyRecapPayload/buildRecapTablePage - logic murni dipisah dari
+// orkestrasi yang nyentuh I/O).
+//
+// BUG SEBELUMNYA: pollLoop nunggu POLL_INTERVAL_MS PENUH abis
+// checkLiveMembers() selesai, bukan jadwal tetap dari AWAL siklus. Kalau
+// satu siklus kebetulan lambat (mis. kena retry 429 Discord yang bisa makan
+// beberapa detik - lihat webhook.js's MAX_RATE_LIMIT_WAIT_MS), siklus
+// berikutnya ikut mundur juga, bukan cuma siklus yang lambat itu doang -
+// efeknya numpuk (compounding) kalau lagi apes beruntun, nambah lagi ke
+// keterlambatan notif yang udah ada dari jeda polling itu sendiri. Sekarang
+// jeda ke siklus berikutnya dikurangin sama waktu yang udah kepake siklus
+// barusan, biar cadence-nya tetep ~POLL_INTERVAL_MS dari awal ke awal
+// siklus, bukan POLL_INTERVAL_MS + durasi siklus.
+function computeNextPollDelay(elapsedMs) {
+  return Math.max(MIN_POLL_DELAY_MS, POLL_INTERVAL_MS - elapsedMs);
+}
+
+// Jalankan polling tiap ~POLL_INTERVAL_MS (self-scheduling biar nggak
+// tumpang tindih kalau checkLiveMembers kebetulan lebih lambat dari
+// interval-nya)
 async function pollLoop() {
+  const startedAt = Date.now();
   await checkLiveMembers();
   if (stopped) return; // jangan jadwalin siklus baru - shutdown lagi diminta
-  pollTimeoutHandle = setTimeout(pollLoop, POLL_INTERVAL_MS);
+  pollTimeoutHandle = setTimeout(pollLoop, computeNextPollDelay(Date.now() - startedAt));
 }
 
 // Dipanggil dari src/app.js's shutdown handler. Siklus checkLiveMembers()
@@ -183,4 +214,4 @@ function stopPolling() {
   }
 }
 
-module.exports = { checkLiveMembers, pollLoop, stopPolling };
+module.exports = { checkLiveMembers, pollLoop, stopPolling, computeNextPollDelay };

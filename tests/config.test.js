@@ -69,3 +69,13 @@ test("DEFAULT_ENDING_SOON_THRESHOLD_MS - env var gak diset -> fallback 40 menit 
   const { DEFAULT_ENDING_SOON_THRESHOLD_MS } = freshConfig({ ENDING_SOON_THRESHOLD_MINUTES: undefined });
   assert.equal(DEFAULT_ENDING_SOON_THRESHOLD_MS, 40 * 60 * 1000);
 });
+
+test("POLL_INTERVAL_MS - env var gak diset -> fallback 20 detik dalam ms (diturunin dari 30 detik)", () => {
+  const { POLL_INTERVAL_MS } = freshConfig({ POLL_INTERVAL_SECONDS: undefined });
+  assert.equal(POLL_INTERVAL_MS, 20 * 1000);
+});
+
+test("POLL_INTERVAL_MS - POLL_INTERVAL_SECONDS diisi angka lain (mis. 15) tetep kepake apa adanya", () => {
+  const { POLL_INTERVAL_MS } = freshConfig({ POLL_INTERVAL_SECONDS: "15" });
+  assert.equal(POLL_INTERVAL_MS, 15 * 1000);
+});

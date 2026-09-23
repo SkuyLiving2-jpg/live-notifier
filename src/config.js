@@ -20,7 +20,12 @@ function envInt(name, fallback) {
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const IDN_API_URL = "https://api.idn.app/graphql";
-const POLL_INTERVAL_MS = 30000;
+// Diturunin dari 30 -> 20 detik (default) buat ngurangin jeda deteksi live
+// baru - dibikin configurable (bukan angka mati) biar owner bisa nyetel
+// sendiri trade-off-nya (makin kecil = makin cepet kedetek, tapi makin
+// sering nembak API IDN) tanpa perlu ubah kode/redeploy tiap kali mau
+// nyoba-nyoba angka lain.
+const POLL_INTERVAL_MS = envInt("POLL_INTERVAL_SECONDS", 20) * 1000;
 
 // Secret buat sistem signature (API_KEY + HMAC-SHA256) yang ngelindungin
 // endpoint API kita dari akses sembarangan - dipakai kalau nanti nambah
