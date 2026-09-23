@@ -75,9 +75,20 @@ async function main() {
     process.exit(1);
   }
 
+  // BUG SEBELUMNYA: cuma nge-log pertanyaan ("lanjut push?") tanpa beneran
+  // nunggu jawaban - script tetep lanjut push apapun kondisinya. Kalau file
+  // lokal kebetulan kosong gak sengaja (kehapus isinya, typo nutup kurung
+  // kurawal kepencet, dll), itu diam-diam NGOSONGIN semua channel khusus
+  // yang udah keset di bot (full replace, lihat komen di atas), tanpa
+  // beneran ada gerbang konfirmasi. Sekarang DIBATALKAN by default kalau
+  // hasil parsing-nya kosong - harus eksplisit pake --allow-empty kalau
+  // memang sengaja mau ngosongin semuanya.
   const count = Object.keys(mapping).length;
-  if (count === 0) {
-    console.log(`${path.basename(ROUTING_FILE)} kosong - lanjut push? Ini bakal NGOSONGIN semua channel khusus yang udah keset di bot.`);
+  if (count === 0 && !process.argv.includes("--allow-empty")) {
+    console.error(
+      `${path.basename(ROUTING_FILE)} kosong - dibatalkan, BUKAN dipush. Ini bakal ngosongin SEMUA channel khusus yang udah keset di bot kalau beneran dipush. Kalau memang sengaja mau ngosongin semuanya, jalanin lagi: npm run set-channel-routing -- --allow-empty`,
+    );
+    process.exit(1);
   }
 
   const bodyString = JSON.stringify(mapping);
