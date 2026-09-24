@@ -382,6 +382,30 @@ async function handleRecapNavButton(interaction) {
     return;
   }
 
+  // Diklik dari tombol "Ya, biarin"/"Enggak, hapus aja" yang nempel di
+  // BALESAN PENCARIAN (lihat buildKeepOrDeleteRecapComponents di bawah) -
+  // owner ngeluh tabel rekap ASLI (yang tombol "🔍 Cari member"-nya diklik)
+  // tetep numpang di channel walau yang dicari udah ketemu, jadi ditanya
+  // eksplisit abis nunjukkin hasil cari. customId-nya bawa ID pesan rekap
+  // ASLI itu (dari interaction.message punya modal submission, lihat
+  // handleRecapSearchModalSubmit) - "delrecap" hapus pesan itu by ID
+  // (gak perlu fetch dulu, channel.messages.delete nerima ID langsung),
+  // "keeprecap" gak ngapa-ngapain selain nutup pertanyaannya. Dua-duanya
+  // ngedit BALESAN PENCARIAN ini sendiri (interaction.update, bukan pesan
+  // baru) buat ngilangin tombol Ya/Enggak-nya abis dijawab - konsisten sama
+  // pola "close" di atas.
+  if (action === "keeprecap" || action === "delrecap") {
+    if (action === "delrecap") {
+      const originalMessageId = parts[2];
+      pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+      if (originalMessageId && interaction.channel) {
+        await interaction.channel.messages.delete(originalMessageId).catch(() => {});
+      }
+    }
+    await interaction.update(safeReplyOptions({ content: interaction.message.content, components: [] }));
+    return;
+  }
+
   const rangeDays = decodeRecapRange(parts[2]);
 
   if (action === "search") {
@@ -413,6 +437,23 @@ async function handleRecapNavButton(interaction) {
   await interaction.update(safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays)));
 }
 
+// Ditempelin di balesan hasil pencarian (handleRecapSearchModalSubmit di
+// bawah) - owner ngeluh tabel rekap ASLI tetep numpang di channel padahal
+// yang dicari udah ketemu lewat hasil pencarian ini. `originalMessageId`
+// datang dari interaction.message punya MODAL SUBMISSION (cuma keisi kalau
+// modal-nya dibuka dari tombol yang NEMPEL DI SEBUAH PESAN - persis kasus
+// kita, "🔍 Cari member" nempel di tabel rekap) - null kalau entah gimana
+// gak keisi (defensif), jadi baris tombolnya dilewatin aja (gak ada apa-apa
+// buat dihapus/dipertahanin kalau ID pesannya sendiri gak ke-ketahuan).
+function buildKeepOrDeleteRecapComponents(originalMessageId) {
+  if (!originalMessageId) return null;
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`recap_nav:keeprecap:${originalMessageId}`).setLabel("Ya, biarin").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`recap_nav:delrecap:${originalMessageId}`).setLabel("Enggak, hapus aja").setStyle(ButtonStyle.Danger),
+  );
+  return [row];
+}
+
 // Diklik abis submit modal yang dimunculin tombol "🔍 Cari member" di atas -
 // filter sesi dari RENTANG yang SAMA kayak tabel asalnya (dibawa lewat
 // customId modal-nya, bukan ditebak ulang) ke satu member doang, dicari
@@ -420,6 +461,9 @@ async function handleRecapNavButton(interaction) {
 // dkk di storage/). Balesan ini SENGAJA gak dikasih tombol navigasi lagi -
 // hasil pencarian 1 member jarang lebih dari 1 halaman, jadi diringkes,
 // beda dari tabel rekap penuh yang emang perlu navigasi banyak halaman.
+// Nanya "rekap sebelumnya masih mau ditampilin?" abis nunjukkin hasil -
+// baik ketemu MAUPUN gak ketemu, soalnya di dua-duanya tabel rekap ASLI
+// masih numpang di atasnya kalau gak dibersihin.
 async function handleRecapSearchModalSubmit(interaction) {
   const range = interaction.customId.split(":")[1];
   const rangeDays = decodeRecapRange(range);
@@ -429,14 +473,21 @@ async function handleRecapSearchModalSubmit(interaction) {
   const needle = query.toLowerCase();
   const matched = sessions.filter((s) => s.name && matchesNameFragment(needle, s.name.split(/[\s|]+/)[0].toLowerCase()));
 
+  const components = buildKeepOrDeleteRecapComponents(interaction.message?.id);
+  const askText = components ? "\n\nRekap sebelumnya masih mau ditampilin?" : "";
+
   if (matched.length === 0) {
-    await interaction.reply(safeReplyOptions(`Cok, gak nemu member "${query}" di rekap ini.`));
+    const reply = { content: `Cok, gak nemu member "${query}" di rekap ini.${askText}` };
+    if (components) reply.components = components;
+    await interaction.reply(safeReplyOptions(reply));
     return;
   }
 
   const { text, hasMore } = buildRecapTablePage(matched, 0);
   const moreNote = hasMore ? `\n_(cuma nunjukkin 20 sesi pertama dari ${matched.length})_` : "";
-  await interaction.reply(safeReplyOptions(`🔍 Hasil cari "${query}":\n${text}${moreNote}`));
+  const reply = { content: `🔍 Hasil cari "${query}":\n${text}${moreNote}${askText}` };
+  if (components) reply.components = components;
+  await interaction.reply(safeReplyOptions(reply));
 }
 
 // Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00

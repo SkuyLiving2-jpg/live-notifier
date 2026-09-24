@@ -70,7 +70,14 @@ function freshRepliesForRecapRange() {
 // fakeInteraction, handleRecapNavButton/handleRecapSearchModalSubmit cuma
 // pernah nyentuh .customId/.channelId/.user.id/.reply()/.showModal()/
 // .fields.getTextInputValue(), jadi gak butuh library mocking discord.js beneran.
-function fakeInteraction({ customId, channelId = "c-recapbtn", authorId = "u-recapbtn", fieldValue = "" } = {}) {
+function fakeInteraction({
+  customId,
+  channelId = "c-recapbtn",
+  authorId = "u-recapbtn",
+  fieldValue = "",
+  message = undefined,
+  deletedMessageIds = [],
+} = {}) {
   const calls = [];
   const modals = [];
   const updates = [];
@@ -79,12 +86,18 @@ function fakeInteraction({ customId, channelId = "c-recapbtn", authorId = "u-rec
     channelId,
     user: { id: authorId },
     fields: { getTextInputValue: () => fieldValue },
+    message,
+    // channel.messages.delete(id) - satu-satunya method discord.js yang
+    // dipake handleRecapNavButton's "delrecap" (lihat replies.js), gak
+    // perlu mock library beneran.
+    channel: { messages: { delete: async (id) => deletedMessageIds.push(id) } },
     reply: async (payload) => calls.push(payload),
     update: async (payload) => updates.push(payload),
     showModal: async (modal) => modals.push(modal),
     calls,
     modals,
     updates,
+    deletedMessageIds,
   };
 }
 
@@ -611,7 +624,64 @@ test("handleRecapNavButton - action 'search' munculin modal (showModal), BUKAN b
   assert.equal(interaction.modals[0].data.custom_id, "recap_search_modal:7");
 });
 
-test("handleRecapSearchModalSubmit - nama ketemu -> tabel hasil filter cuma nunjukkin sesi member itu", async () => {
+// Diklik dari tombol "Enggak, hapus aja" yang nempel di balesan pencarian -
+// harus BENERAN hapus pesan rekap ASLI (by ID, dari customId), bukan cuma
+// ngasih kesan doang. Pesan pencarian ITU SENDIRI diedit (bukan dihapus)
+// buat ngilangin tombol Ya/Enggak-nya abis dijawab.
+test("handleRecapNavButton - action 'delrecap' beneran hapus pesan rekap ASLI by ID, dan ngilangin tombol Ya/Enggak dari balesan pencarian", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:delrecap:original-recap-message-id", message: { content: "hasil cari xxx" } });
+  await handleRecapNavButton(interaction);
+
+  assert.deepEqual(interaction.deletedMessageIds, ["original-recap-message-id"]);
+  assert.equal(interaction.calls.length, 0, "gak boleh kirim pesan baru");
+  assert.equal(interaction.updates[0].content, "hasil cari xxx", "konten balesan pencarian tetep sama, cuma tombolnya yang ilang");
+  assert.deepEqual(interaction.updates[0].components, []);
+});
+
+test("handleRecapNavButton - action 'delrecap' juga nge-clear pendingRecapPage (rekap aslinya udah dihapus, jawaban 'y' abis itu gak boleh nyasar)", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    replyRecapRange: freshReplyRecapRange,
+    tryHandleRecapPageShortcut: freshTryHandleRecapPageShortcut,
+    handleRecapNavButton: freshHandleRecapNavButton,
+  } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Del${i}`,
+      `jkt48_delbtntest${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-delbtn";
+  const authorId = "u-delbtn";
+  await freshReplyRecapRange(7, "minggu ini", channelId, authorId); // nge-set pendingRecapPage
+
+  const deleteInteraction = fakeInteraction({ customId: "recap_nav:delrecap:some-id", channelId, authorId, message: { content: "x" } });
+  await freshHandleRecapNavButton(deleteInteraction);
+
+  const afterDelete = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.equal(afterDelete, null, "pendingRecapPage harus udah kehapus abis 'delrecap'");
+});
+
+// Diklik dari tombol "Ya, biarin" - kebalikan dari delrecap, GAK boleh
+// ngehapus apa-apa, cuma ngilangin tombol Ya/Enggak-nya doang.
+test("handleRecapNavButton - action 'keeprecap' GAK ngehapus pesan apapun, cuma ngilangin tombol Ya/Enggak dari balesan pencarian", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:keeprecap:original-recap-message-id", message: { content: "hasil cari xxx" } });
+  await handleRecapNavButton(interaction);
+
+  assert.deepEqual(interaction.deletedMessageIds, [], "keeprecap gak boleh ngehapus pesan apapun");
+  assert.equal(interaction.calls.length, 0);
+  assert.equal(interaction.updates[0].content, "hasil cari xxx");
+  assert.deepEqual(interaction.updates[0].components, []);
+});
+
+test("handleRecapSearchModalSubmit - nama ketemu -> tabel hasil filter cuma nunjukkin sesi member itu, TANPA tombol kalau interaction.message gak keisi", async () => {
   const now = Date.now();
   const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
   recordLiveEnded("Searchtarget", "jkt48_searchtarget", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
@@ -622,12 +692,45 @@ test("handleRecapSearchModalSubmit - nama ketemu -> tabel hasil filter cuma nunj
   assert.match(interaction.calls[0].content, /Hasil cari "searchtarget"/);
   assert.match(interaction.calls[0].content, /Searchtarget/);
   assert.doesNotMatch(interaction.calls[0].content, /Searchother/);
+  assert.equal(interaction.calls[0].components, undefined, "gak ada messageId buat dihapus/dipertahanin -> gak ada tombol");
 });
 
 test("handleRecapSearchModalSubmit - nama gak ketemu -> pesan gak ketemu, bukan tabel kosong", async () => {
   const interaction = fakeInteraction({ customId: "recap_search_modal:7", fieldValue: "member-yang-beneran-gak-ada-di-rekap" });
   await handleRecapSearchModalSubmit(interaction);
   assert.match(interaction.calls[0].content, /gak nemu member "member-yang-beneran-gak-ada-di-rekap"/);
+});
+
+// Fitur yang diminta owner: "kenapa rekap aslinya tetep muncul abis cari
+// member?" - sekarang ditanya eksplisit "masih mau ditampilin?" lewat tombol
+// Ya/Enggak, TAPI cuma kalau ada pesan buat ditanyain (interaction.message
+// dari modal submission cuma keisi kalau modal-nya dibuka dari tombol yang
+// nempel di sebuah pesan - persis kasus "🔍 Cari member").
+test("handleRecapSearchModalSubmit - interaction.message keisi -> nanya 'masih mau ditampilin?' + tombol Ya/Enggak bawa ID pesan rekap aslinya", async () => {
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  recordLiveEnded("Searchbtn", "jkt48_searchbtntest", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+
+  const interaction = fakeInteraction({
+    customId: "recap_search_modal:7",
+    fieldValue: "searchbtntest",
+    message: { id: "original-recap-message-id" },
+  });
+  await handleRecapSearchModalSubmit(interaction);
+  assert.match(interaction.calls[0].content, /Rekap sebelumnya masih mau ditampilin\?/);
+  const customIds = interaction.calls[0].components[0].components.map((b) => b.data.custom_id);
+  assert.deepEqual(customIds, ["recap_nav:keeprecap:original-recap-message-id", "recap_nav:delrecap:original-recap-message-id"]);
+});
+
+test("handleRecapSearchModalSubmit - interaction.message keisi TAPI gak ketemu member -> tetep nanya 'masih mau ditampilin?'", async () => {
+  const interaction = fakeInteraction({
+    customId: "recap_search_modal:7",
+    fieldValue: "member-yang-beneran-gak-ada-di-rekap",
+    message: { id: "original-recap-message-id-2" },
+  });
+  await handleRecapSearchModalSubmit(interaction);
+  assert.match(interaction.calls[0].content, /gak nemu member.*Rekap sebelumnya masih mau ditampilin\?/s);
+  assert.ok(interaction.calls[0].components, "tombol Ya/Enggak tetep muncul walau hasil pencarian kosong");
 });
 
 // rangeDays "today" (rekap harian) beda encoding dari angka (mingguan/
