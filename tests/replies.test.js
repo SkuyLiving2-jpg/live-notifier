@@ -73,15 +73,18 @@ function freshRepliesForRecapRange() {
 function fakeInteraction({ customId, channelId = "c-recapbtn", authorId = "u-recapbtn", fieldValue = "" } = {}) {
   const calls = [];
   const modals = [];
+  const updates = [];
   return {
     customId,
     channelId,
     user: { id: authorId },
     fields: { getTextInputValue: () => fieldValue },
     reply: async (payload) => calls.push(payload),
+    update: async (payload) => updates.push(payload),
     showModal: async (modal) => modals.push(modal),
     calls,
     modals,
+    updates,
   };
 }
 
@@ -523,7 +526,13 @@ test("tryHandleRecapPageShortcut - 'n' tetep ngebatalin navigasi sepenuhnya (bed
 // ditampilin), handleRecapNavButton nyimpen SEMUA konteksnya sendiri di
 // customId (self-contained), jadi dites langsung lewat customId-nya, bukan
 // lewat urutan chat kayak di atas.
-test("handleRecapNavButton - action 'next'/'prev' render ulang halaman sesuai target di customId, allowedMentions ke-set", async () => {
+// Owner laporin: klik "maju"/"mundur" bikin PESAN BARU tiap kali, jadi
+// channel numpuk 1 pesan tabel per klik - keliatan kayak nge-reply ke pesan
+// yang salah. Fix-nya interaction.update() (EDIT pesan yang tombolnya
+// nempel), BUKAN interaction.reply() (pesan baru) - dites eksplisit di sini
+// (.updates, bukan .calls) plus mastiin reply() BENERAN gak kepanggil sama
+// sekali, biar gak keulang diem-diem balik ke reply().
+test("handleRecapNavButton - action 'next'/'prev' EDIT pesan yang ada (update), BUKAN kirim pesan baru (reply)", async () => {
   const now = Date.now();
   const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
   for (let i = 0; i < 25; i++) {
@@ -534,20 +543,24 @@ test("handleRecapNavButton - action 'next'/'prev' render ulang halaman sesuai ta
   // render halaman 1 (index), bukan halaman 0 lagi.
   const next = fakeInteraction({ customId: "recap_nav:next:7:0" });
   await handleRecapNavButton(next);
-  assert.match(next.calls[0].content, /Halaman 2\/2/);
-  assert.deepEqual(next.calls[0].allowedMentions, { parse: [] });
+  assert.equal(next.calls.length, 0, "gak boleh kirim pesan baru (reply)");
+  assert.match(next.updates[0].content, /Halaman 2\/2/);
+  assert.deepEqual(next.updates[0].allowedMentions, { parse: [] });
 
   // "recap_nav:prev:7:1" - lagi di halaman 1 (index), diklik "Mundur" ->
   // harus render halaman 0 (index) lagi.
   const prev = fakeInteraction({ customId: "recap_nav:prev:7:1" });
   await handleRecapNavButton(prev);
-  assert.match(prev.calls[0].content, /Halaman 1\/2/);
+  assert.equal(prev.calls.length, 0);
+  assert.match(prev.updates[0].content, /Halaman 1\/2/);
 });
 
-test("handleRecapNavButton - action 'close' balesin ucapan terima kasih, gak butuh konteks range/page sama sekali", async () => {
+test("handleRecapNavButton - action 'close' EDIT pesan yang ada jadi ucapan terima kasih TANPA tombol, BUKAN kirim pesan baru", async () => {
   const interaction = fakeInteraction({ customId: "recap_nav:close" });
   await handleRecapNavButton(interaction);
-  assert.match(interaction.calls[0].content, /Terima kasih, enjoy ya, cok/);
+  assert.equal(interaction.calls.length, 0, "gak boleh kirim pesan baru (reply)");
+  assert.match(interaction.updates[0].content, /Terima kasih, enjoy ya, cok/);
+  assert.deepEqual(interaction.updates[0].components, [], "tombolnya harus ikut ilang biar bener-bener 'ditutup'");
 });
 
 // Abis "tutup rekap" diklik, jawaban "y"/"mundur" yang nyasar berikutnya
@@ -583,16 +596,17 @@ test("handleRecapNavButton - action 'close' nge-clear pendingRecapPage, jadi 'y'
 
   const closeInteraction = fakeInteraction({ customId: "recap_nav:close", channelId, authorId });
   await freshHandleRecapNavButton(closeInteraction);
-  assert.match(closeInteraction.calls[0].content, /Terima kasih, enjoy ya, cok/);
+  assert.match(closeInteraction.updates[0].content, /Terima kasih, enjoy ya, cok/);
 
   const afterClose = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
   assert.equal(afterClose, null, "pendingRecapPage harus udah kehapus abis 'tutup rekap' diklik");
 });
 
-test("handleRecapNavButton - action 'search' munculin modal (showModal), BUKAN balesan biasa (reply)", async () => {
+test("handleRecapNavButton - action 'search' munculin modal (showModal), BUKAN balesan biasa (reply/update)", async () => {
   const interaction = fakeInteraction({ customId: "recap_nav:search:7" });
   await handleRecapNavButton(interaction);
   assert.equal(interaction.calls.length, 0, "search gak boleh manggil reply() - munculin modal doang");
+  assert.equal(interaction.updates.length, 0, "search gak boleh manggil update() - munculin modal doang");
   assert.equal(interaction.modals.length, 1);
   assert.equal(interaction.modals[0].data.custom_id, "recap_search_modal:7");
 });

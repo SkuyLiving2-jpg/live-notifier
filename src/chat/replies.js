@@ -360,10 +360,15 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
 // Diklik dari salah satu tombol buildRecapNavComponents() bikin (customId
 // "recap_nav:<next|prev>:<range>:<page>", "recap_nav:search:<range>", atau
 // "recap_nav:close" buat tombol tutup yang emang gak butuh konteks apa-apa).
-// SELALU balikin pesan BARU (interaction.reply, bukan interaction.update) -
-// sama gaya-nya kayak setiap balesan tombol lain di codebase ini (lihat
-// menu.js) - jadi histori tiap halaman yang pernah diliat tetep numpang di
-// channel, bukan diganti/dihapus.
+//
+// "next"/"prev"/"close" pake interaction.update() (EDIT pesan yang tombolnya
+// nempel), BUKAN interaction.reply() (pesan BARU) - beda dari tombol lain di
+// codebase ini (menu.js). Dulu dipake reply() juga di sini, tapi owner
+// laporin itu bikin channel numpuk 1 pesan tabel PER klik maju/mundur -
+// keliatan kayak nge-reply ke pesan yang salah/lama padahal cuma pesan baru
+// numpuk di bawahnya. update() nge-edit di tempat, jadi cuma ADA SATU pesan
+// tabel per sesi rekap sepanjang orangnya masih maju-mundur, mau berapa kali
+// pun diklik.
 async function handleRecapNavButton(interaction) {
   const parts = interaction.customId.split(":");
   const action = parts[1];
@@ -373,7 +378,7 @@ async function handleRecapNavButton(interaction) {
     // "mundur" nyasar berikutnya (misal orangnya lupa) gak boleh diem-diem
     // nerusin ke halaman rekap yang udah "ditutup".
     pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
-    await interaction.reply(safeReplyOptions("Terima kasih, enjoy ya, cok! 🎉"));
+    await interaction.update(safeReplyOptions({ content: "Terima kasih, enjoy ya, cok! 🎉", components: [] }));
     return;
   }
 
@@ -405,7 +410,7 @@ async function handleRecapNavButton(interaction) {
   const sessions = rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(rangeDays);
   const currentPage = Number(parts[3]);
   const targetPage = action === "next" ? currentPage + 1 : currentPage - 1;
-  await interaction.reply(safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays)));
+  await interaction.update(safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays)));
 }
 
 // Diklik abis submit modal yang dimunculin tombol "🔍 Cari member" di atas -
