@@ -24,6 +24,8 @@ const {
   replyTodayRecapSoFar,
   replyRecapRange,
   tryHandleRecapPageShortcut,
+  handleRecapNavButton,
+  handleRecapSearchModalSubmit,
   handleAddPriority,
   handleRemovePriority,
   handleSubscribe,
@@ -295,6 +297,10 @@ function wireDiscordEvents(client) {
         await handleFallbackMemberSelect(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("member_fallback:")) {
         await handleMemberChannelFallbackButton(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("recap_nav:")) {
+        await handleRecapNavButton(interaction);
+      } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_search_modal:")) {
+        await handleRecapSearchModalSubmit(interaction);
       }
     } catch (error) {
       console.error("Gagal proses tombol/menu Discord:", error.message);

@@ -1,3 +1,4 @@
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require("discord.js");
 const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
 const {
   getCompletedSessionsToday,
@@ -24,6 +25,8 @@ const {
   getHourWIBOf,
   WEEKDAY_FORMATTER_WIB,
   stripTrailingLiveWord,
+  matchesNameFragment,
+  safeReplyOptions,
   YES_PATTERN,
   NO_PATTERN,
   NEXT_PAGE_PATTERN,
@@ -268,26 +271,50 @@ function getTodaySessionsForRecap() {
 const pendingRecapPage = new Map();
 const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 
+// "null" gak bisa lewat customId Discord (harus string) - "today" dipake
+// sebagai stand-in buat rangeDays null (rekap hari ini), dikonversi balik
+// lewat decodeRecapRange. Simetris, dipake baik buat NULIS customId
+// (buildRecapNavComponents) maupun BACA-nya balik (handleRecapNavButton/
+// handleRecapSearchModalSubmit).
+function encodeRecapRange(rangeDays) {
+  return rangeDays == null ? "today" : String(rangeDays);
+}
+function decodeRecapRange(range) {
+  return range === "today" ? null : Number(range);
+}
+
+// Baris tombol yang nempel di SETIAP halaman tabel rekap - dulu satu-satunya
+// cara maju/mundur/berenti cuma lewat ngetik "y"/"mundur"/"n" (masih jalan,
+// tryHandleRecapPageShortcut di bawah gak diubah), padahal infrastruktur
+// tombol Discord udah ada di fitur lain (menu.js). Beda dari pendingRecapPage
+// (state yang nunggu balesan TEKS abis halaman PALING BARU ditampilin, per
+// orang, TTL 2 menit) - customId tombol ini SELF-CONTAINED (action + rentang
+// rekap + halaman sekarang semua ada di customId-nya), jadi tombol di pesan
+// LAMA manapun tetep valid diklik kapan aja, gak ada TTL/staleness kayak
+// jalur teks.
+function buildRecapNavComponents(page, totalPages, rangeDays) {
+  const range = encodeRecapRange(rangeDays);
+  const buttons = [];
+  if (page < totalPages - 1) {
+    buttons.push(new ButtonBuilder().setCustomId(`recap_nav:next:${range}:${page}`).setLabel("Maju ▶").setStyle(ButtonStyle.Primary));
+  }
+  if (page > 0) {
+    buttons.push(new ButtonBuilder().setCustomId(`recap_nav:prev:${range}:${page}`).setLabel("◀ Mundur").setStyle(ButtonStyle.Secondary));
+  }
+  buttons.push(new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger));
+  buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
+  return [new ActionRowBuilder().addComponents(buttons)];
+}
+
 function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = null) {
   const result = buildRecapTablePage(sessions, page);
-  const hasPrev = result.page > 0;
-
-  let footer;
-  if (result.hasMore && hasPrev) {
-    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - balas "y"/"maju" buat lanjut, atau "mundur" buat balik ke halaman sebelumnya)_`;
-  } else if (result.hasMore) {
-    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - masih ada lagi, mau liat halaman berikutnya? Balas "y"/"maju")_`;
-  } else if (hasPrev) {
-    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir. Balas "mundur" buat balik ke halaman sebelumnya)_`;
-  } else {
-    footer = `_(Halaman ${result.page + 1}/${result.totalPages} - udah paling akhir)_`;
-  }
+  const footer = `_(Halaman ${result.page + 1}/${result.totalPages})_`;
 
   if (result.totalPages > 1 && channelId && authorId) {
     pendingRecapPage.set(`${channelId}:${authorId}`, { currentPage: result.page, totalPages: result.totalPages, at: Date.now(), rangeDays });
   }
 
-  return `${result.text}\n${footer}`;
+  return { content: `${result.text}\n${footer}`, components: buildRecapNavComponents(result.page, result.totalPages, rangeDays) };
 }
 
 // Dicek di awal chat/router.js's buildChatReply (sama pola kayak
@@ -328,6 +355,83 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
   const targetPage = isNext ? pending.currentPage + 1 : pending.currentPage - 1;
   const sessions = pending.rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(pending.rangeDays);
   return buildRecapPageBlock(sessions, targetPage, channelId, authorId, pending.rangeDays);
+}
+
+// Diklik dari salah satu tombol buildRecapNavComponents() bikin (customId
+// "recap_nav:<next|prev>:<range>:<page>", "recap_nav:search:<range>", atau
+// "recap_nav:close" buat tombol tutup yang emang gak butuh konteks apa-apa).
+// SELALU balikin pesan BARU (interaction.reply, bukan interaction.update) -
+// sama gaya-nya kayak setiap balesan tombol lain di codebase ini (lihat
+// menu.js) - jadi histori tiap halaman yang pernah diliat tetep numpang di
+// channel, bukan diganti/dihapus.
+async function handleRecapNavButton(interaction) {
+  const parts = interaction.customId.split(":");
+  const action = parts[1];
+
+  if (action === "close") {
+    // Bersihin pending state teks juga - abis "tutup rekap", jawaban "y"/
+    // "mundur" nyasar berikutnya (misal orangnya lupa) gak boleh diem-diem
+    // nerusin ke halaman rekap yang udah "ditutup".
+    pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+    await interaction.reply(safeReplyOptions("Terima kasih, enjoy ya, cok! 🎉"));
+    return;
+  }
+
+  const rangeDays = decodeRecapRange(parts[2]);
+
+  if (action === "search") {
+    const modal = new ModalBuilder()
+      .setCustomId(`recap_search_modal:${parts[2]}`)
+      .setTitle("Cari member di rekap")
+      .addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("member_name")
+            .setLabel("Nama member")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("misal: Nala")
+            .setRequired(true),
+        ),
+      );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // Sesi-nya di-ambil ULANG dari sumbernya (bukan snapshot lama) - sama
+  // alasannya kayak tryHandleRecapPageShortcut di atas, dan buildRecapTablePage
+  // sendiri udah nge-clamp target page ke totalPages TERKINI, jadi aman
+  // walau datanya berubah (mis. ada live yang baru aja selesai) sejak
+  // tombol ini pertama kali ditampilin.
+  const sessions = rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(rangeDays);
+  const currentPage = Number(parts[3]);
+  const targetPage = action === "next" ? currentPage + 1 : currentPage - 1;
+  await interaction.reply(safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays)));
+}
+
+// Diklik abis submit modal yang dimunculin tombol "🔍 Cari member" di atas -
+// filter sesi dari RENTANG yang SAMA kayak tabel asalnya (dibawa lewat
+// customId modal-nya, bukan ditebak ulang) ke satu member doang, dicari
+// lewat nama depan (pola matching yang sama kayak findDurationHistoryByNameFragment
+// dkk di storage/). Balesan ini SENGAJA gak dikasih tombol navigasi lagi -
+// hasil pencarian 1 member jarang lebih dari 1 halaman, jadi diringkes,
+// beda dari tabel rekap penuh yang emang perlu navigasi banyak halaman.
+async function handleRecapSearchModalSubmit(interaction) {
+  const range = interaction.customId.split(":")[1];
+  const rangeDays = decodeRecapRange(range);
+  const query = interaction.fields.getTextInputValue("member_name").trim();
+
+  const sessions = rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(rangeDays);
+  const needle = query.toLowerCase();
+  const matched = sessions.filter((s) => s.name && matchesNameFragment(needle, s.name.split(/[\s|]+/)[0].toLowerCase()));
+
+  if (matched.length === 0) {
+    await interaction.reply(safeReplyOptions(`Cok, gak nemu member "${query}" di rekap ini.`));
+    return;
+  }
+
+  const { text, hasMore } = buildRecapTablePage(matched, 0);
+  const moreNote = hasMore ? `\n_(cuma nunjukkin 20 sesi pertama dari ${matched.length})_` : "";
+  await interaction.reply(safeReplyOptions(`🔍 Hasil cari "${query}":\n${text}${moreNote}`));
 }
 
 // Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00
@@ -376,7 +480,8 @@ async function replyTodayRecapSoFar(channelId, authorId) {
     );
   }
 
-  return [summaryLines.join("\n"), buildRecapPageBlock(sessions, 0, channelId, authorId)].join("\n") + missedNote;
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId);
+  return { content: [summaryLines.join("\n"), block.content].join("\n") + missedNote, components: block.components };
 }
 
 // Rekap mingguan/bulanan - beda dari replyTodayRecapSoFar dalam 2 hal: (1)
@@ -414,7 +519,8 @@ async function replyRecapRange(daysBack, label, channelId, authorId) {
     );
   }
 
-  return [summaryLines.join("\n"), buildRecapPageBlock(sessions, 0, channelId, authorId, daysBack)].join("\n");
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, daysBack);
+  return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
 }
 
 function replyMemberStats(fragment) {
@@ -628,6 +734,8 @@ module.exports = {
   buildRecapTablePage,
   buildRecapPageBlock,
   tryHandleRecapPageShortcut,
+  handleRecapNavButton,
+  handleRecapSearchModalSubmit,
   isOwner,
   handleAddPriority,
   handleRemovePriority,

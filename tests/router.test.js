@@ -13,6 +13,14 @@ const { buildChatReply } = require("../src/chat/router");
 
 const OWNER = "owner-test-id";
 
+// replyRecapRange/replyTodayRecapSoFar balikin STRING polos kalau datanya
+// kosong, tapi OBJECT {content, components} (tombol navigasi rekap) kalau
+// ada sesi - dites di kedua kemungkinan biar gak diam-diam rapuh ke urutan
+// test/isolasi data antar file.
+function textOf(reply) {
+  return typeof reply === "string" ? reply : reply.content;
+}
+
 // buildChatReply dipanggil BANYAK banget di file ini dengan member/keyword
 // yang beda-beda tiap test (bukan di-reset per test) - dipilih nama unik per
 // test biar gak numpang state test lain dalam 1 file/proses yang sama.
@@ -149,14 +157,16 @@ test("siapa yang live (tanpa 'paling sering') - TETAP dispatch ke replyListLive 
 // malah kepick up sebagai rekap hari ini.
 test("rekap minggu ini - dispatch ke replyRecapRange(7, ...), BUKAN rekap hari ini", async () => {
   const reply = await buildChatReply("cok rekap minggu ini");
-  assert.match(reply, /Rekap minggu ini|belum ada live yang kecatet dalam minggu ini/);
-  assert.doesNotMatch(reply, /Rekap live hari ini/);
+  const content = textOf(reply);
+  assert.match(content, /Rekap minggu ini|belum ada live yang kecatet dalam minggu ini/);
+  assert.doesNotMatch(content, /Rekap live hari ini/);
 });
 
 test("rekap bulan ini - dispatch ke replyRecapRange(30, ...), BUKAN rekap hari ini", async () => {
   const reply = await buildChatReply("cok rekap bulan ini");
-  assert.match(reply, /Rekap bulan ini|belum ada live yang kecatet dalam bulan ini/);
-  assert.doesNotMatch(reply, /Rekap live hari ini/);
+  const content = textOf(reply);
+  assert.match(content, /Rekap bulan ini|belum ada live yang kecatet dalam bulan ini/);
+  assert.doesNotMatch(content, /Rekap live hari ini/);
 });
 
 test("status - dispatch ke replyBotStatus", async () => {

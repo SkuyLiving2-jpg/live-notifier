@@ -30,6 +30,8 @@ const {
   isOwner,
   handleAddPriority,
   handleRemovePriority,
+  handleRecapNavButton,
+  handleRecapSearchModalSubmit,
 } = require("../src/chat/replies");
 
 // daily-log.json's jsonStore caches in-memory for the whole life of this
@@ -59,6 +61,27 @@ function freshRepliesForRecapRange() {
     recordLiveEnded: dailyLog.recordLiveEnded,
     replyRecapRange: replies.replyRecapRange,
     tryHandleRecapPageShortcut: replies.tryHandleRecapPageShortcut,
+    handleRecapNavButton: replies.handleRecapNavButton,
+    handleRecapSearchModalSubmit: replies.handleRecapSearchModalSubmit,
+  };
+}
+
+// Fake discord.js interaction - sama pola kayak tests/menu.test.js's
+// fakeInteraction, handleRecapNavButton/handleRecapSearchModalSubmit cuma
+// pernah nyentuh .customId/.channelId/.user.id/.reply()/.showModal()/
+// .fields.getTextInputValue(), jadi gak butuh library mocking discord.js beneran.
+function fakeInteraction({ customId, channelId = "c-recapbtn", authorId = "u-recapbtn", fieldValue = "" } = {}) {
+  const calls = [];
+  const modals = [];
+  return {
+    customId,
+    channelId,
+    user: { id: authorId },
+    fields: { getTextInputValue: () => fieldValue },
+    reply: async (payload) => calls.push(payload),
+    showModal: async (modal) => modals.push(modal),
+    calls,
+    modals,
   };
 }
 
@@ -335,9 +358,10 @@ test("replyRecapRange - agregasi sesi dalam rentang waktu, TANPA gabung activeLi
 
   try {
     const reply = await freshReplyRecapRange(7, "minggu ini", "c-range", "u-range");
-    assert.match(reply, /Rekap minggu ini/);
-    assert.match(reply, /Total sesi: 2x dari 2 member/);
-    assert.doesNotMatch(reply, /Rangetestongoing/);
+    assert.match(reply.content, /Rekap minggu ini/);
+    assert.match(reply.content, /Total sesi: 2x dari 2 member/);
+    assert.doesNotMatch(reply.content, /Rangetestongoing/);
+    assert.ok(reply.components, "sesi ada -> harus ada tombol navigasi/tutup/cari member");
   } finally {
     activeLives.delete("jkt48_rangetest_ongoing");
   }
@@ -360,7 +384,7 @@ test("replyRecapRange - arsip belum nyakup rentang penuh -> dikasih catatan penj
   freshRecordLiveEnded("Nala", "jkt48_shortarchive", new Date(threeDaysAgo.getTime() - 3600_000), threeDaysAgo, 50);
 
   const reply = await freshReplyRecapRange(7, "minggu ini", "c-shortarchive", "u-shortarchive");
-  assert.match(reply, /pencatatan multi-hari baru mulai/);
+  assert.match(reply.content, /pencatatan multi-hari baru mulai/);
 });
 
 test("replyRecapRange - arsip UDAH nyakup rentang penuh -> TANPA catatan penjelasan", async () => {
@@ -377,7 +401,7 @@ test("replyRecapRange - arsip UDAH nyakup rentang penuh -> TANPA catatan penjela
   freshRecordLiveEnded("Recent", "jkt48_fullarchive_recent", new Date(twoDaysAgo.getTime() - 3600_000), twoDaysAgo, 50);
 
   const reply = await freshReplyRecapRange(7, "minggu ini", "c-fullarchive", "u-fullarchive");
-  assert.doesNotMatch(reply, /pencatatan multi-hari baru mulai/);
+  assert.doesNotMatch(reply.content, /pencatatan multi-hari baru mulai/);
 });
 
 // Bug yang dilaporin owner: "list-nya gak bisa dimundurin ya, kembali ke
@@ -408,12 +432,19 @@ test("tryHandleRecapPageShortcut - bisa maju ('y') DAN mundur ('mundur') bolak-b
   const authorId = "u-pagetest";
 
   const page0 = await freshReplyRecapRange(7, "minggu ini", channelId, authorId);
-  assert.match(page0, /Halaman 1\/2/);
-  assert.match(page0, /mau liat halaman berikutnya\? Balas "y"/);
+  assert.match(page0.content, /Halaman 1\/2/);
+  // Halaman PERTAMA dari 2 (bukan halaman terakhir juga) - cuma "Maju" +
+  // "Tutup rekap" + "Cari member", TANPA "Mundur" (sesuai spek: gak ada
+  // halaman sebelumnya buat dibalik).
+  const page0CustomIds = page0.components[0].components.map((b) => b.data.custom_id);
+  assert.deepEqual(page0CustomIds, ["recap_nav:next:7:0", "recap_nav:close", "recap_nav:search:7"]);
 
   const page1 = await tryHandleRecapPageShortcut("y", channelId, authorId);
-  assert.match(page1, /Halaman 2\/2/);
-  assert.match(page1, /udah paling akhir\. Balas "mundur"/);
+  assert.match(page1.content, /Halaman 2\/2/);
+  // Halaman TERAKHIR (dari 2) - cuma "Mundur" + "Tutup rekap" + "Cari
+  // member", TANPA "Maju" (gak ada halaman berikutnya).
+  const page1CustomIds = page1.components[0].components.map((b) => b.data.custom_id);
+  assert.deepEqual(page1CustomIds, ["recap_nav:prev:7:1", "recap_nav:close", "recap_nav:search:7"]);
 
   // Coba maju lagi dari halaman terakhir - harus ditolak dengan sopan, BUKAN
   // dianggap gak ngerti (null) atau nge-crash.
@@ -422,8 +453,7 @@ test("tryHandleRecapPageShortcut - bisa maju ('y') DAN mundur ('mundur') bolak-b
 
   // Mundur balik ke halaman 1.
   const backToPage0 = await tryHandleRecapPageShortcut("mundur", channelId, authorId);
-  assert.match(backToPage0, /Halaman 1\/2/);
-  assert.match(backToPage0, /mau liat halaman berikutnya\? Balas "y"/);
+  assert.match(backToPage0.content, /Halaman 1\/2/);
 
   // Coba mundur lagi dari halaman pertama - harus ditolak dengan sopan juga.
   const pastFirst = await tryHandleRecapPageShortcut("mundur", channelId, authorId);
@@ -446,13 +476,17 @@ test("tryHandleRecapPageShortcut - 'maju'/'forward' juga jalan buat ke halaman b
   const authorId = "u-fwdtest";
 
   const page0 = await freshReplyRecapRange(7, "minggu ini", channelId, authorId);
-  assert.match(page0, /Halaman 1\/3/);
+  assert.match(page0.content, /Halaman 1\/3/);
 
   const page1 = await tryHandleRecapPageShortcut("maju", channelId, authorId);
-  assert.match(page1, /Halaman 2\/3/);
+  assert.match(page1.content, /Halaman 2\/3/);
+  // Halaman TENGAH (2 dari 3, bukan pertama/terakhir) - ketiga tombol nav
+  // sekaligus muncul: "Maju", "Mundur", DAN "Tutup rekap" (+ "Cari member").
+  const page1CustomIds = page1.components[0].components.map((b) => b.data.custom_id);
+  assert.deepEqual(page1CustomIds, ["recap_nav:next:7:1", "recap_nav:prev:7:1", "recap_nav:close", "recap_nav:search:7"]);
 
   const page2 = await tryHandleRecapPageShortcut("forward", channelId, authorId);
-  assert.match(page2, /Halaman 3\/3/);
+  assert.match(page2.content, /Halaman 3\/3/);
 });
 
 test("tryHandleRecapPageShortcut - 'n' tetep ngebatalin navigasi sepenuhnya (beda dari 'mundur')", async () => {
@@ -480,4 +514,118 @@ test("tryHandleRecapPageShortcut - 'n' tetep ngebatalin navigasi sepenuhnya (bed
   // Pending state-nya harus udah kehapus - "y" abis "n" gak boleh dianggep lanjut halaman lagi.
   const afterStop = await tryHandleRecapPageShortcut("y", channelId, authorId);
   assert.equal(afterStop, null);
+});
+
+// Fitur "buatkan fungsi button buat rekap" yang diminta owner - dulu maju/
+// mundur/tutup CUMA bisa lewat ngetik ("y"/"mundur"/"n", dites di atas),
+// padahal infrastruktur tombol Discord udah dipake fitur lain. Beda dari
+// tryHandleRecapPageShortcut (nunggu balesan TEKS abis halaman TERAKHIR
+// ditampilin), handleRecapNavButton nyimpen SEMUA konteksnya sendiri di
+// customId (self-contained), jadi dites langsung lewat customId-nya, bukan
+// lewat urutan chat kayak di atas.
+test("handleRecapNavButton - action 'next'/'prev' render ulang halaman sesuai target di customId, allowedMentions ke-set", async () => {
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    recordLiveEnded(`Navbtn${i}`, `jkt48_navbtntest${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
+  }
+
+  // "recap_nav:next:7:0" - lagi di halaman 0 (index), diklik "Maju" -> harus
+  // render halaman 1 (index), bukan halaman 0 lagi.
+  const next = fakeInteraction({ customId: "recap_nav:next:7:0" });
+  await handleRecapNavButton(next);
+  assert.match(next.calls[0].content, /Halaman 2\/2/);
+  assert.deepEqual(next.calls[0].allowedMentions, { parse: [] });
+
+  // "recap_nav:prev:7:1" - lagi di halaman 1 (index), diklik "Mundur" ->
+  // harus render halaman 0 (index) lagi.
+  const prev = fakeInteraction({ customId: "recap_nav:prev:7:1" });
+  await handleRecapNavButton(prev);
+  assert.match(prev.calls[0].content, /Halaman 1\/2/);
+});
+
+test("handleRecapNavButton - action 'close' balesin ucapan terima kasih, gak butuh konteks range/page sama sekali", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:close" });
+  await handleRecapNavButton(interaction);
+  assert.match(interaction.calls[0].content, /Terima kasih, enjoy ya, cok/);
+});
+
+// Abis "tutup rekap" diklik, jawaban "y"/"mundur" yang nyasar berikutnya
+// (misal orangnya lupa) gak boleh diem-diem nerusin ke halaman yang udah
+// "ditutup" - handleRecapNavButton's close branch harus bersihin
+// pendingRecapPage yang sama persis dipake tryHandleRecapPageShortcut.
+// Butuh module INSTANCE yang sama (freshRepliesForRecapRange), soalnya
+// pendingRecapPage itu state module-level yang gak di-share ke require
+// biasa di atas file ini.
+test("handleRecapNavButton - action 'close' nge-clear pendingRecapPage, jadi 'y' abis itu gak lanjut halaman lagi", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    replyRecapRange: freshReplyRecapRange,
+    tryHandleRecapPageShortcut: freshTryHandleRecapPageShortcut,
+    handleRecapNavButton: freshHandleRecapNavButton,
+  } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Close${i}`,
+      `jkt48_closetest${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-closebtn";
+  const authorId = "u-closebtn";
+  await freshReplyRecapRange(7, "minggu ini", channelId, authorId); // nge-set pendingRecapPage
+
+  const closeInteraction = fakeInteraction({ customId: "recap_nav:close", channelId, authorId });
+  await freshHandleRecapNavButton(closeInteraction);
+  assert.match(closeInteraction.calls[0].content, /Terima kasih, enjoy ya, cok/);
+
+  const afterClose = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.equal(afterClose, null, "pendingRecapPage harus udah kehapus abis 'tutup rekap' diklik");
+});
+
+test("handleRecapNavButton - action 'search' munculin modal (showModal), BUKAN balesan biasa (reply)", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:search:7" });
+  await handleRecapNavButton(interaction);
+  assert.equal(interaction.calls.length, 0, "search gak boleh manggil reply() - munculin modal doang");
+  assert.equal(interaction.modals.length, 1);
+  assert.equal(interaction.modals[0].data.custom_id, "recap_search_modal:7");
+});
+
+test("handleRecapSearchModalSubmit - nama ketemu -> tabel hasil filter cuma nunjukkin sesi member itu", async () => {
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  recordLiveEnded("Searchtarget", "jkt48_searchtarget", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+  recordLiveEnded("Searchother", "jkt48_searchother", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+
+  const interaction = fakeInteraction({ customId: "recap_search_modal:7", fieldValue: "searchtarget" });
+  await handleRecapSearchModalSubmit(interaction);
+  assert.match(interaction.calls[0].content, /Hasil cari "searchtarget"/);
+  assert.match(interaction.calls[0].content, /Searchtarget/);
+  assert.doesNotMatch(interaction.calls[0].content, /Searchother/);
+});
+
+test("handleRecapSearchModalSubmit - nama gak ketemu -> pesan gak ketemu, bukan tabel kosong", async () => {
+  const interaction = fakeInteraction({ customId: "recap_search_modal:7", fieldValue: "member-yang-beneran-gak-ada-di-rekap" });
+  await handleRecapSearchModalSubmit(interaction);
+  assert.match(interaction.calls[0].content, /gak nemu member "member-yang-beneran-gak-ada-di-rekap"/);
+});
+
+// rangeDays "today" (rekap harian) beda encoding dari angka (mingguan/
+// bulanan) di customId - dites biar gak ketuker gara-gara nyari sesi dari
+// sumber yang salah (getTodaySessionsForRecap vs getCompletedSessionsSince).
+test("handleRecapSearchModalSubmit - range 'today' nyari dari getTodaySessionsForRecap (gabungan sesi selesai + lagi live), bukan getCompletedSessionsSince", async () => {
+  activeLives.set("jkt48_searchtoday", { name: "Searchtoday", username: "jkt48_searchtoday", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    const interaction = fakeInteraction({ customId: "recap_search_modal:today", fieldValue: "searchtoday" });
+    await handleRecapSearchModalSubmit(interaction);
+    assert.match(interaction.calls[0].content, /Searchtoday/);
+  } finally {
+    activeLives.delete("jkt48_searchtoday");
+  }
 });
