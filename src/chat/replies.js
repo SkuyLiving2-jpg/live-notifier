@@ -1,7 +1,16 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require("discord.js");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  StringSelectMenuBuilder,
+} = require("discord.js");
 const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
 const {
   getCompletedSessionsToday,
+  getCompletedSessionsForDate,
   getCompletedSessionsSince,
   getEarliestSessionDate,
   fetchExternalTodayLiveHistory,
@@ -20,6 +29,7 @@ const {
   getTodayWIB,
   getDateWIB,
   formatShortDateWIB,
+  formatLongDateWIB,
   describeElapsed,
   getTimeOfDayBucket,
   getHourWIBOf,
@@ -261,7 +271,8 @@ function getTodaySessionsForRecap() {
 // kayak pendingWatchConfirm (di chat/menu.js, di-key per orang bukan per
 // channel, biar jawaban orang lain di channel yang sama gak nyasar ke
 // halaman punya orang ini). `rangeDays` (null = "hari ini", gabungan sama
-// activeLives; angka = rekap mingguan/bulanan, cuma sesi yang UDAH selesai)
+// activeLives; angka = rekap mingguan/bulanan, cuma sesi yang UDAH selesai;
+// string "YYYY-MM-DD" = rekap TANGGAL SPESIFIK, lihat getSessionsForRange)
 // dicatet biar halaman lain tau harus narik dari daftar sesi yang SAMA,
 // bukan default balik ke rekap hari ini - dulu (sebelum rekap mingguan/
 // bulanan ada) cuma ada 1 jenis rekap jadi ini gak masalah, sekarang WAJIB
@@ -278,16 +289,64 @@ function getTodaySessionsForRecap() {
 const pendingRecapPage = new Map();
 const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 
+// Satu titik keputusan buat narik SESI yang sesuai sebuah `rangeDays` - dulu
+// ternary `rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(rangeDays)`
+// ini ditulis ULANG di 3 tempat (tryHandleRecapPageShortcut,
+// handleRecapNavButton, handleRecapSearchModalSubmit), jadi pas nambahin
+// jenis rentang BARU (rekap per tanggal) gampang kelewatan salah satu -
+// digabung di sini biar nambah jenis rentang lagi ke depannya cukup di 1
+// tempat. `rangeDays`: null = hari ini (gabungan activeLives), number = N
+// hari terakhir, string "YYYY-MM-DD" = tanggal spesifik.
+function getSessionsForRange(rangeDays) {
+  if (rangeDays == null) return getTodaySessionsForRecap();
+  if (typeof rangeDays === "string") return getCompletedSessionsForDate(rangeDays);
+  return getCompletedSessionsSince(rangeDays);
+}
+
 // "null" gak bisa lewat customId Discord (harus string) - "today" dipake
 // sebagai stand-in buat rangeDays null (rekap hari ini), dikonversi balik
-// lewat decodeRecapRange. Simetris, dipake baik buat NULIS customId
-// (buildRecapNavComponents) maupun BACA-nya balik (handleRecapNavButton/
-// handleRecapSearchModalSubmit).
+// lewat decodeRecapRange. Rentang TANGGAL SPESIFIK ("YYYY-MM-DD") dikasih
+// awalan "d" (gak bisa ke-tabrak "today" atau angka hari-mundur manapun,
+// keduanya gak pernah diawalin huruf) biar tetep 1 segmen doang pas
+// nyambung ke customId yang di-split(":") posisional - TANPA awalan ini,
+// tanda "-" di dalem tanggalnya aman (bukan pemisah), tapi kalau dulu dicoba
+// pake ":" bakal numbuhin segmen ekstra dan ngerusak parts[n] di bawah.
+// Simetris, dipake baik buat NULIS customId (buildRecapNavComponents)
+// maupun BACA-nya balik (handleRecapNavButton/handleRecapSearchModalSubmit).
 function encodeRecapRange(rangeDays) {
-  return rangeDays == null ? "today" : String(rangeDays);
+  if (rangeDays == null) return "today";
+  if (typeof rangeDays === "string") return `d${rangeDays}`;
+  return String(rangeDays);
 }
 function decodeRecapRange(range) {
-  return range === "today" ? null : Number(range);
+  if (range === "today") return null;
+  if (range.startsWith("d")) return range.slice(1);
+  return Number(range);
+}
+
+// Discord StringSelectMenu maksimal 25 opsi - dropdown "rekap per tanggal"
+// nunjukkin 25 hari TERAKHIR mundur dari KEMARIN (bukan hari ini, itu udah
+// ada tombol "Rekap hari ini" sendiri di replyRecapMenu), masih di dalam
+// SESSION_RETENTION_DAYS punya dailyLog.js (35 hari) jadi datanya emang
+// masih kesimpen buat semua opsi ini.
+const RECAP_DATE_OPTIONS_COUNT = 25;
+
+function buildRecapDateSelectRow(selectedDate = null) {
+  const todayStartMs = new Date(`${getTodayWIB()}T00:00:00+07:00`).getTime();
+  const options = [];
+  for (let i = 1; i <= RECAP_DATE_OPTIONS_COUNT; i++) {
+    const d = new Date(todayStartMs - i * 24 * 60 * 60 * 1000);
+    const value = getDateWIB(d);
+    options.push({ label: formatLongDateWIB(d), value, default: value === selectedDate });
+  }
+  const selectMenu = new StringSelectMenuBuilder().setCustomId("recap_date_select").setPlaceholder("Pilih tanggal buat rekap").addOptions(options);
+  return new ActionRowBuilder().addComponents(selectMenu);
+}
+
+function buildCloseOnlyRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger),
+  );
 }
 
 // Baris tombol yang nempel di SETIAP halaman tabel rekap - dulu satu-satunya
@@ -299,6 +358,13 @@ function decodeRecapRange(range) {
 // rekap + halaman sekarang semua ada di customId-nya), jadi tombol di pesan
 // LAMA manapun tetep valid diklik kapan aja, gak ada TTL/staleness kayak
 // jalur teks.
+//
+// Rekap TANGGAL SPESIFIK (rangeDays berupa string "YYYY-MM-DD") dapet baris
+// EKSTRA di atas baris tombol - dropdown buat ganti tanggal tanpa perlu
+// nutup dulu terus buka "rekap tanggal" dari nol. Milih tanggal lain lewat
+// dropdown ini nge-EDIT pesan yang sama (lihat handleRecapDateSelect), sama
+// pola in-place-edit-nya kayak tombol Maju/Mundur - biar gak numpuk beberapa
+// tabel tanggal beda-beda di channel.
 function buildRecapNavComponents(page, totalPages, rangeDays) {
   const range = encodeRecapRange(rangeDays);
   const buttons = [];
@@ -310,7 +376,11 @@ function buildRecapNavComponents(page, totalPages, rangeDays) {
   }
   buttons.push(new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger));
   buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
-  return [new ActionRowBuilder().addComponents(buttons)];
+
+  const rows = [];
+  if (typeof rangeDays === "string") rows.push(buildRecapDateSelectRow(rangeDays));
+  rows.push(new ActionRowBuilder().addComponents(buttons));
+  return rows;
 }
 
 function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = null) {
@@ -360,7 +430,7 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
   }
 
   const targetPage = isNext ? pending.currentPage + 1 : pending.currentPage - 1;
-  const sessions = pending.rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(pending.rangeDays);
+  const sessions = getSessionsForRange(pending.rangeDays);
   return buildRecapPageBlock(sessions, targetPage, channelId, authorId, pending.rangeDays);
 }
 
@@ -438,10 +508,100 @@ async function handleRecapNavButton(interaction) {
   // sendiri udah nge-clamp target page ke totalPages TERKINI, jadi aman
   // walau datanya berubah (mis. ada live yang baru aja selesai) sejak
   // tombol ini pertama kali ditampilin.
-  const sessions = rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(rangeDays);
+  const sessions = getSessionsForRange(rangeDays);
   const currentPage = Number(parts[3]);
   const targetPage = action === "next" ? currentPage + 1 : currentPage - 1;
   await interaction.update(safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays)));
+}
+
+// Balesan buat "cok rekap tanggal" DAN buat tombol "Rekap per tanggal"
+// (lihat replyRecapMenu/handleRecapMenuButton di bawah) - dua-duanya
+// nunjukkin dropdown yang SAMA persis, jadi digabung ke satu fungsi biar
+// gak didobelin. Belum ada tabel apa-apa di sini (belum ada tanggal
+// kepilih) - cuma dropdown + tombol tutup, tabelnya baru muncul abis milih
+// lewat handleRecapDateSelect.
+function buildRecapDatePickerBlock() {
+  return { content: "Rekap tanggal berapa nih, cok?", components: [buildRecapDateSelectRow(), buildCloseOnlyRow()] };
+}
+
+function replyRecapDatePicker() {
+  return buildRecapDatePickerBlock();
+}
+
+// Balesan buat "cok rekap" POLOS (gak nyebut "minggu"/"bulan"/"tanggal"/
+// "hari ini" sama sekali) - owner minta ini dikasih pilihan tombol dulu
+// daripada langsung nembak rekap hari ini kayak sebelumnya, biar user gak
+// kesusahan mikirin mau ketik apa buat tiap jenis rekap.
+function replyRecapMenu() {
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("recap_menu:today").setLabel("Rekap hari ini").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("recap_menu:week").setLabel("Rekap minggu ini").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("recap_menu:month").setLabel("Rekap bulan ini").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("recap_menu:date").setLabel("Rekap per tanggal").setStyle(ButtonStyle.Secondary),
+  );
+  return { content: "Mau rekap yang mana, cok?", components: [row] };
+}
+
+// Diklik dari salah satu tombol replyRecapMenu() bikin (customId
+// "recap_menu:<today|week|month|date>") - EDIT pesan menu-nya sendiri jadi
+// hasil rekap yang dipilih (interaction.update, sama pola-nya kayak
+// handleRecapNavButton), bukan pesan baru. pendingRecapPage dibersihin dulu
+// SEBELUM manggil fungsi rekapnya - jaga-jaga kalau orangnya sebelumnya lagi
+// di tengah nge-page-in rekap laen di channel+author yang sama (state lama
+// itu bakal ke-timpa otomatis kalau hasil rekap baru ini multi-halaman, tapi
+// KALAU ternyata cuma 1 halaman, state lama bisa nyangkut basi - dibersihin
+// eksplisit di sini biar gak ada celah itu sama sekali).
+async function handleRecapMenuButton(interaction) {
+  const choice = interaction.customId.split(":")[1];
+  pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+
+  if (choice === "date") {
+    await interaction.update(safeReplyOptions(buildRecapDatePickerBlock()));
+    return;
+  }
+
+  let reply;
+  if (choice === "today") reply = await replyTodayRecapSoFar(interaction.channelId, interaction.user.id);
+  else if (choice === "week") reply = await replyRecapRange(7, "minggu ini", interaction.channelId, interaction.user.id);
+  else if (choice === "month") reply = await replyRecapRange(30, "bulan ini", interaction.channelId, interaction.user.id);
+  else return;
+
+  await interaction.update(safeReplyOptions(reply));
+}
+
+// Diklik dari dropdown buildRecapDateSelectRow() bikin (customId
+// "recap_date_select", nempel baik di balesan buildRecapDatePickerBlock()
+// MAUPUN di tabel rekap tanggal yang lagi ditampilin, lihat
+// buildRecapNavComponents). Milih tanggal (lagi/baru) NGE-EDIT pesan yang
+// sama (interaction.update) - itu persis yang owner minta: "kalo misalnya
+// pengen ubah tanggal dari dropdown itu, maka tabel tanggal sebelumnya
+// di-delete biar pesannya gak berganda" - di sini "dihapus"-nya dengan cara
+// DI-TIMPA di tempat, bukan pesan lama dihapus + pesan baru dikirim (sama
+// filosofinya kayak Maju/Mundur di atas).
+//
+// Kalau tanggal yang dipilih ternyata gak ada sesi sama sekali, dropdown +
+// tombol tutup TETEP ditampilin (bukan diganti pesan polos tanpa komponen)
+// biar user bisa langsung coba tanggal lain tanpa harus ngetik "rekap
+// tanggal" dari awal lagi.
+async function handleRecapDateSelect(interaction) {
+  const selectedDate = interaction.values[0];
+  pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+
+  const sessions = getCompletedSessionsForDate(selectedDate);
+  const label = formatLongDateWIB(new Date(`${selectedDate}T00:00:00+07:00`));
+
+  if (sessions.length === 0) {
+    await interaction.update(
+      safeReplyOptions({
+        content: `Cok, belum ada live yang kecatet tanggal ${label}.`,
+        components: [buildRecapDateSelectRow(selectedDate), buildCloseOnlyRow()],
+      }),
+    );
+    return;
+  }
+
+  const block = buildRecapPageBlock(sessions, 0, interaction.channelId, interaction.user.id, selectedDate);
+  await interaction.update(safeReplyOptions({ content: `📋 **Rekap tanggal ${label}**\n${block.content}`, components: block.components }));
 }
 
 // Ditempelin di balesan hasil pencarian (handleRecapSearchModalSubmit di
@@ -476,7 +636,7 @@ async function handleRecapSearchModalSubmit(interaction) {
   const rangeDays = decodeRecapRange(range);
   const query = interaction.fields.getTextInputValue("member_name").trim();
 
-  const sessions = rangeDays == null ? getTodaySessionsForRecap() : getCompletedSessionsSince(rangeDays);
+  const sessions = getSessionsForRange(rangeDays);
   const needle = query.toLowerCase();
   const matched = sessions.filter((s) => s.name && matchesNameFragment(needle, s.name.split(/[\s|]+/)[0].toLowerCase()));
 
@@ -793,12 +953,17 @@ module.exports = {
   replyGifterSnapshotByUsername,
   replyTodayRecapSoFar,
   replyRecapRange,
+  replyRecapMenu,
+  replyRecapDatePicker,
   getTodaySessionsForRecap,
   buildRecapTablePage,
   buildRecapPageBlock,
+  buildRecapDateSelectRow,
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapMenuButton,
+  handleRecapDateSelect,
   isOwner,
   handleAddPriority,
   handleRemovePriority,

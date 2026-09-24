@@ -94,6 +94,33 @@ test("getCompletedSessionsToday - sesi yang beneran selesai HARI INI (relatif ke
   assert.equal(completed[0].username, "jkt48_nala");
 });
 
+// getCompletedSessionsForDate dites LANGSUNG (dulu getCompletedSessionsToday
+// nulis filter-nya sendiri, sekarang getCompletedSessionsToday cuma delegasi
+// ke sini pake getTodayWIB() - lihat dailyLog.js) buat rekap per tanggal
+// (chat/replies.js's "cok rekap tanggal") - harus bisa nge-query tanggal
+// SEMBARANG (bukan cuma hari ini), termasuk tanggal yang gak ada sesinya
+// sama sekali (array kosong, BUKAN error/undefined).
+test("getCompletedSessionsForDate - nge-query tanggal SEMBARANG (bukan cuma hari ini), dan tanggal kosong balikin array kosong", () => {
+  const { recordLiveEnded, getCompletedSessionsForDate } = freshDailyLog();
+
+  const today = getTodayWIB();
+  const threeDaysAgoDate = new Date(`${today}T00:00:00+07:00`);
+  threeDaysAgoDate.setDate(threeDaysAgoDate.getDate() - 3);
+  const threeDaysAgo = threeDaysAgoDate.toISOString().slice(0, 10);
+
+  recordLiveEnded("Nala", "jkt48_nala", new Date(`${threeDaysAgo}T10:00:00+07:00`), new Date(`${threeDaysAgo}T11:00:00+07:00`), 5);
+  recordLiveEnded("Levi", "jkt48_levi", new Date(`${today}T10:00:00+07:00`), new Date(`${today}T11:00:00+07:00`), 5);
+
+  const threeDaysAgoSessions = getCompletedSessionsForDate(threeDaysAgo);
+  assert.equal(threeDaysAgoSessions.length, 1);
+  assert.equal(threeDaysAgoSessions[0].username, "jkt48_nala");
+
+  const oneDayAgoDate = new Date(`${today}T00:00:00+07:00`);
+  oneDayAgoDate.setDate(oneDayAgoDate.getDate() - 1);
+  const oneDayAgo = oneDayAgoDate.toISOString().slice(0, 10);
+  assert.deepEqual(getCompletedSessionsForDate(oneDayAgo), [], "tanggal tanpa sesi sama sekali balikin array kosong, bukan error");
+});
+
 test("loadDailyLog() migrasi otomatis - buang sesi lama yang masih ke-tag endedAtUnix:null (bentuk file SEBELUM refactor ini)", () => {
   freshDailyLog();
   writeRawFile({

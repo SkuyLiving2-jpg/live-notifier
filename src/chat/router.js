@@ -23,9 +23,13 @@ const {
   replyGifterSnapshot,
   replyTodayRecapSoFar,
   replyRecapRange,
+  replyRecapMenu,
+  replyRecapDatePicker,
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapMenuButton,
+  handleRecapDateSelect,
   handleAddPriority,
   handleRemovePriority,
   handleSubscribe,
@@ -175,8 +179,22 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   if (containsWholeWord(text, "rekap") && containsWholeWord(text, "bulan")) {
     return await replyRecapRange(30, "bulan ini", channelId, authorId);
   }
-  if (containsWholeWord(text, "rekap")) {
+  // "rekap tanggal"/"rekap per tanggal" -> langsung dropdown milih tanggal,
+  // skip menu 4-tombol di bawah (orangnya udah jelas mau rekap tanggal).
+  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "tanggal")) {
+    return replyRecapDatePicker();
+  }
+  // "rekap hari ini"/"rekap hari" -> tetep langsung ke rekap hari ini kayak
+  // sebelumnya (BUKAN nunjukkin menu 4-tombol) - orangnya udah eksplisit
+  // nyebut rentangnya, jadi gak perlu ditanya lagi. "rekap" POLOS doang
+  // (gak nyebut minggu/bulan/tanggal/hari ini sama sekali) baru dikasih
+  // menu (replyRecapMenu) - owner minta ini biar user gak bingung mau
+  // ketik apa buat tiap jenis rekap.
+  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "hari")) {
     return await replyTodayRecapSoFar(channelId, authorId);
+  }
+  if (containsWholeWord(text, "rekap")) {
+    return replyRecapMenu();
   }
 
   const asksTopViewers =
@@ -301,6 +319,10 @@ function wireDiscordEvents(client) {
         await handleRecapNavButton(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_search_modal:")) {
         await handleRecapSearchModalSubmit(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("recap_menu:")) {
+        await handleRecapMenuButton(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId === "recap_date_select") {
+        await handleRecapDateSelect(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("watch_confirm:")) {
         await handleWatchConfirmButton(interaction);
       }

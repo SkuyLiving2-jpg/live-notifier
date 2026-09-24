@@ -47,6 +47,17 @@ function formatShortDateWIB(date) {
   return `${day}/${month}`;
 }
 
+// "13 September 2026" dari sebuah Date (WIB) - versi PANJANG/gampang dibaca,
+// beda dari formatShortDateWIB ("13/09") yang emang didesain buat nempel
+// ringkes di sebelah jam. Dipake buat label opsi dropdown "rekap per
+// tanggal" (chat/replies.js) dan buat nyebut tanggal yang dipilih di teks
+// balesannya - orang milih dari dropdown ngeliat "13 September 2026", jadi
+// balesannya juga harus nyebut tanggal yang sama persis biar nggak keliatan
+// kayak nunjuk tanggal yang beda.
+function formatLongDateWIB(date) {
+  return new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric" }).format(date);
+}
+
 // Jam WIB (0-23) dari sebuah Date - default ke sekarang kalau dipanggil
 // tanpa argumen. Satu-satunya tempat yang ngitung ini (dulu ada 3 versi
 // nyaris identik yang ditulis manual: getHourWIB() tanpa argumen buat rekap
@@ -180,6 +191,7 @@ module.exports = {
   getTodayWIB,
   getDateWIB,
   formatShortDateWIB,
+  formatLongDateWIB,
   getHourWIBOf,
   getTimeOfDayBucket,
   getGreeting,

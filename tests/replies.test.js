@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { getTodayWIB } = require("../src/utils");
+const { getTodayWIB, getDateWIB } = require("../src/utils");
 const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
@@ -17,6 +17,7 @@ const { saveDurationHistory } = require("../src/storage/durationHistory");
 const { recordLiveCompleted } = require("../src/storage/liveCount");
 const {
   buildRecapTablePage,
+  buildRecapDateSelectRow,
   getTodaySessionsForRecap,
   replyMemberStats,
   replyLiveCount,
@@ -25,6 +26,8 @@ const {
   replyPriorityList,
   replySpecificMember,
   replyHelp,
+  replyRecapMenu,
+  replyRecapDatePicker,
   handleSubscribe,
   handleUnsubscribe,
   isOwner,
@@ -32,6 +35,8 @@ const {
   handleRemovePriority,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapMenuButton,
+  handleRecapDateSelect,
 } = require("../src/chat/replies");
 
 // daily-log.json's jsonStore caches in-memory for the whole life of this
@@ -63,6 +68,8 @@ function freshRepliesForRecapRange() {
     tryHandleRecapPageShortcut: replies.tryHandleRecapPageShortcut,
     handleRecapNavButton: replies.handleRecapNavButton,
     handleRecapSearchModalSubmit: replies.handleRecapSearchModalSubmit,
+    handleRecapMenuButton: replies.handleRecapMenuButton,
+    handleRecapDateSelect: replies.handleRecapDateSelect,
   };
 }
 
@@ -77,6 +84,7 @@ function fakeInteraction({
   fieldValue = "",
   message = undefined,
   deletedMessageIds = [],
+  values = [],
 } = {}) {
   const calls = [];
   const modals = [];
@@ -86,6 +94,7 @@ function fakeInteraction({
     channelId,
     user: { id: authorId },
     fields: { getTextInputValue: () => fieldValue },
+    values,
     message,
     // channel.messages.delete(id) - satu-satunya method discord.js yang
     // dipake handleRecapNavButton's "delrecap" (lihat replies.js), gak
@@ -775,4 +784,166 @@ test("handleRecapSearchModalSubmit - range 'today' nyari dari getTodaySessionsFo
   } finally {
     activeLives.delete("jkt48_searchtoday");
   }
+});
+
+// --- Rekap per tanggal + menu 4-tombol "cok rekap" polos ---
+
+test("buildRecapDateSelectRow - 25 opsi, mundur dari KEMARIN (bukan hari ini), value-nya YYYY-MM-DD", () => {
+  const row = buildRecapDateSelectRow();
+  const options = row.components[0].options.map((o) => o.data);
+  assert.equal(options.length, 25);
+  assert.match(options[0].value, /^\d{4}-\d{2}-\d{2}$/);
+  assert.notEqual(options[0].value, getTodayWIB(), "opsi pertama harus KEMARIN, bukan hari ini");
+  assert.match(options[0].label, /^\d{1,2} [A-Za-z]+ \d{4}$/); // "13 September 2026"
+});
+
+test("buildRecapDateSelectRow - opsi yang cocok sama selectedDate ditandain default:true", () => {
+  const row = buildRecapDateSelectRow();
+  const someDate = row.components[0].options[3].data.value;
+  const marked = buildRecapDateSelectRow(someDate).components[0].options.map((o) => o.data);
+  const found = marked.find((o) => o.value === someDate);
+  assert.equal(found.default, true);
+  const others = marked.filter((o) => o.value !== someDate);
+  assert.ok(others.every((o) => !o.default));
+});
+
+test("replyRecapMenu - 4 tombol pilihan rekap, dengan customId recap_menu:<today|week|month|date>", () => {
+  const reply = replyRecapMenu();
+  assert.equal(reply.content, "Mau rekap yang mana, cok?");
+  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date"]);
+});
+
+test("replyRecapDatePicker - dropdown tanggal + tombol tutup, belum ada tabel apa-apa", () => {
+  const reply = replyRecapDatePicker();
+  assert.equal(reply.content, "Rekap tanggal berapa nih, cok?");
+  assert.equal(reply.components.length, 2);
+  assert.equal(reply.components[0].components[0].data.custom_id, "recap_date_select");
+  assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
+});
+
+test("handleRecapMenuButton - pilihan 'today'/'week'/'month' EDIT pesan menu-nya (update), BUKAN kirim pesan baru", async () => {
+  for (const choice of ["today", "week", "month"]) {
+    const interaction = fakeInteraction({ customId: `recap_menu:${choice}` });
+    await handleRecapMenuButton(interaction);
+    assert.equal(interaction.calls.length, 0, `${choice}: gak boleh reply()`);
+    assert.equal(interaction.updates.length, 1, `${choice}: harus update() sekali`);
+    assert.ok(interaction.updates[0].content, `${choice}: harus ada konten`);
+  }
+});
+
+test("handleRecapMenuButton - pilihan 'date' EDIT pesan jadi dropdown tanggal (buildRecapDatePickerBlock), BUKAN kirim pesan baru", async () => {
+  const interaction = fakeInteraction({ customId: "recap_menu:date" });
+  await handleRecapMenuButton(interaction);
+  assert.equal(interaction.calls.length, 0);
+  assert.equal(interaction.updates[0].content, "Rekap tanggal berapa nih, cok?");
+  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select");
+});
+
+test("handleRecapMenuButton - nge-clear pendingRecapPage SEBELUM render, biar rekap laen yang lagi di-page-in sebelumnya gak nyangkut basi", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    replyRecapRange: freshReplyRecapRange,
+    tryHandleRecapPageShortcut: freshTryHandleRecapPageShortcut,
+    handleRecapMenuButton: freshHandleRecapMenuButton,
+  } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Menubtn${i}`,
+      `jkt48_menubtntest${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-menubtn";
+  const authorId = "u-menubtn";
+  await freshReplyRecapRange(7, "minggu ini", channelId, authorId); // nge-set pendingRecapPage (multi-halaman)
+
+  // Pilihan "date" gak nge-set pendingRecapPage sama sekali (belum ada
+  // tabel) - jadi state lama dari rekap minggu ini di atas HARUS kehapus,
+  // bukan nyangkut.
+  const dateChoice = fakeInteraction({ customId: "recap_menu:date", channelId, authorId });
+  await freshHandleRecapMenuButton(dateChoice);
+
+  const afterChoice = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.equal(afterChoice, null, "pendingRecapPage harus udah kehapus, bukan nerusin halaman rekap minggu ini yang lama");
+});
+
+test("handleRecapDateSelect - tanggal yang ada sesinya -> tabel rekap tanggal itu, EDIT pesan (update), bukan pesan baru", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, handleRecapDateSelect: freshHandleRecapDateSelect } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
+  freshRecordLiveEnded("Datepicked", "jkt48_datepicked", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+
+  const interaction = fakeInteraction({ customId: "recap_date_select", values: [targetDate] });
+  await freshHandleRecapDateSelect(interaction);
+
+  assert.equal(interaction.calls.length, 0, "gak boleh kirim pesan baru (reply)");
+  assert.match(interaction.updates[0].content, /Rekap tanggal/);
+  assert.match(interaction.updates[0].content, /Datepicked/);
+  // Dropdown-nya harus tetep nempel (baris pertama) biar bisa ganti tanggal lagi.
+  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select");
+});
+
+test("handleRecapDateSelect - tanggal yang KOSONG (gak ada sesi) -> pesan 'belum ada', TAPI dropdown+tombol tutup tetep ada biar bisa coba tanggal lain", async () => {
+  const interaction = fakeInteraction({ customId: "recap_date_select", values: ["2000-01-01"] });
+  await handleRecapDateSelect(interaction);
+
+  assert.match(interaction.updates[0].content, /Cok, belum ada live yang kecatet tanggal/);
+  assert.equal(interaction.updates[0].components.length, 2, "dropdown + tombol tutup harus tetep ada");
+  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select");
+  assert.equal(interaction.updates[0].components[1].components[0].data.custom_id, "recap_nav:close");
+});
+
+test("handleRecapDateSelect - customId tombol Maju/Mundur/Cari di tabel yang dihasilin pake encoding tanggal 'd<YYYY-MM-DD>', bukan angka hari-mundur", async () => {
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
+  recordLiveEnded("Datepicked2", "jkt48_datepicked2", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+
+  const interaction = fakeInteraction({ customId: "recap_date_select", values: [targetDate] });
+  await handleRecapDateSelect(interaction);
+
+  const navRow = interaction.updates[0].components[1]; // baris ke-2: dropdown di baris ke-1
+  const searchButton = navRow.components.find((b) => b.data.custom_id.startsWith("recap_nav:search:"));
+  assert.equal(searchButton.data.custom_id, `recap_nav:search:d${targetDate}`);
+});
+
+test("handleRecapDateSelect - milih tanggal LAIN nge-clear pendingRecapPage tanggal SEBELUMNYA (ganti-ganti tanggal gak nyisain state basi)", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    tryHandleRecapPageShortcut: freshTryHandleRecapPageShortcut,
+    handleRecapDateSelect: freshHandleRecapDateSelect,
+  } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const firstDate = getDateWIB(new Date(threeDaysAgo * 1000));
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Multi${i}`,
+      `jkt48_multidatetest${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-datepick";
+  const authorId = "u-datepick";
+  const firstPick = fakeInteraction({ customId: "recap_date_select", channelId, authorId, values: [firstDate] });
+  await freshHandleRecapDateSelect(firstPick); // 25 sesi di 1 tanggal -> 2 halaman -> nge-set pendingRecapPage
+
+  const secondPick = fakeInteraction({ customId: "recap_date_select", channelId, authorId, values: ["2000-01-01"] }); // kosong
+  await freshHandleRecapDateSelect(secondPick);
+
+  const afterSecondPick = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.equal(afterSecondPick, null, "pendingRecapPage tanggal PERTAMA harus udah kehapus, gak boleh nyangkut ke tanggal kedua yang kosong");
 });

@@ -95,14 +95,22 @@ function saveDailyLog(log) {
   store.save(log);
 }
 
+// Sesi yang UDAH SELESAI dan tanggal WIB pas dia SELESAI itu jatuh di
+// `dateWIB` ("YYYY-MM-DD") - dasar buat getCompletedSessionsToday() di bawah
+// (today = getTodayWIB()) DAN buat rekap "per tanggal" (chat/replies.js's
+// getCompletedSessionsForDate re-export), yang butuh nge-query tanggal
+// SEMBARANG, bukan cuma hari ini.
+function getCompletedSessionsForDate(dateWIB) {
+  return loadDailyLog().sessions.filter((s) => getDateWIB(new Date(s.endedAtUnix * 1000)) === dateWIB);
+}
+
 // Sesi yang UDAH SELESAI dan tanggal WIB pas dia SELESAI itu "hari ini" -
 // dipake buat semua query "hari ini" (rekap, paling lama, paling rame).
 // Sesi yang MASIH LIVE SEKARANG itu tanggung jawab activeLives (lihat
 // storage/activeLives.js), BUKAN di sini - pemanggil yang butuh gabungan
 // keduanya gabungin sendiri di layernya (lihat chat/replies.js).
 function getCompletedSessionsToday() {
-  const today = getTodayWIB();
-  return loadDailyLog().sessions.filter((s) => getDateWIB(new Date(s.endedAtUnix * 1000)) === today);
+  return getCompletedSessionsForDate(getTodayWIB());
 }
 
 // Versi lebih lebar dari getCompletedSessionsToday() - sesi yang SELESAI-nya
@@ -163,6 +171,7 @@ module.exports = {
   getTodayWIBRangeUnix,
   fetchExternalTodayLiveHistory,
   getCompletedSessionsToday,
+  getCompletedSessionsForDate,
   getCompletedSessionsSince,
   getEarliestSessionDate,
   recordLiveEnded,

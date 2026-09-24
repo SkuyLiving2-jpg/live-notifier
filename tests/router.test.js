@@ -169,6 +169,35 @@ test("rekap bulan ini - dispatch ke replyRecapRange(30, ...), BUKAN rekap hari i
   assert.doesNotMatch(content, /Rekap live hari ini/);
 });
 
+// "rekap hari ini" tetep dispatch LANGSUNG ke replyTodayRecapSoFar (bukan
+// menu 4-tombol di bawah) - orangnya udah eksplisit nyebut rentangnya.
+// SENGAJA gak dites di sini (sama alesannya kayak "cok rekap" polos yang
+// LAMA, lihat catetan router.test.js's row di ARCHITECTURE.md §10) -
+// replyTodayRecapSoFar bikin network call beneran ke arsip eksternal, dan
+// unit test sengaja dijauhin dari itu (flaky/lambat/gak perlu). Rutenya
+// sendiri cuma satu `&& containsWholeWord(text, "hari")` tambahan sebelum
+// fallback ke menu, jadi cukup jelas dari baca kodenya doang.
+
+// "rekap tanggal"/"rekap per tanggal" -> langsung dropdown milih tanggal,
+// skip menu 4-tombol.
+test("rekap tanggal - dispatch ke replyRecapDatePicker (dropdown tanggal), BUKAN menu 4-tombol atau rekap hari ini", async () => {
+  const reply = await buildChatReply("cok rekap tanggal");
+  assert.equal(reply.content, "Rekap tanggal berapa nih, cok?");
+  assert.equal(reply.components.length, 2, "1 baris dropdown + 1 baris tombol tutup");
+  assert.equal(reply.components[0].components[0].data.custom_id, "recap_date_select");
+  assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
+});
+
+// "rekap" POLOS (gak nyebut minggu/bulan/tanggal/hari ini sama sekali) ->
+// menu 4-tombol, BUKAN langsung rekap hari ini kayak sebelumnya - owner
+// minta ini biar user gak bingung mau ketik apa.
+test("rekap polos (tanpa minggu/bulan/tanggal/hari) - dispatch ke menu 4-tombol", async () => {
+  const reply = await buildChatReply("cok rekap");
+  assert.equal(reply.content, "Mau rekap yang mana, cok?");
+  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date"]);
+});
+
 test("status - dispatch ke replyBotStatus", async () => {
   const reply = await buildChatReply("cok status");
   assert.match(reply, /Bot jalan normal/);
