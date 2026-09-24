@@ -214,3 +214,26 @@ test("pesan yang gak match pola manapun di channel BIASA (gak ke-mapping) -> TET
   const reply = await buildChatReply("cok apaan sih ini asdkjaskjd", { channelId: "c-not-dedicated-test", authorId: "u-not-dedicated" });
   assert.equal(reply.components.length, 2, "menu generik ada 2 baris tombol (9 opsi), beda dari fallback per-member yang cuma 1 baris/3 tombol");
 });
+
+// BUG BENERAN yang dilaporin owner: pesan di channel khusus member TANPA
+// "cok"/kata tanya-live sama sekali dulu diem-diem kena gerbang wake-word
+// biasa (buildChatReply balikin null) - keliatan kayak bot gak jalan sama
+// sekali di channel itu, padahal cuma nunggu kata "cok" yang user gak tau
+// perlu diketik. Channel khusus member SEHARUSNYA diperlakukan kayak
+// BOT_CHANNEL_ID (isBotChannel) - hampir semua pesan dianggap ditujukan ke bot.
+test("channel KHUSUS member: pesan TANPA 'cok'/kata tanya-live sama sekali TETEP dapet balesan (fallback per-member), bukan diem (null)", async () => {
+  saveChannelRouting({
+    jkt48_nowakewordtest: { webhookUrl: "https://discord.com/api/webhooks/999/token-nowake", channelId: "c-dedicated-no-wakeword-test" },
+  });
+  const reply = await buildChatReply("halo semuanya, apa kabar", { channelId: "c-dedicated-no-wakeword-test", authorId: "u-no-wakeword" });
+  assert.notEqual(reply, null, "channel khusus member harus balesin walau gak nyebut 'cok'/'live' sama sekali, sama kayak BOT_CHANNEL_ID");
+  assert.match(reply.content, /\*\*jkt48_nowakewordtest\*\*/);
+});
+
+// Regresi sekaligus: channel BIASA (gak ke-mapping) harus TETAP kena gerbang
+// wake-word seperti biasa - fix di atas gak boleh nge-bypass wake-word buat
+// channel manapun, cuma buat channel yang beneran ke-mapping ke member.
+test("channel BIASA (gak ke-mapping): pesan tanpa 'cok'/kata tanya-live TETEP diabaikan (null), gerbang wake-word gak ke-bypass", async () => {
+  const reply = await buildChatReply("halo semuanya, apa kabar", { channelId: "c-plain-no-wakeword-test", authorId: "u-plain-no-wakeword" });
+  assert.equal(reply, null);
+});

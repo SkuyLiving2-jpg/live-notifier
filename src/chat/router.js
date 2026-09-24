@@ -59,9 +59,21 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const shortcutReply = await tryHandleMenuShortcut(text, channelId, authorId);
   if (shortcutReply) return shortcutReply;
 
-  // Di channel khusus bot, hampir semua pesan dianggap "ditujukan ke bot" -
-  // gak perlu nyebut "cok" atau "live" dulu.
-  const mentionsBot = isBotChannel || CHAT_WAKE_WORDS.some((w) => containsWholeWord(text, w));
+  // Channel khusus SATU member (fitur "Q3", storage/channelRouting.js's
+  // getUsernameForChannel) dihitung DI SINI (bukan cuma di fallback paling
+  // bawah) soalnya dipake dua kali - buat nentuin mentionsBot juga. BUG
+  // SEBELUMNYA: dulu channel ini masih kena gerbang wake-word biasa, jadi
+  // orang yang ngetik tanpa "cok" di channel yang emang KHUSUS buat 1 member
+  // itu bakal diem-diem gak dijawab sama sekali (keliatan kayak bot rusak,
+  // padahal cuma nunggu kata "cok").
+  const dedicatedUsername = channelId ? getUsernameForChannel(channelId) : null;
+
+  // Di channel khusus bot ATAU channel khusus member, hampir semua pesan
+  // dianggap "ditujukan ke bot" - gak perlu nyebut "cok" atau "live" dulu.
+  // Beda dari BOT_CHANNEL_ID (manual di .env), dedicatedUsername otomatis -
+  // channel itu emang eksis spesifik buat member ini, jadi wajar hampir
+  // semua pesan di situ dianggep nanya soal dia.
+  const mentionsBot = isBotChannel || Boolean(dedicatedUsername) || CHAT_WAKE_WORDS.some((w) => containsWholeWord(text, w));
   const looksLikeLiveQuestion =
     TOPIC_WORDS.some((w) => containsWholeWord(text, w)) && QUESTION_HINTS.some((w) => (w === "?" ? text.includes("?") : containsWholeWord(text, w)));
 
@@ -229,13 +241,12 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 
   // Nyebut bot/nanya soal live tapi nggak match pola yang dikenal -> kasih
   // menu daripada diem aja. Kalau channel ini ke-mapping ke channel khusus
-  // SATU member (storage/channelRouting.js's getUsernameForChannel, fitur
-  // "Q3"), kasih fallback yang lebih simpel & spesifik member itu (3 opsi
-  // tombol) daripada menu 9-opsi generik yang nanya "member yang mana" -
-  // di sini itu udah jelas jawabannya, jadi gak perlu nanya lagi. Nomor
-  // shortcut (1-9, lihat markMenuShown/tryHandleMenuShortcut) SENGAJA gak
-  // dipasang buat jalur ini - fallback per-member cuma bisa lewat tombol.
-  const dedicatedUsername = channelId ? getUsernameForChannel(channelId) : null;
+  // SATU member (dedicatedUsername, dihitung di atas), kasih fallback yang
+  // lebih simpel & spesifik member itu (3 opsi tombol) daripada menu 9-opsi
+  // generik yang nanya "member yang mana" - di sini itu udah jelas
+  // jawabannya, jadi gak perlu nanya lagi. Nomor shortcut (1-9, lihat
+  // markMenuShown/tryHandleMenuShortcut) SENGAJA gak dipasang buat jalur
+  // ini - fallback per-member cuma bisa lewat tombol.
   if (dedicatedUsername) return replyMemberChannelFallback(dedicatedUsername);
 
   markMenuShown(channelId, authorId);
