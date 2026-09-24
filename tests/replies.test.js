@@ -111,8 +111,8 @@ test("buildRecapTablePage - sesi yang nyebrang tengah malam dikasih penanda (DD/
 
   const { text } = buildRecapTablePage([crossMidnight, sameDay], 0);
 
-  assert.match(text, /Nala.*22\.50 WIB \(\d{2}\/\d{2}\)/);
-  assert.match(text, /Levi.*10\.00 WIB(?! \()/); // Levi TANPA tanda kurung tanggal
+  assert.match(text, /Nala.*22\.50\.00 WIB \(\d{2}\/\d{2}\)/);
+  assert.match(text, /Levi.*10\.00\.00 WIB(?! \()/); // Levi TANPA tanda kurung tanggal
 });
 
 test("buildRecapTablePage - sesi diurutin ascending berdasarkan startedAtUnix, bukan urutan input", () => {
@@ -251,7 +251,7 @@ test("replySpecificMember - liveAt normal nyantumin jam mulai & elapsed time", (
   };
   const reply = replySpecificMember(entry);
   assert.match(reply, /\*\*JamTest\*\* lagi live/);
-  assert.match(reply, /mulai jam \d{2}\.\d{2} WIB/);
+  assert.match(reply, /mulai jam \d{2}\.\d{2}\.\d{2} WIB/);
 });
 
 // Regresi: entry.liveAt datang mentah dari live_at API IDN (idnApi.js gak

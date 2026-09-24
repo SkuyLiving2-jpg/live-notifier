@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const {
   formatDuration,
   formatViewCount,
+  formatClockWIB,
   getDateWIB,
   getTodayWIB,
   formatShortDateWIB,
@@ -51,6 +52,16 @@ test("getTodayWIB - delegasi ke getDateWIB() tanpa argumen (sekarang)", () => {
 test("formatShortDateWIB - format DD/MM", () => {
   assert.equal(formatShortDateWIB(new Date("2026-01-05T10:00:00+07:00")), "05/01");
   assert.equal(formatShortDateWIB(new Date("2026-12-31T23:00:00+07:00")), "31/12");
+});
+
+// Owner minta jam mulai/selesai live (notif channel, recap, priority DM -
+// semua lewat fungsi ini) nyantumin DETIK juga, bukan cuma jam.menit. Dites
+// eksplisit di sini (bukan cuma diwarisi lewat pemanggilnya) biar ketauan
+// LANGSUNG kalau ada yang nge-revert formatnya balik ke HH.MM doang.
+test("formatClockWIB - format HH.MM.SS WIB, nyantumin detik", () => {
+  assert.equal(formatClockWIB(new Date("2026-01-15T13:05:33+07:00")), "13.05.33 WIB");
+  // Detik 0 tetep dipad jadi 2 digit ("00"), bukan ilang/jadi "0".
+  assert.equal(formatClockWIB(new Date("2026-01-15T13:05:00+07:00")), "13.05.00 WIB");
 });
 
 test("getHourWIBOf - jam WIB dari Date tertentu", () => {

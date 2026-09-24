@@ -129,5 +129,5 @@ test("buildPriorityPayload - status start pake startIntro/startHashtag kalau ada
 test("buildPriorityPayload - timestamp default (gak dikasih argumen) tetep aman, jatuh ke waktu sekarang", () => {
   const levi = getAllPriorityMembers().find((m) => m.keyword === "levi");
   const payload = buildPriorityPayload("Levi", "https://idn.app/x", "start", levi, null);
-  assert.match(payload.embeds[0].fields[0].value, /^\d{2}\.\d{2} WIB$/);
+  assert.match(payload.embeds[0].fields[0].value, /^\d{2}\.\d{2}\.\d{2} WIB$/);
 });

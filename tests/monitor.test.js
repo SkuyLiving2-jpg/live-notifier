@@ -269,7 +269,7 @@ test("checkLiveMembers - notif start nyantumin jam mulai (dari live_at IDN), not
     assert.equal(capturedWebhookBodies.length, 2, "harus persis 2 notif kekirim: start & end");
 
     const startBody = capturedWebhookBodies[0];
-    assert.match(startBody.content, /\nMulai jam \d{2}\.\d{2} WIB/, "notif start harus nyantumin jam mulai");
+    assert.match(startBody.content, /\nMulai jam \d{2}\.\d{2}\.\d{2} WIB/, "notif start harus nyantumin jam mulai");
     assert.match(
       startBody.content,
       new RegExp(`Mulai jam ${formatClockWIB(new Date(liveAtIso))}`),
@@ -277,7 +277,7 @@ test("checkLiveMembers - notif start nyantumin jam mulai (dari live_at IDN), not
     );
 
     const endBody = capturedWebhookBodies[1];
-    assert.match(endBody.content, /\nSelesai jam \d{2}\.\d{2} WIB/, "notif end harus nyantumin jam selesai");
+    assert.match(endBody.content, /\nSelesai jam \d{2}\.\d{2}\.\d{2} WIB/, "notif end harus nyantumin jam selesai");
   } finally {
     restoreFetch();
     activeLives.delete(username);

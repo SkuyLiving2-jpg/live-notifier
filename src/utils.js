@@ -23,7 +23,7 @@ function formatViewCount(n) {
 }
 
 function formatClockWIB(date) {
-  return `${new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }).format(date)} WIB`;
+  return `${new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(date)} WIB`;
 }
 
 // Tanggal WIB ("YYYY-MM-DD") dari sebuah Date - default ke sekarang. Dipisah

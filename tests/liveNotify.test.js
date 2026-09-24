@@ -40,7 +40,7 @@ test("buildNormalPayload - status start buat member BUKAN prioritas (priority nu
 
 test("buildNormalPayload - timestamp default (gak dikasih argumen) tetep aman, jatuh ke waktu sekarang", () => {
   const payload = buildNormalPayload("Gabby", "https://idn.app/x", "start");
-  assert.match(payload.content, /\nMulai jam \d{2}\.\d{2} WIB$/);
+  assert.match(payload.content, /\nMulai jam \d{2}\.\d{2}\.\d{2} WIB$/);
 });
 
 // Notif CHANNEL Nala tetep plain content (bukan embed/tombol - itu cuma di
@@ -80,7 +80,7 @@ test("sendDiscordNotif - liveAt RUSAK (bukan tanggal valid) gak bikin throw, jam
   };
   try {
     await assert.doesNotReject(sendDiscordNotif("Gabby", "jkt48_gabby", "slug-x", "start", null, "bukan-tanggal-valid"));
-    assert.match(capturedBody.content, /\nMulai jam \d{2}\.\d{2} WIB$/, "tetep nyantumin jam mulai, jatuh ke waktu sekarang");
+    assert.match(capturedBody.content, /\nMulai jam \d{2}\.\d{2}\.\d{2} WIB$/, "tetep nyantumin jam mulai, jatuh ke waktu sekarang");
   } finally {
     global.fetch = original;
   }
@@ -95,7 +95,7 @@ test("sendDiscordNotif - liveAt null/kosong (belum ada data live_at) gak throw j
   };
   try {
     await assert.doesNotReject(sendDiscordNotif("Gabby", "jkt48_gabby", "slug-x", "start", null, null));
-    assert.match(capturedBody.content, /\nMulai jam \d{2}\.\d{2} WIB$/);
+    assert.match(capturedBody.content, /\nMulai jam \d{2}\.\d{2}\.\d{2} WIB$/);
   } finally {
     global.fetch = original;
   }
