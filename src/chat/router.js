@@ -1,10 +1,12 @@
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
+const { getUsernameForChannel } = require("../storage/channelRouting");
 const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
 const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions } = require("../utils");
 const { tryHandleWatchConfirmShortcut } = require("./menu");
 const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = require("./pendingState");
 const { replyFallbackMenu } = require("./menu");
+const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
 const {
   replyListLive,
   replyLongestLive,
@@ -226,7 +228,16 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   }
 
   // Nyebut bot/nanya soal live tapi nggak match pola yang dikenal -> kasih
-  // menu daripada diem aja, dan inget orang ini abis dikasih menu.
+  // menu daripada diem aja. Kalau channel ini ke-mapping ke channel khusus
+  // SATU member (storage/channelRouting.js's getUsernameForChannel, fitur
+  // "Q3"), kasih fallback yang lebih simpel & spesifik member itu (3 opsi
+  // tombol) daripada menu 9-opsi generik yang nanya "member yang mana" -
+  // di sini itu udah jelas jawabannya, jadi gak perlu nanya lagi. Nomor
+  // shortcut (1-9, lihat markMenuShown/tryHandleMenuShortcut) SENGAJA gak
+  // dipasang buat jalur ini - fallback per-member cuma bisa lewat tombol.
+  const dedicatedUsername = channelId ? getUsernameForChannel(channelId) : null;
+  if (dedicatedUsername) return replyMemberChannelFallback(dedicatedUsername);
+
   markMenuShown(channelId, authorId);
   return replyFallbackMenu();
 }
@@ -271,6 +282,8 @@ function wireDiscordEvents(client) {
         await handleFallbackMenuButton(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("fallback_select:")) {
         await handleFallbackMemberSelect(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("member_fallback:")) {
+        await handleMemberChannelFallbackButton(interaction);
       }
     } catch (error) {
       console.error("Gagal proses tombol/menu Discord:", error.message);

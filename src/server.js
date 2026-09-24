@@ -77,14 +77,28 @@ function handleGifterSnapshotUpload(req, res, body) {
   res.end(JSON.stringify({ ok: true, username, gifterCount: gifters.length }));
 }
 
-// Nerima pemetaan username -> webhook URL channel KHUSUS per-member yang
-// di-push dari scripts/set-channel-routing.js (jalan di komputer lokal
-// owner). SELALU full REPLACE (bukan merge) - file lokal yang di-push
-// dianggep daftar LENGKAP yang paling baru, bukan tambahan parsial (lihat
-// storage/channelRouting.js's saveChannelRouting). Tiap value divalidasi
-// bentuknya webhook URL Discord SEDINI mungkin di sini - kalau nggak, entry
-// yang typo/salah tempel bakal diam-diam gagal terus tiap kali ada notif
-// buat member itu, baru ketauan pas ngecek log jauh belakangan.
+// Value tiap entry pemetaan channel bisa 2 bentuk - lihat komen di
+// storage/channelRouting.js. String polos = webhook URL doang (notif doang,
+// gak ada fallback chat). Object = { webhookUrl, channelId } (notif + fallback
+// chat khusus member itu, lihat chat/memberChannelReply.js). channelId
+// divalidasi bentuknya snowflake Discord (17-20 digit) - bukan dicek
+// "beneran ada channel-nya" (butuh API call ke Discord buat itu, gak worth
+// dilakuin di sini), cuma nyaring typo kasar (kosong/bukan angka).
+const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/;
+function isValidRoutingEntry(entry) {
+  if (typeof entry === "string") return DISCORD_WEBHOOK_URL_RE.test(entry);
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+  return typeof entry.webhookUrl === "string" && DISCORD_WEBHOOK_URL_RE.test(entry.webhookUrl) && DISCORD_SNOWFLAKE_RE.test(entry.channelId);
+}
+
+// Nerima pemetaan username -> webhook URL (atau { webhookUrl, channelId })
+// channel KHUSUS per-member yang di-push dari scripts/set-channel-routing.js
+// (jalan di komputer lokal owner). SELALU full REPLACE (bukan merge) - file
+// lokal yang di-push dianggep daftar LENGKAP yang paling baru, bukan
+// tambahan parsial (lihat storage/channelRouting.js's saveChannelRouting).
+// Tiap value divalidasi bentuknya SEDINI mungkin di sini - kalau nggak,
+// entry yang typo/salah tempel bakal diam-diam gagal terus tiap kali ada
+// notif buat member itu, baru ketauan pas ngecek log jauh belakangan.
 function handleChannelRoutingUpload(req, res, body) {
   if (req.method !== "POST") {
     res.writeHead(405, { "Content-Type": "application/json" });
@@ -107,12 +121,12 @@ function handleChannelRoutingUpload(req, res, body) {
     return;
   }
 
-  const invalidEntries = Object.entries(payload).filter(([, url]) => typeof url !== "string" || !DISCORD_WEBHOOK_URL_RE.test(url));
+  const invalidEntries = Object.entries(payload).filter(([, entry]) => !isValidRoutingEntry(entry));
   if (invalidEntries.length > 0) {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
-        error: "Ada value yang bukan webhook URL Discord yang valid",
+        error: "Ada value yang bukan webhook URL Discord valid, atau { webhookUrl, channelId } dengan channelId bukan snowflake Discord yang valid",
         invalidUsernames: invalidEntries.map(([username]) => username),
       }),
     );

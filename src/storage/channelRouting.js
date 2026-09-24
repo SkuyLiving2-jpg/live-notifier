@@ -15,6 +15,23 @@ const { createJsonStore } = require("./jsonStore");
 // - di skala ~40+ member, exact key jauh lebih aman (nggak ada resiko
 // tabrakan whole-word yang mulai kerasa nyata di jumlah segitu) dan lebih
 // simpel (lookup O(1) langsung, gak perlu scan+containsWholeWord).
+//
+// VALUE bisa 2 bentuk (fitur "Q3": fallback reply simpel di channel khusus
+// member itu sendiri - lihat chat/memberChannelReply.js):
+// - String polos (BENTUK LAMA): cuma webhook URL, channel-nya CUMA nerima
+//   notif live (duplikasi dari channel gabungan), gak ada fallback chat -
+//   bot gak tau channel Discord-nya yang mana, cuma punya URL buat POST.
+// - Object { webhookUrl, channelId }: sama kayak di atas TAPI channelId-nya
+//   (ID channel Discord-nya, dari klik kanan channel > Copy Channel ID)
+//   dicatet juga, jadi getUsernameForChannel() bisa nyambungin balik pesan
+//   yang MASUK dari channel itu ke member yang punya channel itu.
+//   channelId sengaja TERPISAH dari webhook URL (bukan di-parse dari
+//   ID webhook-nya) - ID webhook != ID channel, dan resolve via API Discord
+//   butuh extra network call tiap kali; nyuruh owner tinggal COPY channel ID
+//   (workflow yang UDAH biasa dia pake buat BOT_CHANNEL_ID/PRIORITY_PING_USER_ID
+//   di .env) jauh lebih simpel dan gak nambah dependency runtime.
+//   Backward compatible - entry lama (string polos) TETEP jalan buat notif,
+//   cuma gak dapet fallback chat sampai owner nambahin channelId-nya.
 const CHANNEL_ROUTING_FILE = path.join(CACHE_DIR, "channel-routing.json");
 const store = createJsonStore(CHANNEL_ROUTING_FILE, {}, { errorLabel: "pemetaan channel per-member" });
 
@@ -40,7 +57,25 @@ function saveChannelRouting(map) {
 
 function getChannelWebhookFor(username) {
   if (!username) return null;
-  return loadChannelRouting()[username.toLowerCase()] || null;
+  const entry = loadChannelRouting()[username.toLowerCase()];
+  if (!entry) return null;
+  return typeof entry === "string" ? entry : entry.webhookUrl;
 }
 
-module.exports = { loadChannelRouting, saveChannelRouting, getChannelWebhookFor };
+// Kebalikan dari getChannelWebhookFor - dari ID channel Discord (yang datang
+// dari pesan MASUK, lihat chat/router.js's wireDiscordEvents), cari username
+// member yang channel khusus-nya itu. CUMA nyantol ke entry bentuk object
+// yang punya channelId (lihat komen di atas) - entry bentuk string lama
+// gak pernah match di sini, soalnya bot emang gak tau channel Discord-nya
+// yang mana. Linear scan (bukan Map kebalikan yang di-cache) - di skala
+// ~40+ member ini murah banget, dan lebih simpel daripada jaga cache lain
+// yang harus disinkronin tiap kali file routing-nya di-push ulang.
+function getUsernameForChannel(channelId) {
+  if (!channelId) return null;
+  for (const [username, entry] of Object.entries(loadChannelRouting())) {
+    if (typeof entry === "object" && entry !== null && entry.channelId === channelId) return username;
+  }
+  return null;
+}
+
+module.exports = { loadChannelRouting, saveChannelRouting, getChannelWebhookFor, getUsernameForChannel };

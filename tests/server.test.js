@@ -167,6 +167,51 @@ test("POST /api/channel-routing - request yang di-sign bener nyimpen pemetaan, f
   }
 });
 
+// Bentuk BARU (fitur "Q3" - fallback chat khusus channel per-member, lihat
+// storage/channelRouting.js): value objek { webhookUrl, channelId } harus
+// diterima juga, bukan cuma string webhook URL polos.
+test("POST /api/channel-routing - value bentuk object { webhookUrl, channelId } valid diterima", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const body = JSON.stringify({
+      jkt48_objecttest: { webhookUrl: "https://discord.com/api/webhooks/111/token-obj", channelId: "111222333444555666" },
+    });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.deepEqual(data, { ok: true, count: 1 });
+  } finally {
+    server.close();
+  }
+});
+
+test("POST /api/channel-routing - value bentuk object dengan channelId BUKAN snowflake Discord yang valid ditolak (400)", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    const body = JSON.stringify({
+      jkt48_badchannelid: { webhookUrl: "https://discord.com/api/webhooks/111/token-bad", channelId: "bukan-angka" },
+    });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.deepEqual(data.invalidUsernames, ["jkt48_badchannelid"]);
+  } finally {
+    server.close();
+  }
+});
+
 test("POST /api/channel-routing - value yang bukan webhook URL valid ditolak (400), gak nimpa data yang udah ada", async () => {
   const server = await startTestServer();
   try {

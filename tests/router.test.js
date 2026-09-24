@@ -8,6 +8,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveDuration } = require("../src/storage/durationHistory");
+const { saveChannelRouting } = require("../src/storage/channelRouting");
 const { buildChatReply } = require("../src/chat/router");
 
 const OWNER = "owner-test-id";
@@ -193,4 +194,23 @@ test("member yang UDAH GAK LIVE tapi ada riwayat durasi - dikasih info terakhir 
 test("pesan yang match wake-word tapi gak match pola manapun -> fallback menu, bukan diem", async () => {
   const reply = await buildChatReply("cok apaan sih ini asdkjaskjd", { channelId: "c-fallback", authorId: "u-fallback" });
   assert.ok(reply && typeof reply === "object" && reply.components, "harus balikin objek menu (content+components), bukan string command");
+});
+
+// Fitur "Q3": channel yang ke-mapping (storage/channelRouting.js's
+// getUsernameForChannel) ke SATU member spesifik harus dapet fallback yang
+// lebih simpel & spesifik member itu (chat/memberChannelReply.js), BUKAN
+// menu 9-opsi generik yang nanya "member yang mana" - di channel khusus itu
+// jawabannya udah jelas.
+test("pesan yang gak match pola manapun di channel KHUSUS member (ke-mapping channelId) -> fallback per-member, bukan menu generik", async () => {
+  saveChannelRouting({
+    jkt48_dedicatedroutertest: { webhookUrl: "https://discord.com/api/webhooks/999/token-router", channelId: "c-dedicated-router-test" },
+  });
+  const reply = await buildChatReply("cok apaan sih ini asdkjaskjd", { channelId: "c-dedicated-router-test", authorId: "u-dedicated" });
+  assert.match(reply.content, /\*\*jkt48_dedicatedroutertest\*\*/);
+  assert.equal(reply.components[0].components.length, 3, "harus 3 tombol opsi, bukan 9 opsi menu generik");
+});
+
+test("pesan yang gak match pola manapun di channel BIASA (gak ke-mapping) -> TETAP fallback menu generik seperti biasa", async () => {
+  const reply = await buildChatReply("cok apaan sih ini asdkjaskjd", { channelId: "c-not-dedicated-test", authorId: "u-not-dedicated" });
+  assert.equal(reply.components.length, 2, "menu generik ada 2 baris tombol (9 opsi), beda dari fallback per-member yang cuma 1 baris/3 tombol");
 });

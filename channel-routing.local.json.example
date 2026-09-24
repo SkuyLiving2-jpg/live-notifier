@@ -1,4 +1,7 @@
 {
   "jkt48_aralie": "https://discord.com/api/webhooks/xxxxx/xxxxx",
-  "jkt48_delynn": "https://discord.com/api/webhooks/xxxxx/xxxxx"
+  "jkt48_delynn": {
+    "webhookUrl": "https://discord.com/api/webhooks/xxxxx/xxxxx",
+    "channelId": "1234567890123456789"
+  }
 }

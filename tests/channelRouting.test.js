@@ -2,7 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { loadChannelRouting, saveChannelRouting, getChannelWebhookFor } = require("../src/storage/channelRouting");
+const { loadChannelRouting, saveChannelRouting, getChannelWebhookFor, getUsernameForChannel } = require("../src/storage/channelRouting");
 
 test("loadChannelRouting - default kosong kalau belum pernah disimpen", () => {
   assert.deepEqual(loadChannelRouting(), {});
@@ -38,6 +38,38 @@ test("getChannelWebhookFor - EXACT match doang, bukan fuzzy/prefix kayak priorit
 // (huruf besar), padahal username ASLI dari IDN (yang dipake buat manggil
 // getChannelWebhookFor pas ada live) hampir pasti lowercase - tanpa
 // normalisasi ini, notif ke channel khususnya DIEM-DIEM gak pernah kekirim.
+// Bentuk BARU (fitur "Q3" - fallback chat khusus channel per-member): value-nya
+// object { webhookUrl, channelId }, bukan cuma string webhook URL polos.
+test("getChannelWebhookFor - entry bentuk object { webhookUrl, channelId } tetep balikin webhookUrl-nya", () => {
+  saveChannelRouting({ jkt48_objecttest: { webhookUrl: "https://discord.com/api/webhooks/666/token-f", channelId: "111222333444555666" } });
+  assert.equal(getChannelWebhookFor("jkt48_objecttest"), "https://discord.com/api/webhooks/666/token-f");
+});
+
+test("getUsernameForChannel - channelId yang ke-mapping (entry bentuk object) balikin username-nya", () => {
+  saveChannelRouting({
+    jkt48_reversetest: { webhookUrl: "https://discord.com/api/webhooks/777/token-g", channelId: "999888777666555444" },
+  });
+  assert.equal(getUsernameForChannel("999888777666555444"), "jkt48_reversetest");
+});
+
+test("getUsernameForChannel - channelId yang gak ke-mapping/kosong/null balikin null", () => {
+  saveChannelRouting({
+    jkt48_reversetest2: { webhookUrl: "https://discord.com/api/webhooks/777/token-g", channelId: "999888777666555444" },
+  });
+  assert.equal(getUsernameForChannel("channel-lain-yang-gak-ada"), null);
+  assert.equal(getUsernameForChannel(""), null);
+  assert.equal(getUsernameForChannel(null), null);
+});
+
+// Entry bentuk STRING lama (webhook doang, gak ada channelId) HARUS TETEP
+// jalan buat notif (getChannelWebhookFor), tapi gak pernah nyantol di
+// getUsernameForChannel - bot emang gak tau channel Discord-nya yang mana.
+test("getUsernameForChannel - entry bentuk string lama (webhook polos, gak ada channelId) TIDAK PERNAH match", () => {
+  saveChannelRouting({ jkt48_legacytest: "https://discord.com/api/webhooks/888/token-h" });
+  assert.equal(getUsernameForChannel("https://discord.com/api/webhooks/888/token-h"), null);
+  assert.equal(getChannelWebhookFor("jkt48_legacytest"), "https://discord.com/api/webhooks/888/token-h");
+});
+
 test("saveChannelRouting/getChannelWebhookFor - case-insensitive, entry huruf besar di file lokal tetep kesambung ke username lowercase dari IDN", () => {
   saveChannelRouting({ jkt48_Aralie: "https://discord.com/api/webhooks/444/token-d" });
 

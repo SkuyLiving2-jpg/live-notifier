@@ -14,10 +14,16 @@
 // Cara pakai:
 //   1. Bikin channel-nya di Discord, buka Settings > Integrations > Webhooks
 //      > New Webhook, copy URL-nya.
-//   2. Isi/update channel-routing.local.json (di root project, SEJAJAR sama
+//   2. (OPSIONAL, buat fallback reply/tombol khusus member itu di channel-nya
+//      sendiri - lihat src/chat/memberChannelReply.js) Aktifin Developer Mode
+//      di Discord (Settings > Advanced), klik kanan nama channel-nya > Copy
+//      Channel ID.
+//   3. Isi/update channel-routing.local.json (di root project, SEJAJAR sama
 //      .env - lihat channel-routing.local.json.example buat contoh formatnya).
+//      Value-nya boleh string webhook URL polos (notif doang), ATAU object
+//      { "webhookUrl": "...", "channelId": "..." } (notif + fallback chat).
 //      File ini SENGAJA di-gitignore, jangan pernah di-commit.
-//   3. Jalanin: npm run set-channel-routing
+//   4. Jalanin: npm run set-channel-routing
 //
 // SELALU full REPLACE (bukan nambahin) - isi file lokal dianggep daftar
 // LENGKAP yang paling baru. Kalau mau hapus channel khusus member tertentu,
@@ -36,10 +42,18 @@ const API_SECRET = process.env.API_SECRET || "";
 const ROUTING_FILE = path.join(__dirname, "..", "channel-routing.local.json");
 
 // Sama pola validasinya kayak server.js's handleChannelRoutingUpload (termasuk
-// nerima domain lama discordapp.com juga, masih beneran jalan) - dicek juga
-// di sini (bukan cuma ngandelin server) biar typo ketauan LANGSUNG di
-// komputer sendiri, bukan abis nunggu roundtrip network ke Railway dulu.
+// nerima domain lama discordapp.com juga, masih beneran jalan, DAN nerima
+// dua bentuk value - string webhook URL polos, atau { webhookUrl, channelId })
+// - dicek juga di sini (bukan cuma ngandelin server) biar typo ketauan
+// LANGSUNG di komputer sendiri, bukan abis nunggu roundtrip network ke
+// Railway dulu.
 const DISCORD_WEBHOOK_URL_RE = /^https:\/\/discord(app)?\.com\/api\/webhooks\/\d+\/[^/?]+$/;
+const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/;
+function isValidRoutingEntry(entry) {
+  if (typeof entry === "string") return DISCORD_WEBHOOK_URL_RE.test(entry);
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+  return typeof entry.webhookUrl === "string" && DISCORD_WEBHOOK_URL_RE.test(entry.webhookUrl) && DISCORD_SNOWFLAKE_RE.test(entry.channelId);
+}
 
 async function main() {
   if (!BOT_API_URL || !API_SECRET) {
@@ -68,10 +82,12 @@ async function main() {
   }
 
   const invalidUsernames = Object.entries(mapping)
-    .filter(([, url]) => typeof url !== "string" || !DISCORD_WEBHOOK_URL_RE.test(url))
+    .filter(([, entry]) => !isValidRoutingEntry(entry))
     .map(([username]) => username);
   if (invalidUsernames.length > 0) {
-    console.error(`Value bukan webhook URL Discord yang valid buat: ${invalidUsernames.join(", ")}`);
+    console.error(
+      `Value bukan webhook URL Discord yang valid (atau { webhookUrl, channelId } dengan channelId bukan snowflake Discord) buat: ${invalidUsernames.join(", ")}`,
+    );
     process.exit(1);
   }
 
