@@ -167,6 +167,36 @@ test("buildRecapTablePage - status Live (belum selesai) vs Selesai", () => {
   assert.match(text, /Nala\s*\|\s*Live/);
 });
 
+test("buildRecapTablePage - kolom terakhir nunjukkin jam Berakhir (bukan durasi), '-' kalau masih live", () => {
+  const completed = {
+    name: "Levi",
+    startedAtUnix: unixAt(getTodayWIB(), "10:00"),
+    endedAtUnix: unixAt(getTodayWIB(), "11:30"),
+    durationMs: 90 * 60_000,
+  };
+  const ongoing = { name: "Nala", startedAtUnix: unixAt(getTodayWIB(), "09:00"), endedAtUnix: null, durationMs: null };
+
+  const { text } = buildRecapTablePage([completed, ongoing], 0);
+
+  assert.match(text, /Berakhir/);
+  assert.doesNotMatch(text, /Durasi/);
+  assert.match(text, /Levi\s*\|\s*Selesai\s*\|\s*10\.00\.00 WIB\s*\|\s*11\.30\.00 WIB/);
+  assert.match(text, /Nala\s*\|\s*Live\s*\|\s*09\.00\.00 WIB\s*\|\s*-/);
+});
+
+test("buildRecapTablePage - sesi yang BARU SELESAI sesudah nyebrang tengah malam dikasih penanda (DD/MM) di kolom Berakhir", () => {
+  const crossMidnight = {
+    name: "Nala",
+    startedAtUnix: unixAt(yesterdayWIB(), "22:50"),
+    endedAtUnix: unixAt(getTodayWIB(), "00:39"),
+    durationMs: 109 * 60_000,
+  };
+
+  const { text } = buildRecapTablePage([crossMidnight], 0);
+
+  assert.match(text, /00\.39\.00 WIB(?! \()/); // berakhir HARI INI, jadi TANPA tanda kurung tanggal
+});
+
 // getTodaySessionsForRecap() gabungin 2 sumber yang beda: sesi yang UDAH
 // SELESAI hari ini (dari daily-log.json, lewat recordLiveEnded) SAMA yang
 // MASIH LIVE SEKARANG (dari activeLives langsung) - ini persis fix buat bug

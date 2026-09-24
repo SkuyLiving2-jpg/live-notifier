@@ -201,7 +201,12 @@ function buildRecapTablePage(sessions, page) {
   const start = clampedPage * RECAP_TABLE_PAGE_SIZE;
   const pageSessions = sorted.slice(start, start + RECAP_TABLE_PAGE_SIZE);
 
-  const header = ["No", "Member", "Status", "Mulai", "Durasi"];
+  // Kolom terakhir tadinya "Durasi" (mis. "1j 23m") - owner minta diganti
+  // jadi jam BERAKHIR-nya, soalnya yang lebih kepake itu jam mulai & jam
+  // selesai, bukan lama durasinya. Sama pola penandaan "(DD/MM)"-nya kayak
+  // kolom Mulai di bawah, buat kasus live yang baru KELAR sesudah lewat
+  // tengah malam WIB.
+  const header = ["No", "Member", "Status", "Mulai", "Berakhir"];
   const rows = pageSessions.map((s, i) => {
     const startedAt = new Date(s.startedAtUnix * 1000);
     // Live yang mulai sebelum tengah malam WIB tapi baru selesai/kecatet
@@ -213,13 +218,15 @@ function buildRecapTablePage(sessions, page) {
     // mulainya beda dari tanggal "hari ini".
     const startedOnDifferentDay = getDateWIB(startedAt) !== getTodayWIB();
     const mulaiText = startedOnDifferentDay ? `${formatClockWIB(startedAt)} (${formatShortDateWIB(startedAt)})` : formatClockWIB(startedAt);
-    return [
-      String(start + i + 1),
-      s.name,
-      s.endedAtUnix !== null ? "Selesai" : "Live",
-      mulaiText,
-      s.endedAtUnix !== null ? formatDuration(s.durationMs) : "-",
-    ];
+
+    let berakhirText = "-";
+    if (s.endedAtUnix !== null) {
+      const endedAt = new Date(s.endedAtUnix * 1000);
+      const endedOnDifferentDay = getDateWIB(endedAt) !== getTodayWIB();
+      berakhirText = endedOnDifferentDay ? `${formatClockWIB(endedAt)} (${formatShortDateWIB(endedAt)})` : formatClockWIB(endedAt);
+    }
+
+    return [String(start + i + 1), s.name, s.endedAtUnix !== null ? "Selesai" : "Live", mulaiText, berakhirText];
   });
 
   const widths = header.map((h, col) => Math.max(h.length, ...rows.map((r) => r[col].length)));
