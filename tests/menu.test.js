@@ -10,15 +10,17 @@ const {
   startWatchConfirm,
   startWatchConfirmForEntry,
   tryHandleWatchConfirmShortcut,
+  handleWatchConfirmButton,
   handleFallbackMenuButton,
   handleFallbackMemberSelect,
 } = require("../src/chat/menu");
 
-// Fake discord.js interaction - handleFallbackMenuButton/handleFallbackMemberSelect
-// cuma pernah nyentuh .customId/.channelId/.user.id/.values/.reply(), jadi
-// gak butuh library mocking discord.js beneran.
+// Fake discord.js interaction - handleFallbackMenuButton/handleFallbackMemberSelect/
+// handleWatchConfirmButton cuma pernah nyentuh .customId/.channelId/.user.id/
+// .values/.reply()/.update(), jadi gak butuh library mocking discord.js beneran.
 function fakeInteraction({ customId, channelId = "c1", authorId = "u1", values = [] }) {
   const calls = [];
+  const updates = [];
   return {
     customId,
     channelId,
@@ -27,7 +29,11 @@ function fakeInteraction({ customId, channelId = "c1", authorId = "u1", values =
     reply: async (payload) => {
       calls.push(payload);
     },
+    update: async (payload) => {
+      updates.push(payload);
+    },
     calls,
+    updates,
   };
 }
 
@@ -56,7 +62,8 @@ test("startWatchConfirmForEntry + tryHandleWatchConfirmShortcut - alur y/n dasar
   activeLives.set("jkt48_menutest", { name: "Menutest", username: "jkt48_menutest", slug: "s", liveAt: new Date().toISOString() });
   try {
     const question = startWatchConfirmForEntry(activeLives.get("jkt48_menutest"), "c-watch", "u-watch");
-    assert.match(question, /Mau nonton sekarang\? \(y\/n\)/);
+    assert.match(question.content, /Mau nonton sekarang\?/);
+    assert.equal(question.components[0].components.length, 3, "harus 3 tombol: Ya/Enggak/Tutup");
 
     const yesReply = tryHandleWatchConfirmShortcut("y", "c-watch", "u-watch");
     assert.match(yesReply, /Gas nonton!/);
@@ -117,10 +124,79 @@ test("tryHandleWatchConfirmShortcut - member udah kelar live pas user baru jawab
   assert.match(reply, /kayaknya baru aja selesai live/);
 });
 
+// Owner minta pertanyaan "mau nonton?" jadi tombol (bukan ngetik y/n) DAN
+// dikasih opsi "Tutup" kalau salah pencet member dari dropdown -
+// handleWatchConfirmButton adalah tombolnya. customId bawa username LANGSUNG
+// (self-contained kayak recap_nav's tombol) - gak nunggu pendingWatchConfirm
+// buat FUNGSI, jadi dites langsung lewat customId, gak perlu startWatchConfirmForEntry
+// dipanggil duluan.
+test("handleWatchConfirmButton - action 'yes' EDIT pesan yang ada (update) jadi link nonton, BUKAN pesan baru", async () => {
+  activeLives.set("jkt48_wcbtn", { name: "Wcbtn", username: "jkt48_wcbtn", slug: "slug-wcbtn", liveAt: new Date().toISOString() });
+  try {
+    const interaction = fakeInteraction({ customId: "watch_confirm:yes:jkt48_wcbtn" });
+    await handleWatchConfirmButton(interaction);
+    assert.equal(interaction.calls.length, 0, "gak boleh kirim pesan baru");
+    assert.match(interaction.updates[0].content, /Gas nonton!.*Wcbtn.*https:\/\/idn\.app\/jkt48_wcbtn\/live\/slug-wcbtn/s);
+    assert.deepEqual(interaction.updates[0].components, []);
+  } finally {
+    activeLives.delete("jkt48_wcbtn");
+  }
+});
+
+test("handleWatchConfirmButton - action 'no' EDIT pesan yang ada jadi 'oke sip', BUKAN pesan baru", async () => {
+  activeLives.set("jkt48_wcbtn2", { name: "Wcbtn2", username: "jkt48_wcbtn2", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    const interaction = fakeInteraction({ customId: "watch_confirm:no:jkt48_wcbtn2" });
+    await handleWatchConfirmButton(interaction);
+    assert.equal(interaction.calls.length, 0);
+    assert.match(interaction.updates[0].content, /Oke sip\. \*\*Wcbtn2\*\*/);
+  } finally {
+    activeLives.delete("jkt48_wcbtn2");
+  }
+});
+
+test("handleWatchConfirmButton - action 'close' EDIT pesan yang ada jadi 'dibatalin', TANPA re-cek status live sama sekali", async () => {
+  const interaction = fakeInteraction({ customId: "watch_confirm:close:jkt48_wcbtn3" });
+  await handleWatchConfirmButton(interaction);
+  assert.equal(interaction.calls.length, 0);
+  assert.match(interaction.updates[0].content, /Oke, dibatalin/);
+  assert.deepEqual(interaction.updates[0].components, []);
+});
+
+// Member-nya udah kelar live PAS diklik (button self-contained, gak kena
+// TTL kayak jalur teks, jadi ini bisa kejadian kapan aja) - dikasih tau,
+// bukan link basi. Namanya diambil dari pendingWatchConfirm (fallback) kalau
+// activeLives-nya udah kehapus.
+test("handleWatchConfirmButton - member udah kelar live pas diklik -> dikasih tau (nama dari pendingWatchConfirm), bukan link basi", async () => {
+  activeLives.set("jkt48_wcbtn4", { name: "Wcbtn4", username: "jkt48_wcbtn4", slug: "s", liveAt: new Date().toISOString() });
+  startWatchConfirmForEntry(activeLives.get("jkt48_wcbtn4"), "c1", "u1"); // ngisi pendingWatchConfirm buat fallback nama
+  activeLives.delete("jkt48_wcbtn4"); // "keburu selesai" pas user lagi mikir mau klik
+
+  const interaction = fakeInteraction({ customId: "watch_confirm:yes:jkt48_wcbtn4" });
+  await handleWatchConfirmButton(interaction);
+  assert.match(interaction.updates[0].content, /Yah, \*\*Wcbtn4\*\* kayaknya baru aja selesai live/);
+});
+
+// Abis dijawab lewat tombol, jawaban TEKS "y"/"n" yang nyasar berikutnya
+// (misal orangnya lupa udah klik tombol) gak boleh diem-diem nyangkut ke
+// pending state teks yang sama.
+test("handleWatchConfirmButton - abis diklik, pendingWatchConfirm buat orang itu ke-clear (jawaban teks 'y' abis itu gak nyasar)", async () => {
+  activeLives.set("jkt48_wcbtn5", { name: "Wcbtn5", username: "jkt48_wcbtn5", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    startWatchConfirmForEntry(activeLives.get("jkt48_wcbtn5"), "c-wcclear", "u-wcclear");
+    const interaction = fakeInteraction({ customId: "watch_confirm:no:jkt48_wcbtn5", channelId: "c-wcclear", authorId: "u-wcclear" });
+    await handleWatchConfirmButton(interaction);
+
+    assert.equal(tryHandleWatchConfirmShortcut("y", "c-wcclear", "u-wcclear"), null);
+  } finally {
+    activeLives.delete("jkt48_wcbtn5");
+  }
+});
+
 test("startWatchConfirm - fuzzy name search: ketemu -> tanya y/n, gak ketemu -> replyMemberNotFound", () => {
   activeLives.set("jkt48_fuzzytest", { name: "Fuzzytest", username: "jkt48_fuzzytest", slug: "s", liveAt: new Date().toISOString() });
   try {
-    assert.match(startWatchConfirm("fuzzytest", "c-fz", "u-fz"), /Mau nonton sekarang/);
+    assert.match(startWatchConfirm("fuzzytest", "c-fz", "u-fz").content, /Mau nonton sekarang/);
     assert.match(startWatchConfirm("member-yang-gak-ada", "c-fz2", "u-fz2"), /nggak nemu member/);
   } finally {
     activeLives.delete("jkt48_fuzzytest");

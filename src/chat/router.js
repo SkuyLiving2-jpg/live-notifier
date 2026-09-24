@@ -31,7 +31,7 @@ const {
   handleSubscribe,
   handleUnsubscribe,
 } = require("./replies");
-const { handleFallbackMenuButton, handleFallbackMemberSelect } = require("./menu");
+const { handleFallbackMenuButton, handleFallbackMemberSelect, handleWatchConfirmButton } = require("./menu");
 
 // Kata kunci buat manggil bot di chat (contoh: "Cok, ini yang masih live
 // siapa aja?"). Pesan yang nggak nyebut salah satu kata ini bakal diabaikan,
@@ -301,6 +301,8 @@ function wireDiscordEvents(client) {
         await handleRecapNavButton(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_search_modal:")) {
         await handleRecapSearchModalSubmit(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("watch_confirm:")) {
+        await handleWatchConfirmButton(interaction);
       }
     } catch (error) {
       console.error("Gagal proses tombol/menu Discord:", error.message);

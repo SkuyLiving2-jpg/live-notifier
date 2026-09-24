@@ -106,6 +106,23 @@ function memberPromptQuestion(option) {
 const pendingWatchConfirm = new Map();
 const PENDING_WATCH_CONFIRM_TTL_MS = 2 * 60000;
 
+// Tombol Ya/Enggak/Tutup buat pertanyaan "mau nonton?" - owner minta ini
+// jadi tombol (bukan ngetik "y"/"n") biar "gak ribet", DAN minta ada opsi
+// "Tutup" kalau ternyata salah pencet member dari dropdown. customId-nya
+// bawa username LANGSUNG (self-contained, sama pola-nya kayak recap_nav's
+// tombol) - gak nunggu/gak butuh pendingWatchConfirm buat FUNGSI (cuma
+// dipake buat nampilin ulang nama-nya kalau membernya udah keburu selesai
+// live pas diklik, lihat handleWatchConfirmButton), jadi tombol ini tetep
+// valid diklik kapan aja, gak kena TTL kayak jalur ngetik y/n.
+function buildWatchConfirmComponents(username) {
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`watch_confirm:yes:${username}`).setLabel("🔴 Ya, nonton").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`watch_confirm:no:${username}`).setLabel("Enggak").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`watch_confirm:close:${username}`).setLabel("Tutup").setStyle(ButtonStyle.Danger),
+  );
+  return [row];
+}
+
 // Dipanggil abis user milih member lewat "4 <nama>" - kalau membernya lagi
 // live, JANGAN langsung kasih link, tanya dulu "mau nonton?" (biar kayak
 // ngobrol beneran, bukan asal muntahin info). Kalau membernya ternyata lagi
@@ -115,11 +132,15 @@ const PENDING_WATCH_CONFIRM_TTL_MS = 2 * 60000;
 // pake entry itu tanpa nyari ulang lewat fuzzy name-match - beda sama
 // startWatchConfirm(fragment, ...) yang emang butuh nyari dulu (dipanggil dari
 // chat teks yang cuma punya nama, bukan entry).
+//
+// Balikin OBJECT ({content, components}), bukan string doang - ngetik "y"/
+// "n" polos (tryHandleWatchConfirmShortcut di bawah) TETEP jalan sebagai
+// alternatif, tombol cuma nambahin cara yang lebih gampang.
 function startWatchConfirmForEntry(entry, channelId, authorId) {
   if (channelId && authorId) {
     pendingWatchConfirm.set(`${channelId}:${authorId}`, { username: entry.username, name: entry.name, at: Date.now() });
   }
-  return `**${entry.name}** lagi live nih! Mau nonton sekarang? (y/n)`;
+  return { content: `**${entry.name}** lagi live nih! Mau nonton sekarang?`, components: buildWatchConfirmComponents(entry.username) };
 }
 
 function startWatchConfirm(fragment, channelId, authorId) {
@@ -173,6 +194,50 @@ function tryHandleWatchConfirmShortcut(text, channelId, authorId) {
 
   const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
   return `Oke sip. **${entry.name}** ${elapsedText}, kalau berubah pikiran tinggal cek lagi ya.`;
+}
+
+// Diklik dari salah satu tombol buildWatchConfirmComponents() bikin (customId
+// "watch_confirm:<yes|no|close>:<username>"). EDIT pesan yang tombolnya
+// nempel (interaction.update, bukan pesan baru) - sama pola-nya kayak
+// handleRecapNavButton, biar gak numpuk pesan baru per klik. Username-nya
+// dari customId (bukan pendingWatchConfirm) - pending state di sini cuma
+// dipake buat NAMA cadangan (lihat komen di bawah), gak nge-block button-nya
+// buat tetep valid diklik walau udah lewat PENDING_WATCH_CONFIRM_TTL_MS.
+async function handleWatchConfirmButton(interaction) {
+  const [, action, username] = interaction.customId.split(":");
+  const key = `${interaction.channelId}:${interaction.user.id}`;
+  const pending = pendingWatchConfirm.get(key);
+  pendingWatchConfirm.delete(key); // abis dijawab lewat tombol, jawaban teks "y"/"n" yang nyasar berikutnya gak boleh nyangkut ke ini lagi
+
+  if (action === "close") {
+    await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
+    return;
+  }
+
+  // Re-cek status live-nya SEKARANG (bukan pas tombolnya ditampilin) - bisa
+  // aja membernya udah selesai live selagi user mikir mau klik apa nggak.
+  // Nama-nya diambil dari activeLives kalau masih ada (paling akurat), kalau
+  // udah nggak ada fallback ke nama yang sempet kesimpen di pendingWatchConfirm
+  // (bisa aja kosong kalau udah lewat TTL-nya/gak ada - fallback terakhir
+  // "member ini" biar tetep ada balesan, bukan "undefined").
+  const entry = activeLives.get(username);
+  const name = entry?.name || pending?.name || "member ini";
+
+  if (!entry) {
+    await interaction.update(safeReplyOptions({ content: `Yah, **${name}** kayaknya baru aja selesai live.`, components: [] }));
+    return;
+  }
+
+  if (action === "yes") {
+    const liveUrl = `https://idn.app/${entry.username}/live/${entry.slug}`;
+    await interaction.update(safeReplyOptions({ content: `🔴 Gas nonton! **${name}** - ${liveUrl}`, components: [] }));
+    return;
+  }
+
+  const elapsedText = describeElapsed(Date.now() - new Date(entry.liveAt).getTime());
+  await interaction.update(
+    safeReplyOptions({ content: `Oke sip. **${name}** ${elapsedText}, kalau berubah pikiran tinggal cek lagi ya.`, components: [] }),
+  );
 }
 
 // Diklik dari tombol replyFallbackMenu(). Pilihan 1/2/3/5/6/7/8 langsung
@@ -268,6 +333,7 @@ module.exports = {
   startWatchConfirm,
   startWatchConfirmForEntry,
   tryHandleWatchConfirmShortcut,
+  handleWatchConfirmButton,
   handleFallbackMenuButton,
   handleFallbackMemberSelect,
 };
