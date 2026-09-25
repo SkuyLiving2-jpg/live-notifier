@@ -225,11 +225,13 @@ test("handleFallbackMenuButton - opsi 4 (cek member) EDIT pesan menu (update), B
     assert.equal(withDataInteraction.calls.length, 0, "gak boleh reply() pesan baru");
     assert.match(withDataInteraction.updates[0].content, /Mau cek member yang mana/);
     assert.ok(withDataInteraction.updates[0].components, "harus ada dropdown select menu");
-    // Baris ke-2 harus tombol "Tutup" - owner ngeluh gak ada cara batalin
-    // kalau salah pencet opsi 4 dan gak jadi mau milih member.
-    const closeRow = withDataInteraction.updates[0].components[1];
-    assert.equal(closeRow.components[0].data.custom_id, "fallback_menu:close");
-    assert.equal(closeRow.components[0].data.label, "Tutup");
+    // Baris ke-2 harus tombol "Tutup" + "Kembali" - owner ngeluh gak ada cara
+    // batalin/balik kalau salah pencet opsi 4 dan gak jadi mau milih member.
+    const actionRow = withDataInteraction.updates[0].components[1];
+    assert.equal(actionRow.components[0].data.custom_id, "fallback_menu:close");
+    assert.equal(actionRow.components[0].data.label, "Tutup");
+    assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back");
+    assert.equal(actionRow.components[1].data.label, "Kembali");
   } finally {
     activeLives.delete("jkt48_dropdowntest");
   }
@@ -246,8 +248,9 @@ test("handleFallbackMenuButton - opsi 9 (top gifter) EDIT pesan menu (update), B
   const withDataInteraction = fakeInteraction({ customId: "fallback_menu:9" });
   await handleFallbackMenuButton(withDataInteraction);
   assert.match(withDataInteraction.updates[0].content, /Mau cek top gifter member yang mana/);
-  const closeRow = withDataInteraction.updates[0].components[1];
-  assert.equal(closeRow.components[0].data.custom_id, "fallback_menu:close");
+  const actionRow = withDataInteraction.updates[0].components[1];
+  assert.equal(actionRow.components[0].data.custom_id, "fallback_menu:close");
+  assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back");
 });
 
 test("handleFallbackMenuButton - tombol 'Tutup' di bawah dropdown 4/9 EDIT pesan jadi 'dibatalin', ngilangin dropdown-nya", async () => {
@@ -256,6 +259,15 @@ test("handleFallbackMenuButton - tombol 'Tutup' di bawah dropdown 4/9 EDIT pesan
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.equal(interaction.updates[0].content, "Oke, dibatalin.");
   assert.deepEqual(interaction.updates[0].components, []);
+});
+
+test("handleFallbackMenuButton - tombol 'Kembali' di bawah dropdown 4/9 EDIT pesan balik jadi menu 9-opsi awal, BUKAN pesan baru", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_menu:back" });
+  await handleFallbackMenuButton(interaction);
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
+  assert.match(interaction.updates[0].content, /Klik salah satu di bawah/);
+  const customIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(customIds, ["fallback_menu:1", "fallback_menu:2", "fallback_menu:3", "fallback_menu:4", "fallback_menu:5"]);
 });
 
 test("handleFallbackMenuButton - opsi bare (mis. 2) EDIT pesan menu (update) dengan menu 9-opsi ditempel lagi, BUKAN pesan baru", async () => {

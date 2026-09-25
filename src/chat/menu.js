@@ -41,14 +41,20 @@ function buildFallbackMenuComponents() {
   return [row1, row2];
 }
 
-// Baris tombol "Tutup" yang nempel DI BAWAH dropdown pilih member/gifter
-// (opsi 4/9 di handleFallbackMenuButton) - StringSelectMenu harus sendirian
-// di baris-nya (gak bisa digabung sama tombol di baris yang sama), jadi ini
-// baris KEDUA yang nempel bareng dropdown-nya. customId "fallback_menu:close"
+// Baris tombol "Tutup"/"Kembali" yang nempel DI BAWAH dropdown pilih
+// member/gifter (opsi 4/9 di handleFallbackMenuButton) - StringSelectMenu
+// harus sendirian di baris-nya (gak bisa digabung sama tombol di baris yang
+// sama), jadi ini baris KEDUA yang nempel bareng dropdown-nya. "Kembali"
+// nyusul owner minta ada cara balik ke menu 9-opsi awal TANPA harus nutup
+// dulu terus manggil ulang "cok bantuan" - beda dari "Tutup" yang beneran
+// ngakhirin interaksinya. customId-nya ("fallback_menu:close"/"fallback_menu:back")
 // dibaca di handleFallbackMenuButton (dispatcher yang sama kayak tombol menu
 // 1-9), bukan handler terpisah.
-function buildFallbackPickCloseRow() {
-  return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("fallback_menu:close").setLabel("Tutup").setStyle(ButtonStyle.Danger));
+function buildFallbackPickActionRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("fallback_menu:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("fallback_menu:back").setLabel("Kembali").setStyle(ButtonStyle.Secondary),
+  );
 }
 
 // Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
@@ -289,7 +295,7 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.update(safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickCloseRow()] }));
+    await interaction.update(safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickActionRow()] }));
     return;
   }
 
@@ -310,7 +316,7 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.update(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickCloseRow()] }));
+    await interaction.update(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickActionRow()] }));
     return;
   }
 
@@ -323,6 +329,17 @@ async function handleFallbackMenuButton(interaction) {
   // edit pesan ini sendiri jadi teks "dibatalin", ilangin dropdown.
   if (optionId === "close") {
     await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
+    return;
+  }
+
+  // Tombol "Kembali" - nempel di baris yang sama kayak "Tutup" di atas, tapi
+  // beda tujuan: bukan ngakhirin interaksinya, cuma balikin pesan ini ke
+  // tampilan menu 9-opsi awal (replyFallbackMenu()) lagi, biar user bisa
+  // pilih opsi LAIN tanpa harus nutup dulu terus manggil ulang "cok bantuan"
+  // dari nol. Sama pola in-place-edit-nya kayak "close" - satu pesan yang
+  // sama terus dipake bolak-balik, gak numpuk pesan baru.
+  if (optionId === "back") {
+    await interaction.update(safeReplyOptions(replyFallbackMenu()));
     return;
   }
 
