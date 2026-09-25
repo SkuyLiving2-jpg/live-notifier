@@ -297,8 +297,18 @@ const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 // digabung di sini biar nambah jenis rentang lagi ke depannya cukup di 1
 // tempat. `rangeDays`: null = hari ini (gabungan activeLives), number = N
 // hari terakhir, string "YYYY-MM-DD" = tanggal spesifik.
+//
+// String tanggal yang KEBETULAN sama persis sama hari ini di-treat SAMA
+// kayak rangeDays null (gabungan activeLives juga, bukan cuma
+// getCompletedSessionsForDate) - dulu (sebelum buildRecapDateSelectRow ikut
+// nawarin hari ini sebagai opsi, lihat komen di situ) ini gak mungkin
+// kejadian soalnya dropdown-nya sengaja gak pernah ngasih value hari ini.
+// Begitu hari ini jadi bisa dipilih, tanpa special-case ini milih "hari ini"
+// dari dropdown per-tanggal bakal ngasih hasil BEDA dari tombol "Rekap hari
+// ini" (kelewatan sesi yang MASIH LIVE, cuma nunjukkin yang udah selesai) -
+// kelihatan kayak bug baru ("kok yang lagi live sekarang gak muncul").
 function getSessionsForRange(rangeDays) {
-  if (rangeDays == null) return getTodaySessionsForRecap();
+  if (rangeDays == null || rangeDays === getTodayWIB()) return getTodaySessionsForRecap();
   if (typeof rangeDays === "string") return getCompletedSessionsForDate(rangeDays);
   return getCompletedSessionsSince(rangeDays);
 }
@@ -325,18 +335,35 @@ function decodeRecapRange(range) {
 }
 
 // Discord StringSelectMenu maksimal 25 opsi - dropdown "rekap per tanggal"
-// nunjukkin 25 hari TERAKHIR mundur dari KEMARIN (bukan hari ini, itu udah
-// ada tombol "Rekap hari ini" sendiri di replyRecapMenu), masih di dalam
-// SESSION_RETENTION_DAYS punya dailyLog.js (35 hari) jadi datanya emang
-// masih kesimpen buat semua opsi ini.
+// nunjukkin sampai 25 hari TERAKHIR mundur dari HARI INI (dulu mulai dari
+// KEMARIN, lihat komen BUG SEBELUMNYA di bawah), dipotong di SALAH SATU dari
+// dua batas, mana yang lebih deket: SESSION_RETENTION_DAYS punya dailyLog.js
+// (35 hari - lewat itu datanya emang udah kebuang) ATAU tanggal sesi
+// PALING TUA yang beneran ada di arsip (getEarliestSessionDate) - owner
+// laporin dropdown-nya nunjukkin tanggal jauh ke belakang dari sebelum bot
+// ini bahkan mulai jalan/nge-track (mis. bot baru mulai 13 September, tapi
+// dropdown-nya nawarin sampe akhir Agustus), yang klik ke situ ujung-ujungnya
+// cuma "belum ada live yang kecatet" - bukan salah, tapi ngebuang opsi buat
+// tanggal yang emang gak mungkin ada datanya sama sekali.
 const RECAP_DATE_OPTIONS_COUNT = 25;
 
+// BUG SEBELUMNYA (dilaporin owner): loop-nya mulai dari i=1 (KEMARIN),
+// sengaja NGELEWATIN hari ini - alasannya dulu "hari ini udah ada tombol
+// 'Rekap hari ini' sendiri di replyRecapMenu", TAPI itu cuma bener kalau
+// dropdown ini kebuka LEWAT tombol "Rekap per tanggal" di replyRecapMenu.
+// Begitu "cok rekap tanggal"/"cok rekap per tanggal" (chat/router.js) manggil
+// buildRecapDatePickerBlock() LANGSUNG, gak pernah ada tombol "Rekap hari
+// ini" yang nempel sama sekali - jadi hari ini beneran gak bisa dipilih dari
+// dropdown ini lewat jalur itu, cuma "ilang" tanpa penjelasan. Sekarang
+// mulai dari i=0 (HARI INI ikut jadi salah satu opsi).
 function buildRecapDateSelectRow(selectedDate = null) {
   const todayStartMs = new Date(`${getTodayWIB()}T00:00:00+07:00`).getTime();
+  const earliestDate = getEarliestSessionDate(); // null kalau arsipnya masih kosong sama sekali - gak ada batas tambahan buat kasus itu
   const options = [];
-  for (let i = 1; i <= RECAP_DATE_OPTIONS_COUNT; i++) {
+  for (let i = 0; i < RECAP_DATE_OPTIONS_COUNT; i++) {
     const d = new Date(todayStartMs - i * 24 * 60 * 60 * 1000);
     const value = getDateWIB(d);
+    if (earliestDate && value < earliestDate) break; // mundur lebih jauh dari sesi paling tua yang ada - stop, gak ada gunanya nawarin tanggal yang pasti kosong
     options.push({ label: formatLongDateWIB(d), value, default: value === selectedDate });
   }
   const selectMenu = new StringSelectMenuBuilder().setCustomId("recap_date_select").setPlaceholder("Pilih tanggal buat rekap").addOptions(options);
@@ -587,7 +614,11 @@ async function handleRecapDateSelect(interaction) {
   const selectedDate = interaction.values[0];
   pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
 
-  const sessions = getCompletedSessionsForDate(selectedDate);
+  // getSessionsForRange (bukan getCompletedSessionsForDate langsung) - kalau
+  // selectedDate kebetulan HARI INI (sekarang bisa dipilih, lihat komen di
+  // buildRecapDateSelectRow), ini otomatis ikut gabung sesi yang MASIH LIVE
+  // dari activeLives juga, sama kayak tombol "Rekap hari ini".
+  const sessions = getSessionsForRange(selectedDate);
   const label = formatLongDateWIB(new Date(`${selectedDate}T00:00:00+07:00`));
 
   if (sessions.length === 0) {

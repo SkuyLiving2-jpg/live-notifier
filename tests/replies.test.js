@@ -70,6 +70,7 @@ function freshRepliesForRecapRange() {
     handleRecapSearchModalSubmit: replies.handleRecapSearchModalSubmit,
     handleRecapMenuButton: replies.handleRecapMenuButton,
     handleRecapDateSelect: replies.handleRecapDateSelect,
+    buildRecapDateSelectRow: replies.buildRecapDateSelectRow,
   };
 }
 
@@ -788,13 +789,42 @@ test("handleRecapSearchModalSubmit - range 'today' nyari dari getTodaySessionsFo
 
 // --- Rekap per tanggal + menu 4-tombol "cok rekap" polos ---
 
-test("buildRecapDateSelectRow - 25 opsi, mundur dari KEMARIN (bukan hari ini), value-nya YYYY-MM-DD", () => {
-  const row = buildRecapDateSelectRow();
+// BUG SEBELUMNYA (dilaporin owner, dua-duanya sekaligus): (1) loop-nya dulu
+// mulai dari KEMARIN (bukan hari ini), jadi hari ini beneran gak pernah bisa
+// dipilih lewat dropdown ini - kentara pas dibuka lewat "cok rekap tanggal"
+// langsung, yang gak pernah nempelin tombol "Rekap hari ini" terpisah. (2)
+// dropdown-nya selalu nawarin 25 hari ke belakang APAPUN kondisinya, walau
+// bot-nya baru mulai nge-track beberapa hari lalu - milih tanggal sebelum
+// itu ujung-ujungnya cuma "belum ada live yang kecatet". Dua-duanya dites di
+// environment TERISOLASI (freshRepliesForRecapRange) biar hasilnya
+// deterministik, gak kebawa sesi dari test lain di file yang sama.
+test("buildRecapDateSelectRow - arsip kosong sama sekali -> 25 opsi PENUH, opsi pertama HARI INI", () => {
+  const fresh = freshRepliesForRecapRange();
+  const row = fresh.buildRecapDateSelectRow();
   const options = row.components[0].options.map((o) => o.data);
   assert.equal(options.length, 25);
   assert.match(options[0].value, /^\d{4}-\d{2}-\d{2}$/);
-  assert.notEqual(options[0].value, getTodayWIB(), "opsi pertama harus KEMARIN, bukan hari ini");
+  assert.equal(options[0].value, getTodayWIB(), "opsi pertama harus HARI INI");
   assert.match(options[0].label, /^\d{1,2} [A-Za-z]+ \d{4}$/); // "13 September 2026"
+  assert.equal(options[1].value, getDateWIB(new Date(Date.now() - 24 * 60 * 60 * 1000)), "opsi kedua kemarin");
+});
+
+test("buildRecapDateSelectRow - sesi paling tua cuma 3 hari lalu -> dropdown dipotong di situ, gak nawarin tanggal sebelum bot mulai nge-track", () => {
+  const fresh = freshRepliesForRecapRange();
+  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  fresh.recordLiveEnded("Datecutoff", "jkt48_datecutoff", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+
+  const row = fresh.buildRecapDateSelectRow();
+  const options = row.components[0].options.map((o) => o.data);
+  const earliestExpected = getDateWIB(new Date(threeDaysAgo * 1000));
+  // hari ini + kemarin + H-2 + H-3(paling tua yang ada) = 4 opsi, BUKAN 25
+  assert.equal(options.length, 4);
+  assert.equal(options[0].value, getTodayWIB());
+  assert.equal(options[options.length - 1].value, earliestExpected);
+  assert.ok(
+    options.every((o) => o.value >= earliestExpected),
+    "gak boleh ada opsi yang lebih tua dari sesi paling tua yang beneran ada",
+  );
 });
 
 test("buildRecapDateSelectRow - opsi yang cocok sama selectedDate ditandain default:true", () => {
@@ -890,6 +920,25 @@ test("handleRecapDateSelect - tanggal yang ada sesinya -> tabel rekap tanggal it
   assert.match(interaction.updates[0].content, /Datepicked/);
   // Dropdown-nya harus tetep nempel (baris pertama) biar bisa ganti tanggal lagi.
   assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select");
+});
+
+// BUG SEBELUMNYA: buildRecapDateSelectRow dulu SENGAJA gak pernah nawarin
+// hari ini sebagai opsi (lihat komen di situ) - begitu itu dibenerin,
+// handleRecapDateSelect masih manggil getCompletedSessionsForDate langsung
+// (bukan getSessionsForRange), yang CUMA nyakup sesi yang UDAH SELESAI. Milih
+// hari ini dari dropdown ini bakal kelewatan sesi yang MASIH LIVE detik ini -
+// beda dari tombol "Rekap hari ini" yang emang udah gabung activeLives dari
+// awal - kelihatan kayak bug baru ("kok yang lagi live gak muncul").
+test("handleRecapDateSelect - milih HARI INI dari dropdown -> ikut gabung sesi yang MASIH LIVE (activeLives), sama kayak tombol 'Rekap hari ini'", async () => {
+  const fresh = freshRepliesForRecapRange();
+  activeLives.set("jkt48_datetoday", { name: "Datetoday", username: "jkt48_datetoday", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    const interaction = fakeInteraction({ customId: "recap_date_select", values: [getTodayWIB()] });
+    await fresh.handleRecapDateSelect(interaction);
+    assert.match(interaction.updates[0].content, /Datetoday/);
+  } finally {
+    activeLives.delete("jkt48_datetoday");
+  }
 });
 
 test("handleRecapDateSelect - tanggal yang KOSONG (gak ada sesi) -> pesan 'belum ada', TAPI dropdown+tombol tutup tetep ada biar bisa coba tanggal lain", async () => {
