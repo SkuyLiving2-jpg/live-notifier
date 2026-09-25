@@ -23,6 +23,18 @@ function markMenuShown(channelId, authorId) {
   if (channelId && authorId) pendingMenuByAuthor.set(`${channelId}:${authorId}`, Date.now());
 }
 
+// Kebalikan dari markMenuShown - dipanggil menu.js's handleFallbackMenuButton
+// abis tombol "Tutup" (fallback_menu:delete) beneran ngehapus pesan menunya
+// (§10's thirty-fourth item). Tanpa ini, ngetik angka mentah (mis. "3")
+// dalam PENDING_MENU_TTL_MS abis pesannya kehapus tetep ketangkep sebagai
+// "lanjutan milih opsi menu" - padahal menu-nya udah eksplisit ditutup
+// (salah pencet/salah ketik), jadi jawabannya bakal keliatan nyasar dari
+// mana asalnya. Sama pola-nya kayak replies.js's "recap_nav:close" yang
+// juga nge-clear pendingRecapPage-nya sendiri.
+function clearMenuShown(channelId, authorId) {
+  if (channelId && authorId) pendingMenuByAuthor.delete(`${channelId}:${authorId}`);
+}
+
 // "channelId:authorId" -> { option: "4"|"9", at } - nunggu NAMA member abis
 // user milih opsi 4/9 tanpa langsung nyebut nama. BUG SEBELUMNYA: begitu
 // nanya "member yang mana?"/"gifter siapa?", pendingMenuByAuthor keburu
@@ -92,4 +104,4 @@ function tryHandleMemberPromptShortcut(text, channelId, authorId) {
   return pending.option === "4" ? startWatchConfirm(name, channelId, authorId) : replyGifterSnapshot(name);
 }
 
-module.exports = { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut };
+module.exports = { markMenuShown, clearMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut };

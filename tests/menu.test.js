@@ -14,26 +14,36 @@ const {
   handleFallbackMenuButton,
   handleFallbackMemberSelect,
 } = require("../src/chat/menu");
+const { markMenuShown, tryHandleMenuShortcut } = require("../src/chat/pendingState");
 
 // Fake discord.js interaction - handleFallbackMenuButton/handleFallbackMemberSelect/
 // handleWatchConfirmButton cuma pernah nyentuh .customId/.channelId/.user.id/
-// .values/.reply()/.update(), jadi gak butuh library mocking discord.js beneran.
+// .values/.reply()/.update()/.deferUpdate()/.message.delete(), jadi gak butuh
+// library mocking discord.js beneran.
 function fakeInteraction({ customId, channelId = "c1", authorId = "u1", values = [] }) {
   const calls = [];
   const updates = [];
+  const deferUpdateCalls = [];
+  const deletedMessageIds = [];
   return {
     customId,
     channelId,
     user: { id: authorId },
     values,
+    message: { id: `fake-msg-${channelId}-${authorId}`, delete: async () => deletedMessageIds.push(`fake-msg-${channelId}-${authorId}`) },
     reply: async (payload) => {
       calls.push(payload);
     },
     update: async (payload) => {
       updates.push(payload);
     },
+    deferUpdate: async () => {
+      deferUpdateCalls.push(true);
+    },
     calls,
     updates,
+    deferUpdateCalls,
+    deletedMessageIds,
   };
 }
 
@@ -268,6 +278,49 @@ test("handleFallbackMenuButton - tombol 'Kembali' di bawah dropdown 4/9 EDIT pes
   assert.match(interaction.updates[0].content, /Klik salah satu di bawah/);
   const customIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(customIds, ["fallback_menu:1", "fallback_menu:2", "fallback_menu:3", "fallback_menu:4", "fallback_menu:5"]);
+});
+
+// §10's thirty-fourth item - owner minta tombol tutup buat menu 9-opsi ITU
+// SENDIRI (beda dari "fallback_menu:close" di atas, yang nempel di dropdown
+// opsi 4/9), buat kasus salah pencet/salah ketik - dan minta pesannya
+// BENERAN DIHAPUS, bukan diedit jadi teks "dibatalin".
+test("resolveBareMenuChoice's buildFallbackMenuComponents (lewat replyFallbackMenu) - tombol 'Tutup' nempel di baris kedua (opsi 6-9), customId 'fallback_menu:delete'", async () => {
+  const { replyFallbackMenu } = require("../src/chat/menu");
+  const reply = replyFallbackMenu();
+  assert.equal(reply.components.length, 2, "tetep 2 baris, gak nambah baris ketiga");
+  const row2CustomIds = reply.components[1].components.map((c) => c.data.custom_id);
+  assert.deepEqual(row2CustomIds, ["fallback_menu:6", "fallback_menu:7", "fallback_menu:8", "fallback_menu:9", "fallback_menu:delete"]);
+  const deleteButton = reply.components[1].components[4];
+  assert.equal(deleteButton.data.label, "Tutup");
+});
+
+test("handleFallbackMenuButton - tombol 'Tutup' di menu 9-opsi BENERAN NGEHAPUS pesannya (message.delete), BUKAN diedit jadi teks 'dibatalin'", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_menu:delete", channelId: "c-delmenu", authorId: "u-delmenu" });
+  await handleFallbackMenuButton(interaction);
+
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
+  assert.equal(interaction.updates.length, 0, "gak boleh update() jadi teks apapun - pesannya beneran hilang, bukan diganti teks");
+  assert.equal(interaction.deferUpdateCalls.length, 1, "harus deferUpdate() dulu biar Discord gak nunjukkin 'interaction failed'");
+  assert.deepEqual(interaction.deletedMessageIds, [interaction.message.id], "pesan menu-nya sendiri harus beneran kehapus");
+});
+
+test("handleFallbackMenuButton - tombol 'Tutup' di menu 9-opsi juga nge-clear pendingMenuByAuthor, biar angka mentah abis itu gak nyasar dianggep lanjutan menu yang udah dihapus", async () => {
+  const channelId = "c-delmenu-pending";
+  const authorId = "u-delmenu-pending";
+  markMenuShown(channelId, authorId);
+
+  // Sebelum ditutup, angka mentah masih ketangkep sebagai lanjutan (baseline).
+  assert.notEqual(await tryHandleMenuShortcut("2", channelId, authorId), null);
+
+  markMenuShown(channelId, authorId); // pasang lagi (baris di atas udah "sekali pake" abis dipake)
+  const interaction = fakeInteraction({ customId: "fallback_menu:delete", channelId, authorId });
+  await handleFallbackMenuButton(interaction);
+
+  assert.equal(
+    await tryHandleMenuShortcut("2", channelId, authorId),
+    null,
+    "abis ditutup, angka mentah gak boleh lagi ketangkep sebagai lanjutan menu",
+  );
 });
 
 test("handleFallbackMenuButton - opsi bare (mis. 2) EDIT pesan menu (update) dengan menu 9-opsi ditempel lagi, BUKAN pesan baru", async () => {

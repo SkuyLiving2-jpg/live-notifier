@@ -23,7 +23,17 @@ const {
 
 // Tombol Discord buat tiap pilihan menu - custom_id-nya "fallback_menu:<N>",
 // dibaca di handleFallbackMenuButton(). Discord batesin maksimal 5 tombol
-// per baris, jadi 9 pilihan dipecah jadi 2 baris (5 + 4).
+// per baris, jadi 9 pilihan dipecah jadi 2 baris (5 + 4) - baris kedua
+// (6-9) masih nyisa 1 slot, jadi tombol "Tutup" (di bawah) nempel di situ,
+// tetep 2 baris, gak perlu baris ketiga.
+//
+// "Tutup" di sini ("fallback_menu:delete") BEDA dari "Tutup" yang udah ada
+// di buildFallbackPickActionRow ("fallback_menu:close", nempel di dropdown
+// opsi 4/9) - owner minta ini buat kasus salah pencet/salah ketik pas menu
+// 9-opsi INI yang lagi keliatan (bukan pas di tengah milih member/gifter),
+// dan maksudnya beda: bukan diedit jadi teks "dibatalin" (itu masih
+// nyisain jejak pesan), tapi PESANNYA BENERAN DIHAPUS - dianggep kayak
+// gak pernah ada. Lihat handleFallbackMenuButton's "delete" branch.
 function buildFallbackMenuComponents() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("fallback_menu:1").setLabel("1. Siapa yang live").setStyle(ButtonStyle.Primary),
@@ -37,6 +47,7 @@ function buildFallbackMenuComponents() {
     new ButtonBuilder().setCustomId("fallback_menu:7").setLabel("7. Reminder aku").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("fallback_menu:8").setLabel("8. Rekap hari ini").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("fallback_menu:9").setLabel("9. Cek top gifter").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("fallback_menu:delete").setLabel("Tutup").setStyle(ButtonStyle.Danger),
   );
   return [row1, row2];
 }
@@ -317,6 +328,33 @@ async function handleFallbackMenuButton(interaction) {
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
     await interaction.update(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickActionRow()] }));
+    return;
+  }
+
+  // Tombol "Tutup" yang nempel LANGSUNG di menu 9-opsi (buildFallbackMenuComponents,
+  // §10's thirty-fourth item, beda dari "close" di bawah yang nempel di
+  // dropdown opsi 4/9) - owner minta buat kasus salah pencet/salah ketik
+  // pas menu-nya baru aja muncul, dan minta perilakunya beda dari "close":
+  // bukan DIEDIT jadi teks "dibatalin" (masih nyisain 1 pesan sebagai
+  // jejak), tapi pesannya BENERAN DIHAPUS - dianggep kayak gak pernah ada.
+  // interaction.deferUpdate() dulu (ngakuin interaksinya TANPA nampilin
+  // balesan apapun), baru interaction.message.delete() - tanpa
+  // deferUpdate() Discord nunjukkin "This interaction failed" ke yang
+  // ngeklik walau pesannya beneran kehapus, soalnya interaksinya sendiri
+  // gak pernah diakuin. .catch(() => {}) jaga-jaga kalau pesannya
+  // kebetulan udah kehapus duluan (mis. diklik dua kali kepencet).
+  // clearMenuShown di-require LAZY (bukan di atas file bareng require lain)
+  // SENGAJA - pendingState.js sendiri require("./menu") buat resolveBareMenuChoice
+  // dkk, jadi require("./pendingState") di ATAS file ini bakal bikin circular
+  // require (menu.js keburu balik ngambil menu.js versi BELUM SELESAI
+  // load, module.exports-nya masih kosong). Require di DALAM function
+  // (dieksekusi pas beneran dipanggil, bukan pas file-nya di-load) aman
+  // soalnya di titik itu proses loading dua-duanya udah lama kelar.
+  if (optionId === "delete") {
+    const { clearMenuShown } = require("./pendingState");
+    clearMenuShown(interaction.channelId, interaction.user.id);
+    await interaction.deferUpdate();
+    await interaction.message.delete().catch(() => {});
     return;
   }
 
