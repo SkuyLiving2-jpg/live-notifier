@@ -17,6 +17,7 @@ const { saveDurationHistory } = require("../src/storage/durationHistory");
 const { recordLiveCompleted } = require("../src/storage/liveCount");
 const {
   buildRecapTablePage,
+  buildRecapPageBlock,
   buildRecapDateSelectRow,
   getTodaySessionsForRecap,
   replyMemberStats,
@@ -68,6 +69,7 @@ function freshRepliesForRecapRange() {
     tryHandleRecapPageShortcut: replies.tryHandleRecapPageShortcut,
     handleRecapNavButton: replies.handleRecapNavButton,
     handleRecapSearchModalSubmit: replies.handleRecapSearchModalSubmit,
+    handleRecapJumpModalSubmit: replies.handleRecapJumpModalSubmit,
     handleRecapMenuButton: replies.handleRecapMenuButton,
     handleRecapDateSelect: replies.handleRecapDateSelect,
     buildRecapDateSelectRow: replies.buildRecapDateSelectRow,
@@ -395,7 +397,7 @@ test("replyRecapRange - belum ada live yang kecatet dalam rentang itu", async ()
   assert.match(reply, /belum ada live yang kecatet dalam minggu ini \(kosong\)/);
 });
 
-test("replyRecapRange - agregasi sesi dalam rentang waktu, TANPA gabung activeLives (beda dari rekap hari ini)", async () => {
+test("replyRecapRange - agregasi sesi dalam rentang waktu, sesi yang UDAH SELESAI doang buat total durasi/paling lama", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange } = freshRepliesForRecapRange();
 
   const now = Date.now();
@@ -403,8 +405,26 @@ test("replyRecapRange - agregasi sesi dalam rentang waktu, TANPA gabung activeLi
   freshRecordLiveEnded("Nala", "jkt48_rangetest1", new Date(threeDaysAgo.getTime() - 3600_000), threeDaysAgo, 50);
   freshRecordLiveEnded("Levi", "jkt48_rangetest2", new Date(threeDaysAgo.getTime() - 1800_000), new Date(threeDaysAgo.getTime() + 60_000), 30);
 
-  // Member yang LAGI live sekarang - harus TETEP GAK IKUT ke rekap rentang
-  // (bukan "hari ini", jendela waktu yang udah tertutup).
+  const reply = await freshReplyRecapRange(7, "minggu ini", "c-range", "u-range");
+  assert.match(reply.content, /Rekap minggu ini/);
+  assert.match(reply.content, /Total sesi: 2x dari 2 member \(2 udah selesai, 0 masih live\)/);
+  assert.ok(reply.components, "sesi ada -> harus ada tombol navigasi/tutup/cari member");
+});
+
+// BUG SEBELUMNYA (dilaporin owner, §10's thirty-third item): sesi yang MASIH
+// LIVE SEKARANG dulu SENGAJA gak digabung ke rekap minggu/bulan ("rentang
+// waktu yang udah tertutup") - alasan itu salah, sebuah live yang lagi
+// berlangsung pasti mulai dalam beberapa jam terakhir, yang jelas masuk 7/30
+// hari terakhir juga. Sekarang ikut digabung (tampil di tabel), TAPI angka
+// ringkasan (total durasi/paling lama) tetep dihitung dari yang udah selesai
+// doang - durasi yang masih jalan belum final.
+test("replyRecapRange - sesi yang MASIH LIVE ikut digabung ke tabel, tapi TIDAK ikut ke total durasi/paling lama", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
+  freshRecordLiveEnded("Nala", "jkt48_rangetest1", new Date(threeDaysAgo.getTime() - 3600_000), threeDaysAgo, 50);
+
   activeLives.set("jkt48_rangetest_ongoing", {
     name: "Rangetestongoing",
     username: "jkt48_rangetest_ongoing",
@@ -413,13 +433,32 @@ test("replyRecapRange - agregasi sesi dalam rentang waktu, TANPA gabung activeLi
   });
 
   try {
-    const reply = await freshReplyRecapRange(7, "minggu ini", "c-range", "u-range");
-    assert.match(reply.content, /Rekap minggu ini/);
-    assert.match(reply.content, /Total sesi: 2x dari 2 member/);
-    assert.doesNotMatch(reply.content, /Rangetestongoing/);
-    assert.ok(reply.components, "sesi ada -> harus ada tombol navigasi/tutup/cari member");
+    const reply = await freshReplyRecapRange(7, "minggu ini", "c-range-ongoing", "u-range-ongoing");
+    assert.match(reply.content, /Total sesi: 2x dari 2 member \(1 udah selesai, 1 masih live\)/);
+    assert.match(reply.content, /Rangetestongoing/, "harus muncul di TABEL-nya");
+    assert.match(reply.content, /Paling lama: \*\*Nala\*\*/, "'paling lama' harus tetep dari yang udah selesai doang, bukan si ongoing");
   } finally {
     activeLives.delete("jkt48_rangetest_ongoing");
+  }
+});
+
+test("replyRecapRange - CUMA ada sesi yang masih live, belum ada yang selesai sama sekali -> tetep muncul, tanpa baris 'Paling lama'", async () => {
+  const { replyRecapRange: freshReplyRecapRange } = freshRepliesForRecapRange();
+
+  activeLives.set("jkt48_rangetest_onlyongoing", {
+    name: "Rangetestonlyongoing",
+    username: "jkt48_rangetest_onlyongoing",
+    slug: "s",
+    liveAt: new Date().toISOString(),
+  });
+
+  try {
+    const reply = await freshReplyRecapRange(7, "minggu ini", "c-range-onlyongoing", "u-range-onlyongoing");
+    assert.match(reply.content, /Total sesi: 1x dari 1 member \(0 udah selesai, 1 masih live\)/);
+    assert.match(reply.content, /Rangetestonlyongoing/);
+    assert.doesNotMatch(reply.content, /Paling lama/);
+  } finally {
+    activeLives.delete("jkt48_rangetest_onlyongoing");
   }
 });
 
@@ -489,18 +528,19 @@ test("tryHandleRecapPageShortcut - bisa maju ('y') DAN mundur ('mundur') bolak-b
 
   const page0 = await freshReplyRecapRange(7, "minggu ini", channelId, authorId);
   assert.match(page0.content, /Halaman 1\/2/);
-  // Halaman PERTAMA dari 2 (bukan halaman terakhir juga) - cuma "Maju" +
-  // "Tutup rekap" + "Cari member", TANPA "Mundur" (sesuai spek: gak ada
+  // Halaman PERTAMA dari 2 (bukan halaman terakhir juga) - "Maju" + "Tutup
+  // rekap" + "Cari member" + "Lompat halaman" (rangeDays number, >1 halaman
+  // - §10's thirty-third item), TANPA "Mundur" (sesuai spek: gak ada
   // halaman sebelumnya buat dibalik).
   const page0CustomIds = page0.components[0].components.map((b) => b.data.custom_id);
-  assert.deepEqual(page0CustomIds, ["recap_nav:next:7:0", "recap_nav:close", "recap_nav:search:7"]);
+  assert.deepEqual(page0CustomIds, ["recap_nav:next:7:0", "recap_nav:close", "recap_nav:search:7", "recap_nav:jump:7:0"]);
 
   const page1 = await tryHandleRecapPageShortcut("y", channelId, authorId);
   assert.match(page1.content, /Halaman 2\/2/);
-  // Halaman TERAKHIR (dari 2) - cuma "Mundur" + "Tutup rekap" + "Cari
-  // member", TANPA "Maju" (gak ada halaman berikutnya).
+  // Halaman TERAKHIR (dari 2) - "Mundur" + "Tutup rekap" + "Cari member" +
+  // "Lompat halaman", TANPA "Maju" (gak ada halaman berikutnya).
   const page1CustomIds = page1.components[0].components.map((b) => b.data.custom_id);
-  assert.deepEqual(page1CustomIds, ["recap_nav:prev:7:1", "recap_nav:close", "recap_nav:search:7"]);
+  assert.deepEqual(page1CustomIds, ["recap_nav:prev:7:1", "recap_nav:close", "recap_nav:search:7", "recap_nav:jump:7:1"]);
 
   // Coba maju lagi dari halaman terakhir - harus ditolak dengan sopan, BUKAN
   // dianggap gak ngerti (null) atau nge-crash.
@@ -536,10 +576,11 @@ test("tryHandleRecapPageShortcut - 'maju'/'forward' juga jalan buat ke halaman b
 
   const page1 = await tryHandleRecapPageShortcut("maju", channelId, authorId);
   assert.match(page1.content, /Halaman 2\/3/);
-  // Halaman TENGAH (2 dari 3, bukan pertama/terakhir) - ketiga tombol nav
-  // sekaligus muncul: "Maju", "Mundur", DAN "Tutup rekap" (+ "Cari member").
+  // Halaman TENGAH (2 dari 3, bukan pertama/terakhir) - semua 5 tombol
+  // sekaligus muncul: "Maju", "Mundur", "Tutup rekap", "Cari member", DAN
+  // "Lompat halaman" - persis batas maksimal Discord (5 tombol/baris).
   const page1CustomIds = page1.components[0].components.map((b) => b.data.custom_id);
-  assert.deepEqual(page1CustomIds, ["recap_nav:next:7:1", "recap_nav:prev:7:1", "recap_nav:close", "recap_nav:search:7"]);
+  assert.deepEqual(page1CustomIds, ["recap_nav:next:7:1", "recap_nav:prev:7:1", "recap_nav:close", "recap_nav:search:7", "recap_nav:jump:7:1"]);
 
   const page2 = await tryHandleRecapPageShortcut("forward", channelId, authorId);
   assert.match(page2.content, /Halaman 3\/3/);
@@ -662,6 +703,112 @@ test("handleRecapNavButton - action 'search' munculin modal (showModal), BUKAN b
   assert.equal(interaction.updates.length, 0, "search gak boleh manggil update() - munculin modal doang");
   assert.equal(interaction.modals.length, 1);
   assert.equal(interaction.modals[0].data.custom_id, "recap_search_modal:7");
+});
+
+// §10's thirty-third item - "🔢 Lompat halaman", owner minta buat rekap
+// minggu/bulan yang bisa nyampe banyak halaman.
+test("handleRecapNavButton - action 'jump' munculin modal (showModal), BUKAN balesan biasa (reply/update), customId modal bawa range+halaman sekarang", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:jump:7:1" });
+  await handleRecapNavButton(interaction);
+  assert.equal(interaction.calls.length, 0);
+  assert.equal(interaction.updates.length, 0);
+  assert.equal(interaction.modals.length, 1);
+  assert.equal(interaction.modals[0].data.custom_id, "recap_jump_modal:7:1");
+});
+
+test("buildRecapPageBlock - tombol 'Lompat halaman' CUMA muncul buat rangeDays number (minggu/bulan) DENGAN lebih dari 1 halaman", () => {
+  const manySessions = Array.from({ length: 25 }, (_, i) => ({
+    name: `Jump${i}`,
+    username: `jkt48_jumptest${i}`,
+    startedAtUnix: 1000 + i,
+    endedAtUnix: 1030 + i,
+    durationMs: 30000,
+    peakViewCount: 5,
+  }));
+
+  const weekBlock = buildRecapPageBlock(manySessions, 0, "c-jumpcheck", "u-jumpcheck", 7);
+  const weekCustomIds = weekBlock.components[0].components.map((b) => b.data.custom_id);
+  assert.ok(weekCustomIds.includes("recap_nav:jump:7:0"), "rangeDays number, >1 halaman -> harus ada");
+
+  const singlePageBlock = buildRecapPageBlock([manySessions[0]], 0, "c-jumpcheck2", "u-jumpcheck2", 7);
+  const singlePageCustomIds = singlePageBlock.components[0].components.map((b) => b.data.custom_id);
+  assert.ok(!singlePageCustomIds.some((id) => id.startsWith("recap_nav:jump")), "rangeDays number, cuma 1 halaman -> gak ada gunanya, jangan muncul");
+
+  const todayBlock = buildRecapPageBlock(manySessions, 0, "c-jumpcheck3", "u-jumpcheck3", null);
+  const todayCustomIds = todayBlock.components[0].components.map((b) => b.data.custom_id);
+  assert.ok(
+    !todayCustomIds.some((id) => id.startsWith("recap_nav:jump")),
+    "rekap hari ini di luar scope permintaan owner, gak ikut dapet tombol ini",
+  );
+
+  const dateBlock = buildRecapPageBlock(manySessions, 0, "c-jumpcheck4", "u-jumpcheck4", "2026-09-01");
+  const dateButtonRow = dateBlock.components[dateBlock.components.length - 1];
+  const dateCustomIds = dateButtonRow.components.map((b) => b.data.custom_id);
+  assert.ok(!dateCustomIds.some((id) => id.startsWith("recap_nav:jump")), "rekap tanggal spesifik juga di luar scope, gak ikut dapet tombol ini");
+});
+
+test("handleRecapJumpModalSubmit - input angka -> EDIT pesan yang sama (update) ke halaman itu, bukan pesan baru", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 65; i++) {
+    freshRecordLiveEnded(`Jm${i}`, `jkt48_jumpmodal${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
+  }
+  // 65 sesi / RECAP_TABLE_PAGE_SIZE 20 -> 4 halaman.
+
+  const interaction = fakeInteraction({ customId: "recap_jump_modal:7:0", fieldValue: "3" });
+  await freshHandleRecapJumpModalSubmit(interaction);
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
+  assert.match(interaction.updates[0].content, /Halaman 3\/4/);
+});
+
+test("handleRecapJumpModalSubmit - 'awal'/'akhir' alias buat halaman pertama/terakhir, gak perlu tau nomor halaman terakhirnya berapa", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 65; i++) {
+    freshRecordLiveEnded(`Al${i}`, `jkt48_jumpalias${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
+  }
+
+  const lastInteraction = fakeInteraction({ customId: "recap_jump_modal:7:0", fieldValue: "akhir" });
+  await freshHandleRecapJumpModalSubmit(lastInteraction);
+  assert.match(lastInteraction.updates[0].content, /Halaman 4\/4/);
+
+  const firstInteraction = fakeInteraction({ customId: "recap_jump_modal:7:3", fieldValue: "awal" });
+  await freshHandleRecapJumpModalSubmit(firstInteraction);
+  assert.match(firstInteraction.updates[0].content, /Halaman 1\/4/);
+});
+
+test("handleRecapJumpModalSubmit - angka melebihi total halaman -> otomatis ke-clamp ke halaman terakhir (bukan error)", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(`Ov${i}`, `jkt48_jumpover${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
+  }
+
+  const interaction = fakeInteraction({ customId: "recap_jump_modal:7:0", fieldValue: "999" });
+  await freshHandleRecapJumpModalSubmit(interaction);
+  assert.match(interaction.updates[0].content, /Halaman 2\/2/);
+});
+
+test("handleRecapJumpModalSubmit - input gak keparse sama sekali -> tetep di halaman SEKARANG (dari customId) plus catetan, TETEP update() bukan reply()", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(`Bad${i}`, `jkt48_jumpbad${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
+  }
+
+  const interaction = fakeInteraction({ customId: "recap_jump_modal:7:1", fieldValue: "halaman gaib" });
+  await freshHandleRecapJumpModalSubmit(interaction);
+  assert.equal(interaction.calls.length, 0);
+  assert.match(interaction.updates[0].content, /Halaman 2\/2/, "tetep di halaman sekarang (index 1 dari customId -> halaman ke-2)");
+  assert.match(interaction.updates[0].content, /Gak ngerti "halaman gaib"/);
 });
 
 // Diklik dari tombol "Enggak, hapus aja" yang nempel di balesan pencarian -

@@ -247,15 +247,14 @@ function buildRecapTablePage(sessions, page) {
   return { text, page: clampedPage, totalPages, hasMore: clampedPage < totalPages - 1 };
 }
 
-// Gabungan "gambaran lengkap hari ini" - sesi yang UDAH SELESAI hari ini
-// (dari daily-log.json) + yang MASIH LIVE SEKARANG (dari activeLives,
-// dibentuk jadi baris ala-sesi biar bisa numpang bareng di tabel/hitungan
-// yang sama). Sama pola-nya kayak replyLongestLive()/replyTopViewers()
-// (yang udah lebih dulu gabungin dua sumber ini) - diexport biar bisa dites
-// langsung, sama kayak buildRecapTablePage.
-function getTodaySessionsForRecap() {
-  const completed = getCompletedSessionsToday();
-  const ongoing = [...activeLives.values()].map((entry) => ({
+// Sesi yang MASIH LIVE SEKARANG (dari activeLives), dibentuk jadi baris
+// ala-sesi (endedAtUnix/durationMs null) biar bisa numpang bareng sesi yang
+// UDAH SELESAI di tabel/hitungan yang sama. Dipisah dari getTodaySessionsForRecap
+// biar bisa dipake juga di rekap mingguan/bulanan (lihat getSessionsForRange
+// & replyRecapRange di bawah, §10's thirty-third item) - bukan cuma "hari
+// ini" doang.
+function getOngoingSessionsForRecap() {
+  return [...activeLives.values()].map((entry) => ({
     name: entry.name,
     username: entry.username,
     startedAtUnix: Math.floor(new Date(entry.liveAt).getTime() / 1000),
@@ -263,7 +262,14 @@ function getTodaySessionsForRecap() {
     durationMs: null,
     peakViewCount: entry.peakViewCount ?? entry.viewCount ?? null,
   }));
-  return [...completed, ...ongoing];
+}
+
+// Gabungan "gambaran lengkap hari ini" - sesi yang UDAH SELESAI hari ini
+// (dari daily-log.json) + yang MASIH LIVE SEKARANG. Sama pola-nya kayak
+// replyLongestLive()/replyTopViewers() (yang udah lebih dulu gabungin dua
+// sumber ini) - diexport biar bisa dites langsung, sama kayak buildRecapTablePage.
+function getTodaySessionsForRecap() {
+  return [...getCompletedSessionsToday(), ...getOngoingSessionsForRecap()];
 }
 
 // "channelId:authorId" -> { currentPage, totalPages, at, rangeDays } - nunggu
@@ -307,10 +313,18 @@ const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 // dari dropdown per-tanggal bakal ngasih hasil BEDA dari tombol "Rekap hari
 // ini" (kelewatan sesi yang MASIH LIVE, cuma nunjukkin yang udah selesai) -
 // kelihatan kayak bug baru ("kok yang lagi live sekarang gak muncul").
+//
+// BUG SEBELUMNYA (dilaporin owner, §10's thirty-third item): rentang N-hari
+// (rekap minggu/bulan) dulu CUMA narik getCompletedSessionsSince - sesi yang
+// masih LIVE SEKARANG gak pernah ikut ke-gabung, jadi "cok rekap minggu ini"
+// nunjukkin tabel yang kelewatan siapapun yang lagi live pas ditanya, padahal
+// live itu jelas-jelas bagian dari "minggu ini" juga (dia mulainya paling
+// nggak hari ini, yang termasuk 7/30 hari terakhir). Sekarang ikut digabung
+// sama getOngoingSessionsForRecap(), sama kayak rangeDays null/hari-ini di atas.
 function getSessionsForRange(rangeDays) {
   if (rangeDays == null || rangeDays === getTodayWIB()) return getTodaySessionsForRecap();
   if (typeof rangeDays === "string") return getCompletedSessionsForDate(rangeDays);
-  return getCompletedSessionsSince(rangeDays);
+  return [...getCompletedSessionsSince(rangeDays), ...getOngoingSessionsForRecap()];
 }
 
 // "null" gak bisa lewat customId Discord (harus string) - "today" dipake
@@ -392,6 +406,16 @@ function buildCloseOnlyRow() {
 // dropdown ini nge-EDIT pesan yang sama (lihat handleRecapDateSelect), sama
 // pola in-place-edit-nya kayak tombol Maju/Mundur - biar gak numpuk beberapa
 // tabel tanggal beda-beda di channel.
+//
+// Rekap MINGGUAN/BULANAN (rangeDays berupa number) DENGAN lebih dari 1
+// halaman dapet tombol tambahan "🔢 Lompat halaman" (§10's thirty-third
+// item, owner minta) - rentang segitu bisa nyampe puluhan halaman kalau
+// membernya banyak yang live tiap hari, dan Maju/Mundur satu-satu kelamaan
+// buat lompat jauh (mis. dari halaman 1 ke halaman terakhir). Cuma buat
+// rangeDays number (bukan "hari ini"/tanggal spesifik) sesuai yang diminta -
+// dua jenis rekap itu biasanya jauh lebih pendek (1 hari doang), jarang
+// butuh lompat jauh. Dibatesin ke totalPages > 1 doang (nggak ada gunanya
+// nawarin "lompat halaman" kalau cuma ada 1 halaman buat dilompatin).
 function buildRecapNavComponents(page, totalPages, rangeDays) {
   const range = encodeRecapRange(rangeDays);
   const buttons = [];
@@ -403,6 +427,9 @@ function buildRecapNavComponents(page, totalPages, rangeDays) {
   }
   buttons.push(new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger));
   buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
+  if (typeof rangeDays === "number" && totalPages > 1) {
+    buttons.push(new ButtonBuilder().setCustomId(`recap_nav:jump:${range}:${page}`).setLabel("🔢 Lompat halaman").setStyle(ButtonStyle.Secondary));
+  }
 
   const rows = [];
   if (typeof rangeDays === "string") rows.push(buildRecapDateSelectRow(rangeDays));
@@ -523,6 +550,28 @@ async function handleRecapNavButton(interaction) {
             .setLabel("Nama member")
             .setStyle(TextInputStyle.Short)
             .setPlaceholder("misal: Nala")
+            .setRequired(true),
+        ),
+      );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // "🔢 Lompat halaman" (§10's thirty-third item) - customId-nya bawa
+  // halaman SEKARANG (parts[3]) buat modal-nya, dipake sebagai fallback kalau
+  // input yang diketik ternyata gak keparse (lihat handleRecapJumpModalSubmit)
+  // biar gagal parse gak numpuk pesan baru ATAU nge-reset ke halaman 1.
+  if (action === "jump") {
+    const modal = new ModalBuilder()
+      .setCustomId(`recap_jump_modal:${parts[2]}:${parts[3]}`)
+      .setTitle("Lompat ke halaman")
+      .addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("page_number")
+            .setLabel("Halaman berapa?")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('Angka (misal "5"), atau "awal"/"akhir"')
             .setRequired(true),
         ),
       );
@@ -688,6 +737,60 @@ async function handleRecapSearchModalSubmit(interaction) {
   await interaction.reply(safeReplyOptions(reply));
 }
 
+// "awal"/"pertama" dan "akhir"/"terakhir" (Indonesia) DAN "first"/"last"
+// (jaga-jaga ada yang ngetik Inggris) diterima sebagai alias, biar gak harus
+// ngitung sendiri "halaman terakhir itu halaman berapa" - "akhir" ditangani
+// dengan cukup ngasih angka BESAR (bukan hitung totalPages di sini juga),
+// buildRecapTablePage sendiri udah nge-clamp ke totalPages-1 apapun angka
+// yang dikasih, jadi angka gede itu otomatis kepotong pas ke halaman
+// terakhir yang beneran ada - gak perlu tau totalPages duluan di sini.
+const JUMP_FIRST_WORDS = ["awal", "pertama", "first"];
+const JUMP_LAST_WORDS = ["akhir", "terakhir", "last"];
+
+// Diklik dari tombol "🔢 Lompat halaman" (buildRecapNavComponents) abis
+// submit modal-nya. Diklik dari MODAL (bukan tombol langsung) soalnya
+// Discord gak punya cara nerima input teks bebas dari sebuah tombol -
+// modal cuma cara buat itu, sama pola-nya kayak "🔍 Cari member" di atas.
+// BEDA dari search modal: search SENGAJA pake interaction.reply() (pesan
+// BARU, biar tabel asalnya masih keliatan buat dibandingin) - lompat
+// halaman JUSTRU maksudnya NAVIGASI tabel yang sama ke halaman lain, jadi
+// pake interaction.update() (EDIT pesan yang sama), sama pola-nya kayak
+// tombol Maju/Mundur, BUKAN kayak search.
+//
+// Input yang gak keparse SAMA SEKALI (bukan angka, bukan salah satu alias
+// di atas) TETEP interaction.update() balik ke HALAMAN SEKARANG (dibawa
+// lewat customId-nya, parts[2] - lihat handleRecapNavButton's "jump"
+// branch) plus catetan singkat kenapa gak pindah, bukan reply() pesan error
+// terpisah - biar tetep 1 pesan yang sama yang keurus, konsisten sama
+// prinsip in-place-edit fitur rekap ini secara keseluruhan.
+async function handleRecapJumpModalSubmit(interaction) {
+  const parts = interaction.customId.split(":");
+  const rangeDays = decodeRecapRange(parts[1]);
+  const currentPage = Number(parts[2]);
+  const raw = interaction.fields.getTextInputValue("page_number").trim().toLowerCase();
+
+  const sessions = getSessionsForRange(rangeDays);
+
+  let targetPage;
+  let note = "";
+  if (JUMP_FIRST_WORDS.includes(raw)) {
+    targetPage = 0;
+  } else if (JUMP_LAST_WORDS.includes(raw)) {
+    targetPage = Number.MAX_SAFE_INTEGER; // di-clamp ke halaman terakhir yang beneran ada oleh buildRecapTablePage
+  } else {
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 1) {
+      targetPage = parsed - 1; // input user 1-based, index halaman internal 0-based
+    } else {
+      targetPage = currentPage;
+      note = `\n_(Gak ngerti "${interaction.fields.getTextInputValue("page_number").trim()}" - tetep di halaman sekarang. Ketik angka halaman, "awal", atau "akhir".)_`;
+    }
+  }
+
+  const block = buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays);
+  await interaction.update(safeReplyOptions({ content: `${block.content}${note}`, components: block.components }));
+}
+
 // Versi on-demand dari rekap harian otomatis (yang ngirim sendiri jam 23:00
 // WIB) - ini dipanggil kapan aja user nanya, nunjukkin progress SEJAUH INI
 // (live yang masih berlangsung belum ikut ke-hitung, baru masuk pas selesai).
@@ -738,28 +841,46 @@ async function replyTodayRecapSoFar(channelId, authorId) {
   return { content: [summaryLines.join("\n"), block.content].join("\n") + missedNote, components: block.components };
 }
 
-// Rekap mingguan/bulanan - beda dari replyTodayRecapSoFar dalam 2 hal: (1)
-// ini jendela waktu yang UDAH LEWAT/tertutup, jadi gak perlu digabung sama
-// activeLives (member yang lagi live sekarang bukan bagian dari "7 hari
-// terakhir", itu bagian dari HARI INI, yang bakal numpang di sini juga
-// begitu dia beneran selesai), dan (2) gak perlu cek arsip eksternal
-// (JKT48Live-Record) - itu arsipnya emang cuma nyimpen bulan berjalan,
-// gak didesain buat query rentang lebih lebar.
+// Rekap mingguan/bulanan - beda dari replyTodayRecapSoFar cuma dalam 1 hal
+// sekarang (dulu ada 2, lihat BUG SEBELUMNYA di bawah): gak perlu cek arsip
+// eksternal (JKT48Live-Record) - itu arsipnya emang cuma nyimpen bulan
+// berjalan, gak didesain buat query rentang lebih lebar.
+//
+// BUG SEBELUMNYA (dilaporin owner, §10's thirty-third item): dulu memang
+// SENGAJA gak digabung sama activeLives - alasannya "member yang lagi live
+// sekarang bukan bagian dari '7 hari terakhir', itu bagian dari HARI INI,
+// bakal numpang di sini juga begitu dia beneran selesai". Alasan itu salah:
+// live yang lagi berlangsung SEKARANG sudah pasti mulai dalam beberapa jam
+// terakhir, yang jelas-jelas masuk 7/30 hari terakhir juga - nunggu dia
+// selesai dulu baru muncul di rekap minggu/bulan ini bikin tabelnya
+// keliatan "kelewatan" siapa yang lagi live pas ditanya. Sekarang sesi yang
+// masih live ikut digabung (getSessionsForRange, bukan getCompletedSessionsSince
+// langsung) - tapi cuma buat DITAMPILIN di tabel; angka ringkasan (total
+// durasi, siapa yang paling lama) TETEP dihitung dari yang UDAH SELESAI
+// doang (`completed`, bukan `sessions`) - sesi yang masih jalan durasinya
+// belum final, sama pola-nya kayak replyTodayRecapSoFar yang udah lebih
+// dulu misahin `completed`/`sessions` buat alasan yang sama.
 async function replyRecapRange(daysBack, label, channelId, authorId) {
-  const sessions = getCompletedSessionsSince(daysBack);
+  const completed = getCompletedSessionsSince(daysBack);
+  const ongoing = getOngoingSessionsForRecap();
+  const sessions = [...completed, ...ongoing];
   if (sessions.length === 0) {
     return `Cok, belum ada live yang kecatet dalam ${label}.`;
   }
 
-  const totalDurationMs = sessions.reduce((sum, s) => sum + s.durationMs, 0);
+  const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
   const uniqueMembers = new Set(sessions.map((s) => s.name)).size;
-  const longest = sessions.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), sessions[0]);
+  const longest = completed.length > 0 ? completed.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), completed[0]) : null;
 
   const summaryLines = [
     `📋 **Rekap ${label}**`,
-    `Total sesi: ${sessions.length}x dari ${uniqueMembers} member`,
-    `Total durasi gabungan: ${formatDuration(totalDurationMs)} | Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
+    `Total sesi: ${sessions.length}x dari ${uniqueMembers} member (${completed.length} udah selesai, ${ongoing.length} masih live)`,
   ];
+  if (longest) {
+    summaryLines.push(
+      `Total durasi gabungan: ${formatDuration(totalDurationMs)} | Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
+    );
+  }
 
   // Arsip multi-hari ini masih baru (lihat storage/dailyLog.js's
   // getEarliestSessionDate) - kalau rentang yang diminta (7/30 hari) mundur
@@ -993,6 +1114,7 @@ module.exports = {
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapJumpModalSubmit,
   handleRecapMenuButton,
   handleRecapDateSelect,
   isOwner,

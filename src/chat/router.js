@@ -28,6 +28,7 @@ const {
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapJumpModalSubmit,
   handleRecapMenuButton,
   handleRecapDateSelect,
   handleAddPriority,
@@ -319,6 +320,8 @@ function wireDiscordEvents(client) {
         await handleRecapNavButton(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_search_modal:")) {
         await handleRecapSearchModalSubmit(interaction);
+      } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_jump_modal:")) {
+        await handleRecapJumpModalSubmit(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("recap_menu:")) {
         await handleRecapMenuButton(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId === "recap_date_select") {
