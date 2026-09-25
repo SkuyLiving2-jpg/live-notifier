@@ -24,11 +24,16 @@ function resolveMemberDisplayName(username) {
   return username;
 }
 
+// "Tutup" ditambahin di sini (baris yang sama, masih di bawah limit 5
+// tombol/baris Discord) - dulu gak ada cara nutup sama sekali di channel
+// khusus member, beda dari menu 9-opsi/tabel rekap yang udah dibenerin
+// duluan (lihat handleMemberChannelFallbackButton buat kenapa ini penting).
 function buildMemberChannelFallbackComponents(username) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`member_fallback:today:${username}`).setLabel("Udah live hari ini?").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`member_fallback:count:${username}`).setLabel("Udah berapa kali live?").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`member_fallback:status:${username}`).setLabel("Lagi live sekarang?").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`member_fallback:close:${username}`).setLabel("Tutup").setStyle(ButtonStyle.Danger),
   );
   return [row];
 }
@@ -138,34 +143,63 @@ function replyMemberWatchNow(username) {
   return { content: `🔴 Gas nonton! **${name}** - ${liveUrl}` };
 }
 
-const THANKS_ENJOY_REPLY = { content: "Oke, terima kasih ya, semoga enjoy! 🎉" };
+const THANKS_ENJOY_REPLY = { content: "Oke, terima kasih ya, semoga enjoy! 🎉", components: [] };
 
+// BUG SEBELUMNYA: SEMUA cabang di sini pake interaction.reply() (pesan BARU)
+// - channel khusus member (fitur per-member dedicated channel) numpuk 1
+// pesan baru TIAP KALI ada yang mencet tombol apapun di sini, persis keluhan
+// yang udah dibenerin duluan buat menu 9-opsi (chat/menu.js's
+// handleFallbackMenuButton) dan tabel rekap (chat/replies.js's
+// handleRecapNavButton), cuma file ini kelewatan pas itu dibenerin. Sekarang
+// SEMUA cabang pake interaction.update() (EDIT pesan yang tombolnya nempel),
+// sama polanya kayak dua file itu:
+// - "today"/"count"/"status" - jawaban langsung. Kalau reply-nya UDAH bawa
+//   tombol lanjutan sendiri (count/status yang ada data, nawarin liat
+//   history/nonton), dipake apa adanya - gak ditempelin menu 3-opsi lagi di
+//   atasnya (2 sistem tombol beda konteks numpuk di 1 pesan bikin bingung,
+//   bukan bantu, sama alasannya kayak opsi 8 di menu.js). Kalau kosong (gak
+//   ada data/gak lagi live), menu 3-opsi (+Tutup) ditempelin balik biar bisa
+//   lanjut nanya yang lain dari pesan yang sama.
+// - "history_yes" - nunjukkin tabel, gak ada tombol lanjutan sendiri, jadi
+//   menu 3-opsi ditempelin balik juga.
+// - "watch_yes"/"history_no"/"watch_no" - JAWABAN FINAL atas pertanyaan y/n
+//   (bukan pertanyaan baru), components:[] eksplisit buat ngosongin tombol,
+//   sama pola-nya kayak menu.js's handleWatchConfirmButton's "yes"/"no".
+// - "close" - baru, nutup interaksinya (sama pola/teks-nya kayak
+//   fallback_menu:close & watch_confirm:close di menu.js).
 async function handleMemberChannelFallbackButton(interaction) {
   const [, action, username] = interaction.customId.split(":");
 
-  switch (action) {
-    case "today":
-      await interaction.reply(safeReplyOptions(replyMemberLiveToday(username)));
-      return;
-    case "count":
-      await interaction.reply(safeReplyOptions(replyMemberLiveCount(username)));
-      return;
-    case "status":
-      await interaction.reply(safeReplyOptions(replyMemberLiveStatus(username)));
-      return;
-    case "history_yes":
-      await interaction.reply(safeReplyOptions(replyMemberLiveHistoryTable(username)));
-      return;
-    case "watch_yes":
-      await interaction.reply(safeReplyOptions(replyMemberWatchNow(username)));
-      return;
-    case "history_no":
-    case "watch_no":
-      await interaction.reply(safeReplyOptions(THANKS_ENJOY_REPLY));
-      return;
-    default:
-      return;
+  if (action === "close") {
+    await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
+    return;
   }
+
+  if (action === "history_no" || action === "watch_no") {
+    await interaction.update(safeReplyOptions(THANKS_ENJOY_REPLY));
+    return;
+  }
+
+  if (action === "watch_yes") {
+    await interaction.update(safeReplyOptions({ ...replyMemberWatchNow(username), components: [] }));
+    return;
+  }
+
+  if (action === "history_yes") {
+    await interaction.update(
+      safeReplyOptions({ ...replyMemberLiveHistoryTable(username), components: buildMemberChannelFallbackComponents(username) }),
+    );
+    return;
+  }
+
+  let reply;
+  if (action === "today") reply = replyMemberLiveToday(username);
+  else if (action === "count") reply = replyMemberLiveCount(username);
+  else if (action === "status") reply = replyMemberLiveStatus(username);
+  else return;
+
+  if (!reply.components) reply.components = buildMemberChannelFallbackComponents(username);
+  await interaction.update(safeReplyOptions(reply));
 }
 
 module.exports = {

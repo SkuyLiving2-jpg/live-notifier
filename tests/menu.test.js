@@ -301,6 +301,7 @@ test("handleFallbackMemberSelect - opsi 4: member yang dipilih dari dropdown lag
   const goneInteraction = fakeInteraction({ customId: "fallback_select:4", values: ["jkt48_selecttest"] });
   await handleFallbackMemberSelect(goneInteraction);
   assert.match(goneInteraction.updates[0].content, /nggak nemu member/);
+  assert.equal(goneInteraction.updates[0].components.length, 2, "menu 9-opsi ditempelin balik, bukan dead-end tanpa tombol");
 });
 
 test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown (bukan fuzzy search), EDIT pesan (update)", async () => {
@@ -313,4 +314,5 @@ test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown
   await handleFallbackMemberSelect(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.match(interaction.updates[0].content, /Top Gifter Selectgiftertest/);
+  assert.equal(interaction.updates[0].components.length, 2, "menu 9-opsi ditempelin balik, bukan dead-end tanpa tombol");
 });

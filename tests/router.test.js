@@ -246,7 +246,7 @@ test("pesan yang gak match pola manapun di channel KHUSUS member (ke-mapping cha
   });
   const reply = await buildChatReply("cok apaan sih ini asdkjaskjd", { channelId: "c-dedicated-router-test", authorId: "u-dedicated" });
   assert.match(reply.content, /\*\*jkt48_dedicatedroutertest\*\*/);
-  assert.equal(reply.components[0].components.length, 3, "harus 3 tombol opsi, bukan 9 opsi menu generik");
+  assert.equal(reply.components[0].components.length, 4, "harus 3 tombol opsi + Tutup, bukan 9 opsi menu generik");
 });
 
 test("pesan yang gak match pola manapun di channel BIASA (gak ke-mapping) -> TETAP fallback menu generik seperti biasa", async () => {

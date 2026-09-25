@@ -17,19 +17,26 @@ const {
 
 // Fake discord.js interaction - sama pola kayak tests/menu.test.js's
 // fakeInteraction, handleMemberChannelFallbackButton cuma pernah nyentuh
-// .customId/.reply(), jadi gak butuh library mocking discord.js beneran.
+// .customId/.update(), jadi gak butuh library mocking discord.js beneran.
 function fakeInteraction(customId) {
   const calls = [];
-  return { customId, reply: async (payload) => calls.push(payload), calls };
+  const updates = [];
+  return {
+    customId,
+    reply: async (payload) => calls.push(payload),
+    update: async (payload) => updates.push(payload),
+    calls,
+    updates,
+  };
 }
 
-test("replyMemberChannelFallback - nunjukkin nama member + 3 tombol opsi", () => {
+test("replyMemberChannelFallback - nunjukkin nama member + 4 tombol opsi (3 pertanyaan + Tutup)", () => {
   activeLives.set("jkt48_mcrfallback", { name: "Mcrfallback", username: "jkt48_mcrfallback", slug: "s", liveAt: new Date().toISOString() });
   try {
     const reply = replyMemberChannelFallback("jkt48_mcrfallback");
     assert.match(reply.content, /\*\*Mcrfallback\*\*/);
     assert.equal(reply.components.length, 1);
-    assert.equal(reply.components[0].components.length, 3);
+    assert.equal(reply.components[0].components.length, 4);
   } finally {
     activeLives.delete("jkt48_mcrfallback");
   }
@@ -126,50 +133,91 @@ test("replyMemberWatchNow - keburu selesai live pas user mikir -> dikasih tau, b
   assert.match(reply.content, /kayaknya baru aja selesai live/);
 });
 
-test("handleMemberChannelFallbackButton - dispatch table lengkap buat tiap action", async () => {
+// BUG SEBELUMNYA: semua cabang di sini dulu pake interaction.reply() (pesan
+// BARU per klik) - channel khusus member numpuk pesan tiap kali ada tombol
+// dipencet, persis keluhan yang udah dibenerin duluan buat menu 9-opsi/tabel
+// rekap. Sekarang SEMUA harus lewat interaction.update() (EDIT pesan yang
+// sama), gak pernah manggil .reply() sama sekali - dites eksplisit lewat
+// assert.equal(interaction.calls.length, 0) di tiap cabang.
+test("handleMemberChannelFallbackButton - dispatch table lengkap buat tiap action, SEMUA lewat update() bukan reply()", async () => {
   activeLives.set("jkt48_mcrbtn", { name: "Mcrbtn", username: "jkt48_mcrbtn", slug: "s", liveAt: new Date().toISOString() });
   recordLiveCompleted("jkt48_mcrbtn", "Mcrbtn");
   try {
     const today = fakeInteraction("member_fallback:today:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(today);
-    assert.match(today.calls[0].content, /Mcrbtn/);
+    assert.equal(today.calls.length, 0, "gak boleh reply() pesan baru");
+    assert.match(today.updates[0].content, /Mcrbtn/);
+    assert.equal(today.updates[0].components.length, 1, "jawaban polos -> menu 3-opsi+Tutup ditempelin balik");
 
     const count = fakeInteraction("member_fallback:count:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(count);
-    assert.match(count.calls[0].content, /udah live \*\*1x\*\*/);
+    assert.equal(count.calls.length, 0);
+    assert.match(count.updates[0].content, /udah live \*\*1x\*\*/);
+    assert.equal(count.updates[0].components[0].components.length, 2, "punya data -> tombol y/n history sendiri, BUKAN menu 3-opsi");
 
     const status = fakeInteraction("member_fallback:status:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(status);
-    assert.match(status.calls[0].content, /lagi live nih/);
+    assert.equal(status.calls.length, 0);
+    assert.match(status.updates[0].content, /lagi live nih/);
+    assert.equal(status.updates[0].components[0].components.length, 2, "lagi live -> tombol y/n nonton sendiri, BUKAN menu 3-opsi");
 
     const historyYes = fakeInteraction("member_fallback:history_yes:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(historyYes);
-    assert.match(historyYes.calls[0].content, /udah nggak kesimpen lagi|History live/);
+    assert.equal(historyYes.calls.length, 0);
+    assert.match(historyYes.updates[0].content, /udah nggak kesimpen lagi|History live/);
+    assert.equal(historyYes.updates[0].components.length, 1, "abis nunjukkin tabel -> menu 3-opsi+Tutup ditempelin balik");
 
     const watchYes = fakeInteraction("member_fallback:watch_yes:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(watchYes);
-    assert.match(watchYes.calls[0].content, /Gas nonton!/);
+    assert.equal(watchYes.calls.length, 0);
+    assert.match(watchYes.updates[0].content, /Gas nonton!/);
+    assert.deepEqual(watchYes.updates[0].components, [], "jawaban final y/n -> tombol dikosongin, bukan menu lagi");
 
     const historyNo = fakeInteraction("member_fallback:history_no:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(historyNo);
-    assert.match(historyNo.calls[0].content, /terima kasih ya, semoga enjoy/);
+    assert.equal(historyNo.calls.length, 0);
+    assert.match(historyNo.updates[0].content, /terima kasih ya, semoga enjoy/);
+    assert.deepEqual(historyNo.updates[0].components, []);
 
     const watchNo = fakeInteraction("member_fallback:watch_no:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(watchNo);
-    assert.match(watchNo.calls[0].content, /terima kasih ya, semoga enjoy/);
+    assert.equal(watchNo.calls.length, 0);
+    assert.match(watchNo.updates[0].content, /terima kasih ya, semoga enjoy/);
+    assert.deepEqual(watchNo.updates[0].components, []);
+
+    const close = fakeInteraction("member_fallback:close:jkt48_mcrbtn");
+    await handleMemberChannelFallbackButton(close);
+    assert.equal(close.calls.length, 0);
+    assert.match(close.updates[0].content, /dibatalin/);
+    assert.deepEqual(close.updates[0].components, []);
   } finally {
     activeLives.delete("jkt48_mcrbtn");
   }
 });
 
-test("handleMemberChannelFallbackButton - semua reply lewat safeReplyOptions (allowedMentions nge-matiin mention implisit)", async () => {
-  const interaction = fakeInteraction("member_fallback:today:jkt48_mcrmention");
-  await handleMemberChannelFallbackButton(interaction);
-  assert.deepEqual(interaction.calls[0].allowedMentions, { parse: [] });
+test("handleMemberChannelFallbackButton - jawaban kosong (gak ada data/gak lagi live) -> menu 3-opsi ditempelin balik, bukan dead-end", async () => {
+  const count = fakeInteraction("member_fallback:count:jkt48_mcrbtn_empty");
+  await handleMemberChannelFallbackButton(count);
+  assert.match(count.updates[0].content, /belum ada catatan live buat/);
+  assert.equal(count.updates[0].components.length, 1);
+  assert.equal(count.updates[0].components[0].components.length, 4);
+
+  const status = fakeInteraction("member_fallback:status:jkt48_mcrbtn_empty");
+  await handleMemberChannelFallbackButton(status);
+  assert.match(status.updates[0].content, /lagi nggak live sekarang/);
+  assert.equal(status.updates[0].components.length, 1);
+  assert.equal(status.updates[0].components[0].components.length, 4);
 });
 
-test("handleMemberChannelFallbackButton - action gak dikenal -> gak manggil reply sama sekali", async () => {
+test("handleMemberChannelFallbackButton - semua update lewat safeReplyOptions (allowedMentions nge-matiin mention implisit)", async () => {
+  const interaction = fakeInteraction("member_fallback:today:jkt48_mcrmention");
+  await handleMemberChannelFallbackButton(interaction);
+  assert.deepEqual(interaction.updates[0].allowedMentions, { parse: [] });
+});
+
+test("handleMemberChannelFallbackButton - action gak dikenal -> gak manggil reply/update sama sekali", async () => {
   const interaction = fakeInteraction("member_fallback:asdf:jkt48_mcrunknownaction");
   await handleMemberChannelFallbackButton(interaction);
   assert.equal(interaction.calls.length, 0);
+  assert.equal(interaction.updates.length, 0);
 });

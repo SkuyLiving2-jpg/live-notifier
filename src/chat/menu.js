@@ -360,6 +360,19 @@ async function handleFallbackMenuButton(interaction) {
 // Sama kayak handleFallbackMenuButton di atas, pake interaction.update() buat
 // nerusin ngedit PESAN MENU yang SAMA (yang tadinya udah diedit jadi dropdown),
 // bukan interaction.reply() yang bakal numpuk pesan baru lagi.
+//
+// BUG SEBELUMNYA: cabang "member udah keburu selesai live" (opsi 4) dan
+// SELURUH cabang opsi 9 balikin STRING polos apa adanya (interaction.update
+// isinya cuma content, components: undefined) - hasilnya pesan mentok TANPA
+// tombol apapun, beda dari jalur lain di menu ini yang selalu nempelin balik
+// buildFallbackMenuComponents() abis ngasih jawaban. User kejebak harus
+// ngetik ulang "cok bantuan" dari nol buat lanjut nanya yang lain. Sekarang
+// dua-duanya juga nempelin balik menu 9-opsi, sama kayak cabang string biasa
+// di handleFallbackMenuButton. Cabang "member MASIH live" (opsi 4) TETEP
+// apa adanya (startWatchConfirmForEntry udah bawa tombol Ya/Enggak/Tutup
+// sendiri) - gak ditempelin menu lagi, sama alasannya kayak opsi 8 di
+// handleFallbackMenuButton (dua sistem tombol beda konteks numpuk di 1
+// pesan cuma bikin bingung).
 async function handleFallbackMemberSelect(interaction) {
   const optionId = interaction.customId.split(":")[1];
   const username = interaction.values[0];
@@ -370,7 +383,9 @@ async function handleFallbackMemberSelect(interaction) {
     // nyari ulang lewat fuzzy name-match dan berpotensi (walau jarang)
     // nyangkut ke member lain yang kebetulan nama depannya mirip.
     const entry = activeLives.get(username);
-    const reply = entry ? startWatchConfirmForEntry(entry, interaction.channelId, interaction.user.id) : replyMemberNotFound(username);
+    const reply = entry
+      ? startWatchConfirmForEntry(entry, interaction.channelId, interaction.user.id)
+      : { content: replyMemberNotFound(username), components: buildFallbackMenuComponents() };
     await interaction.update(safeReplyOptions(reply));
     return;
   }
@@ -378,7 +393,7 @@ async function handleFallbackMemberSelect(interaction) {
   // username di sini dijamin ada di gifter-snapshot.json - langsung dari
   // pilihan dropdown yang dibangun getSortedGifterSnapshotMembers(), bukan
   // dari activeLives kayak sebelumnya.
-  await interaction.update(safeReplyOptions(replyGifterSnapshotByUsername(username)));
+  await interaction.update(safeReplyOptions({ content: replyGifterSnapshotByUsername(username), components: buildFallbackMenuComponents() }));
 }
 
 module.exports = {
