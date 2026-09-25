@@ -21,12 +21,18 @@ const {
 function fakeInteraction(customId) {
   const calls = [];
   const updates = [];
+  const deferUpdateCalls = [];
+  const deletedMessageIds = [];
   return {
     customId,
+    message: { id: `fake-msg-${customId}`, delete: async () => deletedMessageIds.push(`fake-msg-${customId}`) },
     reply: async (payload) => calls.push(payload),
     update: async (payload) => updates.push(payload),
+    deferUpdate: async () => deferUpdateCalls.push(true),
     calls,
     updates,
+    deferUpdateCalls,
+    deletedMessageIds,
   };
 }
 
@@ -185,11 +191,15 @@ test("handleMemberChannelFallbackButton - dispatch table lengkap buat tiap actio
     assert.match(watchNo.updates[0].content, /terima kasih ya, semoga enjoy/);
     assert.deepEqual(watchNo.updates[0].components, []);
 
+    // §10's thirty-fifth item: dulu diedit jadi teks "Oke, dibatalin." +
+    // components:[], sekarang BENERAN ngehapus pesannya - konsisten sama
+    // semua tombol Tutup lain di bot ini.
     const close = fakeInteraction("member_fallback:close:jkt48_mcrbtn");
     await handleMemberChannelFallbackButton(close);
     assert.equal(close.calls.length, 0);
-    assert.match(close.updates[0].content, /dibatalin/);
-    assert.deepEqual(close.updates[0].components, []);
+    assert.equal(close.updates.length, 0, "gak boleh update() jadi teks apapun");
+    assert.equal(close.deferUpdateCalls.length, 1);
+    assert.deepEqual(close.deletedMessageIds, [close.message.id]);
   } finally {
     activeLives.delete("jkt48_mcrbtn");
   }

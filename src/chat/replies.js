@@ -7,6 +7,7 @@ const {
   TextInputStyle,
   StringSelectMenuBuilder,
 } = require("discord.js");
+const { deleteInteractionMessage } = require("./interactionHelpers");
 const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
 const {
   getCompletedSessionsToday,
@@ -509,7 +510,11 @@ async function handleRecapNavButton(interaction) {
     // "mundur" nyasar berikutnya (misal orangnya lupa) gak boleh diem-diem
     // nerusin ke halaman rekap yang udah "ditutup".
     pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
-    await interaction.update(safeReplyOptions({ content: "Terima kasih, enjoy ya, cok! 🎉", components: [] }));
+    // §10's thirty-fifth item - dulu diedit jadi teks "Terima kasih..." +
+    // components:[], sekarang BENERAN ngehapus pesannya (deleteInteractionMessage),
+    // sama logika "tutup" yang sekarang konsisten di seluruh bot (menu 9-opsi,
+    // dropdown 4/9, watch-confirm, channel khusus member).
+    await deleteInteractionMessage(interaction);
     return;
   }
 

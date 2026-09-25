@@ -2,6 +2,7 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } 
 const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
 const { getSortedGifterSnapshotMembers } = require("../storage/gifterSnapshot");
 const { getGreeting, describeElapsed, YES_PATTERN, NO_PATTERN, safeReplyOptions } = require("../utils");
+const { deleteInteractionMessage } = require("./interactionHelpers");
 const {
   replyListLive,
   replyBotStatus,
@@ -27,13 +28,13 @@ const {
 // (6-9) masih nyisa 1 slot, jadi tombol "Tutup" (di bawah) nempel di situ,
 // tetep 2 baris, gak perlu baris ketiga.
 //
-// "Tutup" di sini ("fallback_menu:delete") BEDA dari "Tutup" yang udah ada
-// di buildFallbackPickActionRow ("fallback_menu:close", nempel di dropdown
-// opsi 4/9) - owner minta ini buat kasus salah pencet/salah ketik pas menu
-// 9-opsi INI yang lagi keliatan (bukan pas di tengah milih member/gifter),
-// dan maksudnya beda: bukan diedit jadi teks "dibatalin" (itu masih
-// nyisain jejak pesan), tapi PESANNYA BENERAN DIHAPUS - dianggep kayak
-// gak pernah ada. Lihat handleFallbackMenuButton's "delete" branch.
+// "Tutup" di sini ("fallback_menu:delete") beda customId dari "Tutup" yang
+// udah ada di buildFallbackPickActionRow ("fallback_menu:close", nempel di
+// dropdown opsi 4/9) - dua tempat beda pas nempelnya (langsung di menu
+// 9-opsi vs di dropdown 4/9), tapi PERILAKUNYA sekarang IDENTIK (§10's
+// thirty-fourth/thirty-fifth item): pesannya BENERAN DIHAPUS, bukan diedit
+// jadi teks dismiss - dianggep kayak gak pernah ada. Lihat
+// handleFallbackMenuButton's "delete"/"close" branch (digabung jadi satu).
 function buildFallbackMenuComponents() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("fallback_menu:1").setLabel("1. Siapa yang live").setStyle(ButtonStyle.Primary),
@@ -236,8 +237,12 @@ async function handleWatchConfirmButton(interaction) {
   const pending = pendingWatchConfirm.get(key);
   pendingWatchConfirm.delete(key); // abis dijawab lewat tombol, jawaban teks "y"/"n" yang nyasar berikutnya gak boleh nyangkut ke ini lagi
 
+  // §10's thirty-fifth item - dulu diedit jadi teks "Oke, dibatalin." +
+  // components:[], sekarang BENERAN ngehapus pesannya (deleteInteractionMessage,
+  // sama logika "tutup" yang dipake konsisten di seluruh bot sekarang), biar
+  // gak nyisain jejak pesan buat kasus salah pencet member dari dropdown.
   if (action === "close") {
-    await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
+    await deleteInteractionMessage(interaction);
     return;
   }
 
@@ -331,42 +336,34 @@ async function handleFallbackMenuButton(interaction) {
     return;
   }
 
-  // Tombol "Tutup" yang nempel LANGSUNG di menu 9-opsi (buildFallbackMenuComponents,
-  // §10's thirty-fourth item, beda dari "close" di bawah yang nempel di
-  // dropdown opsi 4/9) - owner minta buat kasus salah pencet/salah ketik
-  // pas menu-nya baru aja muncul, dan minta perilakunya beda dari "close":
-  // bukan DIEDIT jadi teks "dibatalin" (masih nyisain 1 pesan sebagai
-  // jejak), tapi pesannya BENERAN DIHAPUS - dianggep kayak gak pernah ada.
-  // interaction.deferUpdate() dulu (ngakuin interaksinya TANPA nampilin
-  // balesan apapun), baru interaction.message.delete() - tanpa
-  // deferUpdate() Discord nunjukkin "This interaction failed" ke yang
-  // ngeklik walau pesannya beneran kehapus, soalnya interaksinya sendiri
-  // gak pernah diakuin. .catch(() => {}) jaga-jaga kalau pesannya
-  // kebetulan udah kehapus duluan (mis. diklik dua kali kepencet).
-  // clearMenuShown di-require LAZY (bukan di atas file bareng require lain)
-  // SENGAJA - pendingState.js sendiri require("./menu") buat resolveBareMenuChoice
-  // dkk, jadi require("./pendingState") di ATAS file ini bakal bikin circular
-  // require (menu.js keburu balik ngambil menu.js versi BELUM SELESAI
-  // load, module.exports-nya masih kosong). Require di DALAM function
-  // (dieksekusi pas beneran dipanggil, bukan pas file-nya di-load) aman
-  // soalnya di titik itu proses loading dua-duanya udah lama kelar.
-  if (optionId === "delete") {
+  // Tombol "Tutup" - DUA tempat beda nempelinnya (mismatch customId sengaja
+  // dipertahanin buat jejak/logging, tapi PERILAKUNYA sekarang IDENTIK, lihat
+  // §10's thirty-fifth item):
+  // - "fallback_menu:delete" - nempel LANGSUNG di menu 9-opsi (buildFallbackMenuComponents,
+  //   §10's thirty-fourth item), buat kasus salah pencet/salah ketik pas
+  //   menu-nya baru aja muncul.
+  // - "fallback_menu:close" - nempel di BAWAH dropdown milih member/gifter
+  //   (opsi 4/9, buildFallbackPickActionRow), buat kasus salah pencet opsi
+  //   4/9 dan gak jadi mau milih siapa-siapa (beda dari watch-confirm's
+  //   tombol "Tutup" sendiri, yang nutup pertanyaan "mau nonton?" SETELAH
+  //   member kepilih - dua-duanya sekarang sama-sama ngehapus pesan juga,
+  //   lihat handleWatchConfirmButton, cuma beda di function/state yang
+  //   dibersihin).
+  // Dua-duanya sama-sama ngakhirin SELURUH flow menu ini (bukan cuma satu
+  // langkah), jadi dua-duanya juga clearMenuShown - biar angka mentah yang
+  // ke-ketik abis pesannya kehapus gak ketangkep sebagai "lanjutan" menu
+  // yang udah gak ada lagi. clearMenuShown di-require LAZY (bukan di atas
+  // file bareng require lain) SENGAJA - pendingState.js sendiri
+  // require("./menu") buat resolveBareMenuChoice dkk, jadi
+  // require("./pendingState") di ATAS file ini bakal bikin circular require
+  // (menu.js keburu balik ngambil menu.js versi BELUM SELESAI load,
+  // module.exports-nya masih kosong). Require di DALAM function (dieksekusi
+  // pas beneran dipanggil, bukan pas file-nya di-load) aman soalnya di
+  // titik itu proses loading dua-duanya udah lama kelar.
+  if (optionId === "delete" || optionId === "close") {
     const { clearMenuShown } = require("./pendingState");
     clearMenuShown(interaction.channelId, interaction.user.id);
-    await interaction.deferUpdate();
-    await interaction.message.delete().catch(() => {});
-    return;
-  }
-
-  // Tombol "Tutup" yang nempel di BAWAH dropdown milih member/gifter di atas
-  // (opsi 4/9) - owner ngeluh gak ada cara buat batalin kalau salah pencet
-  // opsi 4/9 dan gak jadi mau milih siapa-siapa (beda dari watch-confirm's
-  // tombol "Tutup", yang nutup pertanyaan "mau nonton?" SETELAH member
-  // kepilih - ini nutup langkah SEBELUM sempet milih sama sekali). customId-nya
-  // gak bawa optionId (4 vs 9) soalnya aksinya sama persis buat dua-duanya -
-  // edit pesan ini sendiri jadi teks "dibatalin", ilangin dropdown.
-  if (optionId === "close") {
-    await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
+    await deleteInteractionMessage(interaction);
     return;
   }
 

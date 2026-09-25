@@ -92,23 +92,35 @@ function fakeInteraction({
   const calls = [];
   const modals = [];
   const updates = [];
+  const deferUpdateCalls = [];
+  // Kalau `message` dikasih (buat test yang butuh, mis. "delrecap"/"keeprecap"
+  // yang baca .id/.content-nya, ATAU "close" yang sekarang manggil
+  // .delete()-nya lewat deleteInteractionMessage - lihat replies.js), auto
+  // ditempelin .delete() yang nyatet ke deletedMessageIds yang SAMA kayak
+  // channel.messages.delete di bawah, biar satu assertion array-nya nyakup
+  // dua-duanya. Kalau `message` GAK dikasih (default undefined), TETEP
+  // undefined - beberapa test (mis. search TANPA interaction.message)
+  // sengaja butuh ini buat nguji jalur defensifnya.
+  const finalMessage = message && typeof message === "object" ? { ...message, delete: async () => deletedMessageIds.push(message.id) } : message;
   return {
     customId,
     channelId,
     user: { id: authorId },
     fields: { getTextInputValue: () => fieldValue },
     values,
-    message,
+    message: finalMessage,
     // channel.messages.delete(id) - satu-satunya method discord.js yang
     // dipake handleRecapNavButton's "delrecap" (lihat replies.js), gak
     // perlu mock library beneran.
     channel: { messages: { delete: async (id) => deletedMessageIds.push(id) } },
     reply: async (payload) => calls.push(payload),
     update: async (payload) => updates.push(payload),
+    deferUpdate: async () => deferUpdateCalls.push(true),
     showModal: async (modal) => modals.push(modal),
     calls,
     modals,
     updates,
+    deferUpdateCalls,
     deletedMessageIds,
   };
 }
@@ -649,12 +661,16 @@ test("handleRecapNavButton - action 'next'/'prev' EDIT pesan yang ada (update), 
   assert.match(prev.updates[0].content, /Halaman 1\/2/);
 });
 
-test("handleRecapNavButton - action 'close' EDIT pesan yang ada jadi ucapan terima kasih TANPA tombol, BUKAN kirim pesan baru", async () => {
-  const interaction = fakeInteraction({ customId: "recap_nav:close" });
+// §10's thirty-fifth item: dulu diedit jadi teks "Terima kasih..." +
+// components:[], sekarang BENERAN ngehapus pesannya - sama logika "tutup"
+// yang konsisten di semua tombol Tutup lain di bot ini.
+test("handleRecapNavButton - action 'close' BENERAN ngehapus pesannya (message.delete), BUKAN diedit jadi teks ucapan terima kasih", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:close", message: { id: "recap-close-msg-id" } });
   await handleRecapNavButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh kirim pesan baru (reply)");
-  assert.match(interaction.updates[0].content, /Terima kasih, enjoy ya, cok/);
-  assert.deepEqual(interaction.updates[0].components, [], "tombolnya harus ikut ilang biar bener-bener 'ditutup'");
+  assert.equal(interaction.updates.length, 0, "gak boleh update() jadi teks apapun - pesannya beneran hilang");
+  assert.equal(interaction.deferUpdateCalls.length, 1, "harus deferUpdate() dulu biar Discord gak nunjukkin 'interaction failed'");
+  assert.deepEqual(interaction.deletedMessageIds, ["recap-close-msg-id"]);
 });
 
 // Abis "tutup rekap" diklik, jawaban "y"/"mundur" yang nyasar berikutnya
@@ -688,9 +704,9 @@ test("handleRecapNavButton - action 'close' nge-clear pendingRecapPage, jadi 'y'
   const authorId = "u-closebtn";
   await freshReplyRecapRange(7, "minggu ini", channelId, authorId); // nge-set pendingRecapPage
 
-  const closeInteraction = fakeInteraction({ customId: "recap_nav:close", channelId, authorId });
+  const closeInteraction = fakeInteraction({ customId: "recap_nav:close", channelId, authorId, message: { id: "recap-close-pending-msg-id" } });
   await freshHandleRecapNavButton(closeInteraction);
-  assert.match(closeInteraction.updates[0].content, /Terima kasih, enjoy ya, cok/);
+  assert.deepEqual(closeInteraction.deletedMessageIds, ["recap-close-pending-msg-id"]);
 
   const afterClose = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
   assert.equal(afterClose, null, "pendingRecapPage harus udah kehapus abis 'tutup rekap' diklik");

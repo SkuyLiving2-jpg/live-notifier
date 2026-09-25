@@ -3,6 +3,7 @@ const { activeLives } = require("../storage/activeLives");
 const { getCompletedSessionsToday, getCompletedSessionsSince } = require("../storage/dailyLog");
 const { loadLiveCount } = require("../storage/liveCount");
 const { describeElapsed, safeReplyOptions } = require("../utils");
+const { deleteInteractionMessage } = require("./interactionHelpers");
 const { buildRecapTablePage } = require("./replies");
 
 // Fallback reply KHUSUS channel per-member (fitur "Q3") - beda dari
@@ -165,13 +166,16 @@ const THANKS_ENJOY_REPLY = { content: "Oke, terima kasih ya, semoga enjoy! 🎉"
 // - "watch_yes"/"history_no"/"watch_no" - JAWABAN FINAL atas pertanyaan y/n
 //   (bukan pertanyaan baru), components:[] eksplisit buat ngosongin tombol,
 //   sama pola-nya kayak menu.js's handleWatchConfirmButton's "yes"/"no".
-// - "close" - baru, nutup interaksinya (sama pola/teks-nya kayak
-//   fallback_menu:close & watch_confirm:close di menu.js).
+// - "close" - nutup interaksinya. §10's thirty-fifth item: dulu diedit jadi
+//   teks "Oke, dibatalin." + components:[], sekarang BENERAN ngehapus
+//   pesannya (deleteInteractionMessage) - logika "tutup" yang sekarang
+//   konsisten di semua tombol Tutup di bot ini (menu 9-opsi, dropdown 4/9,
+//   watch-confirm, DAN tabel rekap).
 async function handleMemberChannelFallbackButton(interaction) {
   const [, action, username] = interaction.customId.split(":");
 
   if (action === "close") {
-    await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
+    await deleteInteractionMessage(interaction);
     return;
   }
 

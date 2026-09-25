@@ -165,12 +165,17 @@ test("handleWatchConfirmButton - action 'no' EDIT pesan yang ada jadi 'oke sip',
   }
 });
 
-test("handleWatchConfirmButton - action 'close' EDIT pesan yang ada jadi 'dibatalin', TANPA re-cek status live sama sekali", async () => {
+// §10's thirty-fifth item: dulu diedit jadi teks "Oke, dibatalin." +
+// components:[], sekarang BENERAN ngehapus pesannya - konsisten sama tombol
+// Tutup lain di bot ini (gak perlu re-cek status live sama sekali buat ini,
+// pesannya cuma dihapus).
+test("handleWatchConfirmButton - action 'close' BENERAN ngehapus pesannya (message.delete), TANPA re-cek status live sama sekali", async () => {
   const interaction = fakeInteraction({ customId: "watch_confirm:close:jkt48_wcbtn3" });
   await handleWatchConfirmButton(interaction);
   assert.equal(interaction.calls.length, 0);
-  assert.match(interaction.updates[0].content, /Oke, dibatalin/);
-  assert.deepEqual(interaction.updates[0].components, []);
+  assert.equal(interaction.updates.length, 0, "gak boleh update() jadi teks apapun");
+  assert.equal(interaction.deferUpdateCalls.length, 1);
+  assert.deepEqual(interaction.deletedMessageIds, [interaction.message.id]);
 });
 
 // Member-nya udah kelar live PAS diklik (button self-contained, gak kena
@@ -263,12 +268,16 @@ test("handleFallbackMenuButton - opsi 9 (top gifter) EDIT pesan menu (update), B
   assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back");
 });
 
-test("handleFallbackMenuButton - tombol 'Tutup' di bawah dropdown 4/9 EDIT pesan jadi 'dibatalin', ngilangin dropdown-nya", async () => {
+// §10's thirty-fifth item: dulu diedit jadi teks "Oke, dibatalin." +
+// components:[], sekarang BENERAN ngehapus pesannya (sama kayak
+// fallback_menu:delete di menu 9-opsi - dua-duanya sekarang identik).
+test("handleFallbackMenuButton - tombol 'Tutup' di bawah dropdown 4/9 BENERAN ngehapus pesannya, gak diedit jadi teks 'dibatalin'", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:close" });
   await handleFallbackMenuButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
-  assert.equal(interaction.updates[0].content, "Oke, dibatalin.");
-  assert.deepEqual(interaction.updates[0].components, []);
+  assert.equal(interaction.updates.length, 0, "gak boleh update() jadi teks apapun");
+  assert.equal(interaction.deferUpdateCalls.length, 1);
+  assert.deepEqual(interaction.deletedMessageIds, [interaction.message.id]);
 });
 
 test("handleFallbackMenuButton - tombol 'Kembali' di bawah dropdown 4/9 EDIT pesan balik jadi menu 9-opsi awal, BUKAN pesan baru", async () => {
@@ -320,6 +329,24 @@ test("handleFallbackMenuButton - tombol 'Tutup' di menu 9-opsi juga nge-clear pe
     await tryHandleMenuShortcut("2", channelId, authorId),
     null,
     "abis ditutup, angka mentah gak boleh lagi ketangkep sebagai lanjutan menu",
+  );
+});
+
+// §10's thirty-fifth item - "fallback_menu:close" (dropdown 4/9) sekarang
+// digabung logikanya sama "fallback_menu:delete" di atas, jadi harus
+// nge-clear pendingMenuByAuthor juga, bukan cuma "delete".
+test("handleFallbackMenuButton - tombol 'Tutup' di dropdown 4/9 JUGA nge-clear pendingMenuByAuthor (sama kayak 'delete', sekarang satu logika)", async () => {
+  const channelId = "c-closemenu-pending";
+  const authorId = "u-closemenu-pending";
+  markMenuShown(channelId, authorId);
+
+  const interaction = fakeInteraction({ customId: "fallback_menu:close", channelId, authorId });
+  await handleFallbackMenuButton(interaction);
+
+  assert.equal(
+    await tryHandleMenuShortcut("2", channelId, authorId),
+    null,
+    "abis 'Tutup' dropdown 4/9 diklik, angka mentah gak boleh ketangkep sebagai lanjutan menu",
   );
 });
 
