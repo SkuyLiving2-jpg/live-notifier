@@ -13,6 +13,8 @@ const {
   getCompletedSessionsToday,
   getCompletedSessionsForDate,
   getCompletedSessionsSince,
+  getCompletedSessionsForMonth,
+  getDistinctSessionMonths,
   getEarliestSessionDate,
   fetchExternalTodayLiveHistory,
 } = require("../storage/dailyLog");
@@ -31,12 +33,14 @@ const {
   getDateWIB,
   formatShortDateWIB,
   formatLongDateWIB,
+  formatMonthLabel,
   describeElapsed,
   getTimeOfDayBucket,
   getHourWIBOf,
   WEEKDAY_FORMATTER_WIB,
   stripTrailingLiveWord,
   matchesNameFragment,
+  containsWholeWord,
   safeReplyOptions,
   YES_PATTERN,
   NO_PATTERN,
@@ -248,6 +252,85 @@ function buildRecapTablePage(sessions, page) {
   return { text, page: clampedPage, totalPages, hasMore: clampedPage < totalPages - 1 };
 }
 
+// ==== Parsing tanggal/bulan/hari spesifik dari teks chat (dipake router.js
+// buat "cok rekap 25 september", "cok rekap september", "cok rekap senin",
+// dst - §10's thirty-sixth item) ====
+//
+// Semua parser di bawah ini murni TEKS -> data terstruktur, gak pernah
+// nyentuh storage sama sekali - biar gampang dites sendiri-sendiri, sama
+// filosofinya kayak encodeRecapRange/decodeRecapRange di bawah.
+const MONTH_NAMES_ID = ["januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus", "september", "oktober", "november", "desember"];
+const MONTH_NAME_ALTERNATION = MONTH_NAMES_ID.join("|");
+
+function daysInMonth(year, monthIndex0) {
+  // Date(year, month+1, 0) manfaatin overflow BAWAAN konstruktor Date buat
+  // "mundur 1 hari dari tanggal 1 bulan BERIKUTNYA" - otomatis bener buat
+  // tahun kabisat, gak perlu tabel manual.
+  return new Date(year, monthIndex0 + 1, 0).getDate();
+}
+
+// "25 september"/"september 25" (urutan bebas), tahun opsional di belakang
+// (default TAHUN SEKARANG kalau gak disebut). Balikin null kalau gak ada
+// pasangan angka-hari + nama-bulan di teksnya SAMA SEKALI, ATAU kalau angka
+// harinya di luar jumlah hari bulan itu (mis. "31 februari") - dua kasus itu
+// BUKAN tanggal spesifik yang valid, biar pemanggilnya (router.js) lanjut
+// coba pola lain daripada maksa lanjut ke tanggal yang gak mungkin valid
+// (`new Date("...-02-31...")` bakal jadi Invalid Date, dan
+// Intl.DateTimeFormat.format() THROW kalau dikasih itu - sama kelas bug yang
+// udah dibenerin di replySpecificMember).
+function parseSpecificDateFromText(text) {
+  const dayMonthMatch = text.match(new RegExp(`\\b(\\d{1,2})\\s+(${MONTH_NAME_ALTERNATION})\\b(?:\\s+(\\d{4}))?`, "i"));
+  const monthDayMatch = !dayMonthMatch && text.match(new RegExp(`\\b(${MONTH_NAME_ALTERNATION})\\s+(\\d{1,2})\\b(?:\\s+(\\d{4}))?`, "i"));
+
+  let day;
+  let monthName;
+  let yearRaw;
+  if (dayMonthMatch) {
+    [, day, monthName, yearRaw] = dayMonthMatch;
+  } else if (monthDayMatch) {
+    [, monthName, day, yearRaw] = monthDayMatch;
+  } else {
+    return null;
+  }
+
+  const monthIndex0 = MONTH_NAMES_ID.indexOf(monthName.toLowerCase());
+  const dayNum = Number(day);
+  const year = yearRaw ? Number(yearRaw) : Number(getTodayWIB().split("-")[0]);
+  if (dayNum < 1 || dayNum > daysInMonth(year, monthIndex0)) return null;
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  return `${year}-${pad2(monthIndex0 + 1)}-${pad2(dayNum)}`;
+}
+
+// "september"/"rekap september" (TANPA angka hari) - dipanggil router.js
+// SETELAH parseSpecificDateFromText gagal, biar "rekap 25 september"
+// ketangkep sebagai tanggal spesifik duluan, bukan kepotong jadi "rekap
+// bulan september polos" gara-gara nama bulannya kebaca doang di teksnya.
+function parseMonthOnlyFromText(text) {
+  const match = text.match(new RegExp(`\\b(${MONTH_NAME_ALTERNATION})\\b(?:\\s+(\\d{4}))?`, "i"));
+  if (!match) return null;
+  const monthIndex0 = MONTH_NAMES_ID.indexOf(match[1].toLowerCase());
+  const year = match[2] ? Number(match[2]) : Number(getTodayWIB().split("-")[0]);
+  return `${year}-${String(monthIndex0 + 1).padStart(2, "0")}`;
+}
+
+// Index hari (konvensi Intl/JS: 0=Minggu...6=Sabtu). "senin".."sabtu" gak
+// ambigu, ditangkep begitu ketemu kata itu di mana pun di teksnya. "minggu"
+// SENGAJA beda perlakuan - itu kata yang SAMA PERSIS dipake buat "rentang 7
+// hari terakhir" ("cok rekap minggu ini"/"cok rekap minggu"), jadi cuma
+// dianggep "hari Minggu" kalau kata "hari" JUGA eksplisit disebut ("cok
+// rekap hari minggu") - tanpa syarat ini, "cok rekap minggu ini" bakal salah
+// kebaca sebagai nanya hari Minggu, bukan rentang mingguan yang udah ada
+// dari dulu.
+const WEEKDAY_NAMES_ID = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+function parseWeekdayFromText(text) {
+  for (let i = 1; i <= 6; i++) {
+    if (containsWholeWord(text, WEEKDAY_NAMES_ID[i].toLowerCase())) return i;
+  }
+  if (containsWholeWord(text, "hari") && containsWholeWord(text, "minggu")) return 0;
+  return null;
+}
+
 // Sesi yang MASIH LIVE SEKARANG (dari activeLives), dibentuk jadi baris
 // ala-sesi (endedAtUnix/durationMs null) biar bisa numpang bareng sesi yang
 // UDAH SELESAI di tabel/hitungan yang sama. Dipisah dari getTodaySessionsForRecap
@@ -271,6 +354,29 @@ function getOngoingSessionsForRecap() {
 // sumber ini) - diexport biar bisa dites langsung, sama kayak buildRecapTablePage.
 function getTodaySessionsForRecap() {
   return [...getCompletedSessionsToday(), ...getOngoingSessionsForRecap()];
+}
+
+// Gabungan sesi PER BULAN - sesi yang UDAH SELESAI di bulan itu, DITAMBAH
+// sesi yang MASIH LIVE SEKARANG kalau `monthWIB` kebetulan bulan BERJALAN
+// (sama alasannya kayak getTodaySessionsForRecap) - bulan-bulan LAIN (yang
+// udah lewat) gak mungkin punya sesi yang "masih live", jadi gak pernah
+// digabung buat itu.
+function getMonthSessionsForRecap(monthWIB) {
+  const completed = getCompletedSessionsForMonth(monthWIB);
+  if (monthWIB !== getTodayWIB().slice(0, 7)) return completed;
+  return [...completed, ...getOngoingSessionsForRecap()];
+}
+
+// Semua bulan ("YYYY-MM") yang layak ditawarin di dropdown "cok rekap bulan"
+// polos (replyRecapMonthGeneric di bawah) - gabungan bulan yang BENERAN ada
+// sesi selesainya (getDistinctSessionMonths) DITAMBAH bulan BERJALAN selalu
+// dipaksa masuk walau belum ada sesi yang selesai sama sekali di situ (mis.
+// baru mulai ada yang live, belum ada yang kelar) - urut dari yang paling
+// baru.
+function getAvailableRecapMonths() {
+  const months = new Set(getDistinctSessionMonths());
+  months.add(getTodayWIB().slice(0, 7));
+  return [...months].sort().reverse();
 }
 
 // "channelId:authorId" -> { currentPage, totalPages, at, rangeDays } - nunggu
@@ -322,9 +428,18 @@ const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 // live itu jelas-jelas bagian dari "minggu ini" juga (dia mulainya paling
 // nggak hari ini, yang termasuk 7/30 hari terakhir). Sekarang ikut digabung
 // sama getOngoingSessionsForRecap(), sama kayak rangeDays null/hari-ini di atas.
+//
+// String `rangeDays` sekarang ada DUA bentuk, dibedain dari PANJANGNYA
+// (fixed-width, gak ambigu): "YYYY-MM-DD" (10 karakter) = tanggal spesifik,
+// "YYYY-MM" (7 karakter) = bulan spesifik (§10's thirty-sixth item, rekap per
+// nama bulan/dropdown "rekap bulan" polos) - lihat getMonthSessionsForRecap
+// buat kenapa bulan BERJALAN ikut digabung sama activeLives juga, sama
+// alasannya kayak tanggal hari ini.
 function getSessionsForRange(rangeDays) {
   if (rangeDays == null || rangeDays === getTodayWIB()) return getTodaySessionsForRecap();
-  if (typeof rangeDays === "string") return getCompletedSessionsForDate(rangeDays);
+  if (typeof rangeDays === "string") {
+    return rangeDays.length === 7 ? getMonthSessionsForRecap(rangeDays) : getCompletedSessionsForDate(rangeDays);
+  }
   return [...getCompletedSessionsSince(rangeDays), ...getOngoingSessionsForRecap()];
 }
 
@@ -338,14 +453,19 @@ function getSessionsForRange(rangeDays) {
 // pake ":" bakal numbuhin segmen ekstra dan ngerusak parts[n] di bawah.
 // Simetris, dipake baik buat NULIS customId (buildRecapNavComponents)
 // maupun BACA-nya balik (handleRecapNavButton/handleRecapSearchModalSubmit).
+//
+// Rentang BULAN SPESIFIK ("YYYY-MM", §10's thirty-sixth item) dikasih awalan
+// "m" - beda dari "d" (tanggal) soalnya begitu udah didekode balik jadi
+// string polos, getSessionsForRange butuh cara buat bedain "YYYY-MM-DD" dari
+// "YYYY-MM" (dibedain dari PANJANG string-nya di situ - lihat komen di sana).
 function encodeRecapRange(rangeDays) {
   if (rangeDays == null) return "today";
-  if (typeof rangeDays === "string") return `d${rangeDays}`;
+  if (typeof rangeDays === "string") return rangeDays.length === 7 ? `m${rangeDays}` : `d${rangeDays}`;
   return String(rangeDays);
 }
 function decodeRecapRange(range) {
   if (range === "today") return null;
-  if (range.startsWith("d")) return range.slice(1);
+  if (range.startsWith("d") || range.startsWith("m")) return range.slice(1);
   return Number(range);
 }
 
@@ -385,6 +505,55 @@ function buildRecapDateSelectRow(selectedDate = null) {
   return new ActionRowBuilder().addComponents(selectMenu);
 }
 
+// Tanggal-tanggal (mundur dari hari ini, dibatesin batas yang SAMA kayak
+// buildRecapDateSelectRow di atas - retensi 35 hari ATAU sesi paling tua yang
+// beneran ada, mana yang lebih deket) yang HARI-nya (WIB) cocok sama
+// `weekdayIndex` (0=Minggu...6=Sabtu) - dasar dropdown "cok rekap hari
+// senin"/"cok rekap senin" dkk (§10's thirty-sixth item). Weekday-nya
+// dihitung lewat WEEKDAY_FORMATTER_WIB (Intl timeZone Asia/Jakarta), BUKAN
+// Date.prototype.getDay() - getDay() ngikutin zona waktu LOKAL SERVER (bukan
+// WIB), dan Railway biasanya jalan di UTC, jadi getDay() bisa nunjuk hari
+// yang SALAH (mundur 1 hari) buat instant tengah-malam WIB - sama kelas bug
+// timezone yang codebase ini udah konsisten hindarin di tempat lain
+// (getDateWIB dkk, semua lewat Intl timeZone eksplisit, gak pernah pake
+// method Date yang zona-lokal-server-dependent).
+const WEEKDAY_LOOKBACK_DAYS = 90; // ~13 minggu ke belakang, cukup generous - dibatesin lebih ketat lagi sama earliestDate kalau arsipnya ada isinya
+function findRecentDatesForWeekday(weekdayIndex) {
+  const todayStartMs = new Date(`${getTodayWIB()}T00:00:00+07:00`).getTime();
+  const earliestDate = getEarliestSessionDate();
+  const targetName = WEEKDAY_NAMES_ID[weekdayIndex];
+  const dates = [];
+  for (let i = 0; i < WEEKDAY_LOOKBACK_DAYS && dates.length < RECAP_DATE_OPTIONS_COUNT; i++) {
+    const d = new Date(todayStartMs - i * 24 * 60 * 60 * 1000);
+    const value = getDateWIB(d);
+    if (earliestDate && value < earliestDate) break;
+    if (WEEKDAY_FORMATTER_WIB.format(d) === targetName) dates.push(d);
+  }
+  return dates;
+}
+
+function buildWeekdayDateSelectRow(weekdayIndex, selectedDate = null) {
+  const options = findRecentDatesForWeekday(weekdayIndex).map((d) => {
+    const value = getDateWIB(d);
+    return { label: formatLongDateWIB(d), value, default: value === selectedDate };
+  });
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId("recap_date_select")
+    .setPlaceholder(`Pilih tanggal hari ${WEEKDAY_NAMES_ID[weekdayIndex]}`)
+    .addOptions(options);
+  return new ActionRowBuilder().addComponents(selectMenu);
+}
+
+// Dropdown "cok rekap bulan" polos (replyRecapMonthGeneric di bawah) DAN
+// baris navigasi tabel rekap PER BULAN (buildRecapNavComponents, biar bisa
+// ganti bulan tanpa nutup dulu, sama pola-nya kayak buildRecapDateSelectRow
+// buat tanggal).
+function buildRecapMonthSelectRow(months, selectedMonth = null) {
+  const options = months.map((m) => ({ label: formatMonthLabel(m), value: m, default: m === selectedMonth }));
+  const selectMenu = new StringSelectMenuBuilder().setCustomId("recap_month_select").setPlaceholder("Pilih bulan buat rekap").addOptions(options);
+  return new ActionRowBuilder().addComponents(selectMenu);
+}
+
 function buildCloseOnlyRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger),
@@ -401,24 +570,27 @@ function buildCloseOnlyRow() {
 // LAMA manapun tetep valid diklik kapan aja, gak ada TTL/staleness kayak
 // jalur teks.
 //
-// Rekap TANGGAL SPESIFIK (rangeDays berupa string "YYYY-MM-DD") dapet baris
-// EKSTRA di atas baris tombol - dropdown buat ganti tanggal tanpa perlu
-// nutup dulu terus buka "rekap tanggal" dari nol. Milih tanggal lain lewat
-// dropdown ini nge-EDIT pesan yang sama (lihat handleRecapDateSelect), sama
-// pola in-place-edit-nya kayak tombol Maju/Mundur - biar gak numpuk beberapa
-// tabel tanggal beda-beda di channel.
+// Rekap TANGGAL SPESIFIK (rangeDays berupa string "YYYY-MM-DD", 10 karakter)
+// dapet baris EKSTRA di atas baris tombol - dropdown buat ganti tanggal
+// tanpa perlu nutup dulu terus buka "rekap tanggal" dari nol. Rekap BULAN
+// SPESIFIK (rangeDays string "YYYY-MM", 7 karakter, §10's thirty-sixth item)
+// dapet perlakuan sama tapi dropdown-nya nawarin BULAN, bukan tanggal.
+// Milih lewat dropdown ini nge-EDIT pesan yang sama (lihat handleRecapDateSelect/
+// handleRecapMonthSelect), sama pola in-place-edit-nya kayak tombol
+// Maju/Mundur - biar gak numpuk beberapa tabel beda-beda di channel.
 //
-// Rekap MINGGUAN/BULANAN (rangeDays berupa number) DENGAN lebih dari 1
-// halaman dapet tombol tambahan "🔢 Lompat halaman" (§10's thirty-third
-// item, owner minta) - rentang segitu bisa nyampe puluhan halaman kalau
-// membernya banyak yang live tiap hari, dan Maju/Mundur satu-satu kelamaan
-// buat lompat jauh (mis. dari halaman 1 ke halaman terakhir). Cuma buat
-// rangeDays number (bukan "hari ini"/tanggal spesifik) sesuai yang diminta -
-// dua jenis rekap itu biasanya jauh lebih pendek (1 hari doang), jarang
-// butuh lompat jauh. Dibatesin ke totalPages > 1 doang (nggak ada gunanya
-// nawarin "lompat halaman" kalau cuma ada 1 halaman buat dilompatin).
+// Rekap MINGGUAN/BULANAN (rangeDays berupa number ATAU string bulan "YYYY-MM")
+// DENGAN lebih dari 1 halaman dapet tombol tambahan "🔢 Lompat halaman"
+// (§10's thirty-third item, owner minta) - rentang segitu bisa nyampe
+// puluhan halaman kalau membernya banyak yang live tiap hari, dan Maju/Mundur
+// satu-satu kelamaan buat lompat jauh (mis. dari halaman 1 ke halaman
+// terakhir). BUKAN buat tanggal spesifik/"hari ini" - dua jenis rekap itu
+// biasanya jauh lebih pendek (1 hari doang), jarang butuh lompat jauh.
+// Dibatesin ke totalPages > 1 doang (nggak ada gunanya nawarin "lompat
+// halaman" kalau cuma ada 1 halaman buat dilompatin).
 function buildRecapNavComponents(page, totalPages, rangeDays) {
   const range = encodeRecapRange(rangeDays);
+  const isMonthRange = typeof rangeDays === "string" && rangeDays.length === 7;
   const buttons = [];
   if (page < totalPages - 1) {
     buttons.push(new ButtonBuilder().setCustomId(`recap_nav:next:${range}:${page}`).setLabel("Maju ▶").setStyle(ButtonStyle.Primary));
@@ -428,12 +600,14 @@ function buildRecapNavComponents(page, totalPages, rangeDays) {
   }
   buttons.push(new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger));
   buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
-  if (typeof rangeDays === "number" && totalPages > 1) {
+  if ((typeof rangeDays === "number" || isMonthRange) && totalPages > 1) {
     buttons.push(new ButtonBuilder().setCustomId(`recap_nav:jump:${range}:${page}`).setLabel("🔢 Lompat halaman").setStyle(ButtonStyle.Secondary));
   }
 
   const rows = [];
-  if (typeof rangeDays === "string") rows.push(buildRecapDateSelectRow(rangeDays));
+  if (typeof rangeDays === "string") {
+    rows.push(isMonthRange ? buildRecapMonthSelectRow(getAvailableRecapMonths(), rangeDays) : buildRecapDateSelectRow(rangeDays));
+  }
   rows.push(new ActionRowBuilder().addComponents(buttons));
   return rows;
 }
@@ -612,13 +786,22 @@ function replyRecapDatePicker() {
 // Balesan buat "cok rekap" POLOS (gak nyebut "minggu"/"bulan"/"tanggal"/
 // "hari ini" sama sekali) - owner minta ini dikasih pilihan tombol dulu
 // daripada langsung nembak rekap hari ini kayak sebelumnya, biar user gak
-// kesusahan mikirin mau ketik apa buat tiap jenis rekap.
+// kesusahan mikirin mau ketik apa buat tiap jenis rekap. Tombol "Tutup"
+// (§10's thirty-sixth item) numpang di baris yang sama - masih di bawah
+// limit 5 tombol/baris Discord (4 opsi + 1 tutup) - biar user yang salah
+// pencet/salah ketik bisa langsung nutup tanpa harus milih salah satu opsi
+// rekap dulu. customId-nya "recap_nav:close" (bukan bikin varian baru) biar
+// nyambung ke logika tutup yang SAMA (deleteInteractionMessage) kayak semua
+// tombol Tutup lain di bot ini - router.js dispatch berdasarkan PREFIX
+// customId ("recap_nav:"), jadi tombol ini valid dipencet walau nempel di
+// pesan menu 4-opsi, bukan di tabel rekap.
 function replyRecapMenu() {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("recap_menu:today").setLabel("Rekap hari ini").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("recap_menu:week").setLabel("Rekap minggu ini").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("recap_menu:month").setLabel("Rekap bulan ini").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("recap_menu:date").setLabel("Rekap per tanggal").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
   );
   return { content: "Mau rekap yang mana, cok?", components: [row] };
 }
@@ -644,7 +827,7 @@ async function handleRecapMenuButton(interaction) {
   let reply;
   if (choice === "today") reply = await replyTodayRecapSoFar(interaction.channelId, interaction.user.id);
   else if (choice === "week") reply = await replyRecapRange(7, "minggu ini", interaction.channelId, interaction.user.id);
-  else if (choice === "month") reply = await replyRecapRange(30, "bulan ini", interaction.channelId, interaction.user.id);
+  else if (choice === "month") reply = await replyRecapMonth(getTodayWIB().slice(0, 7), interaction.channelId, interaction.user.id);
   else return;
 
   await interaction.update(safeReplyOptions(reply));
@@ -687,6 +870,18 @@ async function handleRecapDateSelect(interaction) {
 
   const block = buildRecapPageBlock(sessions, 0, interaction.channelId, interaction.user.id, selectedDate);
   await interaction.update(safeReplyOptions({ content: `📋 **Rekap tanggal ${label}**\n${block.content}`, components: block.components }));
+}
+
+// Diklik dari dropdown buildRecapMonthSelectRow() bikin (customId
+// "recap_month_select", nempel baik di balesan dropdown "cok rekap bulan"
+// polos MAUPUN di tabel rekap bulan yang lagi ditampilin, lihat
+// buildRecapNavComponents) - §10's thirty-sixth item. Sama pola in-place-edit-nya
+// kayak handleRecapDateSelect di atas, cuma granularitasnya bulan.
+async function handleRecapMonthSelect(interaction) {
+  const selectedMonth = interaction.values[0];
+  pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+  const reply = await replyRecapMonth(selectedMonth, interaction.channelId, interaction.user.id);
+  await interaction.update(safeReplyOptions(reply));
 }
 
 // Ditempelin di balesan hasil pencarian (handleRecapSearchModalSubmit di
@@ -903,6 +1098,114 @@ async function replyRecapRange(daysBack, label, channelId, authorId) {
   return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
 }
 
+// Rekap PER BULAN SPESIFIK (§10's thirty-sixth item) - dipanggil baik dari
+// teks yang nyebut nama bulan langsung ("cok rekap september"), dari tombol
+// "Rekap bulan ini" di replyRecapMenu (selalu bulan BERJALAN), MAUPUN dari
+// dropdown bulan (replyRecapMonthGeneric/handleRecapMonthSelect) - satu
+// fungsi buat semua jalur itu, sama filosofinya kayak getSessionsForRange
+// buat sumber sesinya.
+//
+// Kalau bulan yang diminta ternyata kosong (belum ada live yang kecatet sama
+// sekali di situ), fallback-nya BEDA tergantung ada berapa banyak bulan lain
+// yang punya data: kalau lebih dari 1, tawarin dropdown bulan lain (lebih
+// membantu daripada nyuruh user nebak-nebak lagi) - kalau cuma bulan ini
+// doang yang ada (kasus paling umum sekarang, arsipnya masih baru), gak ada
+// gunanya nawarin dropdown isi 1 opsi, jadi jatuh ke menu 4-opsi biasa.
+async function replyRecapMonth(monthWIB, channelId, authorId) {
+  pendingRecapPage.delete(`${channelId}:${authorId}`);
+  const label = formatMonthLabel(monthWIB);
+  const sessions = getSessionsForRange(monthWIB);
+
+  if (sessions.length === 0) {
+    const months = getAvailableRecapMonths();
+    if (months.length > 1) {
+      return {
+        content: `Cok, belum ada live yang kecatet buat bulan ${label}. Coba bulan lain, cok:`,
+        components: [buildRecapMonthSelectRow(months, monthWIB), buildCloseOnlyRow()],
+      };
+    }
+    const menu = replyRecapMenu();
+    return { content: `Cok, belum ada live yang kecatet buat bulan ${label}.\n\n${menu.content}`, components: menu.components };
+  }
+
+  const completed = sessions.filter((s) => s.endedAtUnix !== null);
+  const ongoingCount = sessions.length - completed.length;
+  const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
+  const uniqueMembers = new Set(sessions.map((s) => s.name)).size;
+  const longest = completed.length > 0 ? completed.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), completed[0]) : null;
+
+  const summaryLines = [
+    `📋 **Rekap bulan ${label}**`,
+    `Total sesi: ${sessions.length}x dari ${uniqueMembers} member (${completed.length} udah selesai, ${ongoingCount} masih live)`,
+  ];
+  if (longest) {
+    summaryLines.push(
+      `Total durasi gabungan: ${formatDuration(totalDurationMs)} | Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
+    );
+  }
+
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, monthWIB);
+  return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
+}
+
+// Balesan buat "cok rekap bulan" POLOS (nyebut "bulan" tapi TANPA nama bulan
+// spesifik DAN tanpa "ini") - §10's thirty-sixh item, owner minta: kalau
+// arsipnya cuma punya 1 bulan (kasus sekarang, baru mulai September),
+// langsung tunjukkin bulan itu tanpa nanya-nanya - begitu ada lebih dari 1
+// bulan yang punya data (bot-nya udah jalan lebih dari sebulan), baru
+// ditawarin dropdown milih bulan yang mana.
+async function replyRecapMonthGeneric(channelId, authorId) {
+  const months = getAvailableRecapMonths();
+  if (months.length === 1) {
+    return await replyRecapMonth(months[0], channelId, authorId);
+  }
+  return { content: "Rekap bulan berapa nih, cok?", components: [buildRecapMonthSelectRow(months), buildCloseOnlyRow()] };
+}
+
+// Rekap TANGGAL SPESIFIK yang lengkap disebut user sendiri di teksnya (mis.
+// "cok rekap 25 september") - §10's thirty-sixth item, laporan owner:
+// sebelumnya kalimat kayak gitu diem-diem jatuh ke "rekap polos" (menu
+// 4-opsi), padahal user udah eksplisit nyebut tanggalnya, jadi harusnya
+// langsung ditunjukkin tabelnya. Kalau tanggalnya ternyata gak ada datanya
+// (di luar rentang yang kecatet - baik KESELURUHAN bot baru mulai 13
+// September, ATAU sekadar tanggal itu kebetulan gak ada yang live), dikasih
+// tau jujur + fallback ke menu 4-opsi biasa (persis diminta owner), BUKAN
+// diem-diem nunjukkin tabel kosong.
+async function replyRecapSpecificDate(dateWIB, channelId, authorId) {
+  pendingRecapPage.delete(`${channelId}:${authorId}`);
+  const label = formatLongDateWIB(new Date(`${dateWIB}T00:00:00+07:00`));
+  const sessions = getSessionsForRange(dateWIB);
+
+  if (sessions.length === 0) {
+    const menu = replyRecapMenu();
+    return {
+      content: `Cok, gak ada data rekap buat tanggal ${label} (di luar rentang yang kecatet, atau emang belum ada yang live). ${menu.content}`,
+      components: menu.components,
+    };
+  }
+
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, dateWIB);
+  return { content: `📋 **Rekap tanggal ${label}**\n${block.content}`, components: block.components };
+}
+
+// Balesan buat "cok rekap hari senin"/"cok rekap senin" dkk (§10's
+// thirty-sixth item) - BUKAN langsung nunjukkin tabel (beda dari tanggal
+// spesifik di atas), soalnya "Senin" itu sendiri gak nunjuk ke SATU tanggal
+// pasti - bisa Senin minggu ini, minggu lalu, dst. Jadi ditawarin dropdown
+// tanggal-tanggal Senin yang beneran ada di rentang yang kecatet
+// (findRecentDatesForWeekday), user tinggal milih yang mana. Kalau ternyata
+// gak ada SATU PUN tanggal hari itu yang kecatet (arsipnya masih terlalu
+// baru), dikasih tau jujur - dropdown gak mungkin ditampilin kosong
+// (StringSelectMenu Discord butuh minimal 1 opsi).
+async function replyRecapWeekdayPicker(weekdayIndex) {
+  const dayLabel = WEEKDAY_NAMES_ID[weekdayIndex];
+  const dates = findRecentDatesForWeekday(weekdayIndex);
+  if (dates.length === 0) {
+    return `Cok, belum ada tanggal hari ${dayLabel} yang kecatet (arsipnya masih terlalu baru).`;
+  }
+  return { content: `${dayLabel} tanggal berapa nih, cok?`, components: [buildWeekdayDateSelectRow(weekdayIndex), buildCloseOnlyRow()] };
+}
+
 function replyMemberStats(fragment) {
   const found = findDurationHistoryByNameFragment(fragment);
   if (!found || found.entries.length === 0) {
@@ -1112,16 +1415,27 @@ module.exports = {
   replyRecapRange,
   replyRecapMenu,
   replyRecapDatePicker,
+  replyRecapMonth,
+  replyRecapMonthGeneric,
+  replyRecapSpecificDate,
+  replyRecapWeekdayPicker,
+  parseSpecificDateFromText,
+  parseMonthOnlyFromText,
+  parseWeekdayFromText,
   getTodaySessionsForRecap,
+  getAvailableRecapMonths,
   buildRecapTablePage,
   buildRecapPageBlock,
   buildRecapDateSelectRow,
+  buildWeekdayDateSelectRow,
+  buildRecapMonthSelectRow,
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
   handleRecapJumpModalSubmit,
   handleRecapMenuButton,
   handleRecapDateSelect,
+  handleRecapMonthSelect,
   isOwner,
   handleAddPriority,
   handleRemovePriority,

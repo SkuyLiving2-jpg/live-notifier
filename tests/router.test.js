@@ -162,10 +162,15 @@ test("rekap minggu ini - dispatch ke replyRecapRange(7, ...), BUKAN rekap hari i
   assert.doesNotMatch(content, /Rekap live hari ini/);
 });
 
-test("rekap bulan ini - dispatch ke replyRecapRange(30, ...), BUKAN rekap hari ini", async () => {
+// §10's thirty-sixth item: "rekap bulan ini" sekarang dispatch ke
+// replyRecapMonth (bulan KALENDER berjalan), bukan lagi replyRecapRange(30,
+// ...) (30 hari rolling) - biar konsisten sama fitur rekap-per-nama-bulan
+// baru ("cok rekap september" pas lagi September harus ngasih hasil yang
+// SAMA kayak "cok rekap bulan ini").
+test("rekap bulan ini - dispatch ke replyRecapMonth (bulan kalender berjalan), BUKAN rekap hari ini", async () => {
   const reply = await buildChatReply("cok rekap bulan ini");
   const content = textOf(reply);
-  assert.match(content, /Rekap bulan ini|belum ada live yang kecatet dalam bulan ini/);
+  assert.match(content, /Rekap bulan|belum ada live yang kecatet buat bulan/);
   assert.doesNotMatch(content, /Rekap live hari ini/);
 });
 
@@ -191,11 +196,64 @@ test("rekap tanggal - dispatch ke replyRecapDatePicker (dropdown tanggal), BUKAN
 // "rekap" POLOS (gak nyebut minggu/bulan/tanggal/hari ini sama sekali) ->
 // menu 4-tombol, BUKAN langsung rekap hari ini kayak sebelumnya - owner
 // minta ini biar user gak bingung mau ketik apa.
-test("rekap polos (tanpa minggu/bulan/tanggal/hari) - dispatch ke menu 4-tombol", async () => {
+test("rekap polos (tanpa minggu/bulan/tanggal/hari) - dispatch ke menu 4-tombol + Tutup", async () => {
   const reply = await buildChatReply("cok rekap");
   assert.equal(reply.content, "Mau rekap yang mana, cok?");
   const customIds = reply.components[0].components.map((c) => c.data.custom_id);
-  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date"]);
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
+});
+
+// §10's thirty-sixth item: "cok rekap <tanggal spesifik>"/"cok rekap
+// <nama-bulan>"/"cok rekap bulan"/"cok rekap <nama-hari>" - laporan owner:
+// "rekap 25 september" dulu diem-diem jatuh ke menu 4-tombol (rekap polos),
+// padahal user udah eksplisit nyebut tanggalnya.
+test("rekap <tanggal lengkap, mis. '25 september'> - dispatch ke replyRecapSpecificDate, BUKAN menu 4-tombol polos", async () => {
+  const reply = await buildChatReply("cok rekap 25 september");
+  const content = textOf(reply);
+  assert.match(content, /Rekap tanggal|gak ada data rekap buat tanggal/);
+  assert.doesNotMatch(content, /^Mau rekap yang mana, cok\?$/);
+});
+
+test("rekap <nama bulan tanpa angka hari, mis. 'september'> - dispatch ke replyRecapMonth, BUKAN menu 4-tombol polos", async () => {
+  const reply = await buildChatReply("cok rekap september");
+  const content = textOf(reply);
+  assert.match(content, /Rekap bulan|belum ada live yang kecatet buat bulan/);
+});
+
+// "rekap bulan" polos (TANPA nama bulan/"ini") - dropdown milih bulan, atau
+// langsung tunjukkin kalau cuma ada 1 bulan yang punya data (belum ada cara
+// bikin data multi-bulan lewat unit test router.js tanpa reach ke dailyLog
+// langsung, jadi cuma dites jalur "cuma 1 bulan" di sini).
+test("rekap bulan polos (tanpa nama bulan/'ini') - dispatch ke replyRecapMonthGeneric, BUKAN rekap bulan-rolling lama", async () => {
+  const reply = await buildChatReply("cok rekap bulan");
+  const content = textOf(reply);
+  assert.match(content, /Rekap bulan|belum ada live yang kecatet buat bulan|Rekap bulan berapa nih/);
+  assert.doesNotMatch(content, /Rekap live hari ini/);
+});
+
+test("rekap <nama hari, mis. 'senin'> - dispatch ke replyRecapWeekdayPicker (dropdown tanggal buat hari itu)", async () => {
+  const reply = await buildChatReply("cok rekap senin");
+  const content = textOf(reply);
+  assert.match(content, /Senin tanggal berapa nih, cok\?|belum ada tanggal hari Senin yang kecatet/);
+});
+
+// "rekap hari minggu" HARUS ketangkep sebagai hari Minggu (weekday picker),
+// BUKAN kesangkut ke cabang "rekap minggu ini" (rentang 7 hari) - dua-duanya
+// sama-sama ngandung kata "minggu".
+test("rekap hari minggu - dispatch ke replyRecapWeekdayPicker (hari Minggu), BUKAN rekap minggu ini (rentang 7 hari)", async () => {
+  const reply = await buildChatReply("cok rekap hari minggu");
+  const content = textOf(reply);
+  assert.match(content, /Minggu tanggal berapa nih, cok\?|belum ada tanggal hari Minggu yang kecatet/);
+  assert.doesNotMatch(content, /Rekap minggu ini/);
+});
+
+// Regresi: "rekap minggu ini"/"rekap minggu" polos (TANPA "hari") harus
+// TETAP jalan sebagai rentang 7 hari seperti biasa, gak kebajak sama
+// pengecekan weekday "Minggu" yang baru ditambahin.
+test("rekap minggu (tanpa 'hari') - TETAP dispatch ke replyRecapRange(7, ...), bukan weekday picker", async () => {
+  const reply = await buildChatReply("cok rekap minggu");
+  const content = textOf(reply);
+  assert.match(content, /Rekap minggu ini|belum ada live yang kecatet dalam minggu ini/);
 });
 
 test("status - dispatch ke replyBotStatus", async () => {

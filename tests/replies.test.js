@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { getTodayWIB, getDateWIB } = require("../src/utils");
+const { getTodayWIB, getDateWIB, WEEKDAY_FORMATTER_WIB } = require("../src/utils");
 const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
@@ -29,6 +29,10 @@ const {
   replyHelp,
   replyRecapMenu,
   replyRecapDatePicker,
+  buildRecapMonthSelectRow,
+  parseSpecificDateFromText,
+  parseMonthOnlyFromText,
+  parseWeekdayFromText,
   handleSubscribe,
   handleUnsubscribe,
   isOwner,
@@ -72,7 +76,14 @@ function freshRepliesForRecapRange() {
     handleRecapJumpModalSubmit: replies.handleRecapJumpModalSubmit,
     handleRecapMenuButton: replies.handleRecapMenuButton,
     handleRecapDateSelect: replies.handleRecapDateSelect,
+    handleRecapMonthSelect: replies.handleRecapMonthSelect,
     buildRecapDateSelectRow: replies.buildRecapDateSelectRow,
+    buildWeekdayDateSelectRow: replies.buildWeekdayDateSelectRow,
+    replyRecapMonth: replies.replyRecapMonth,
+    replyRecapMonthGeneric: replies.replyRecapMonthGeneric,
+    replyRecapSpecificDate: replies.replyRecapSpecificDate,
+    replyRecapWeekdayPicker: replies.replyRecapWeekdayPicker,
+    getAvailableRecapMonths: replies.getAvailableRecapMonths,
   };
 }
 
@@ -1000,11 +1011,11 @@ test("buildRecapDateSelectRow - opsi yang cocok sama selectedDate ditandain defa
   assert.ok(others.every((o) => !o.default));
 });
 
-test("replyRecapMenu - 4 tombol pilihan rekap, dengan customId recap_menu:<today|week|month|date>", () => {
+test("replyRecapMenu - 4 tombol pilihan rekap + 1 tombol Tutup, dengan customId recap_menu:<today|week|month|date> + recap_nav:close", () => {
   const reply = replyRecapMenu();
   assert.equal(reply.content, "Mau rekap yang mana, cok?");
   const customIds = reply.components[0].components.map((c) => c.data.custom_id);
-  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date"]);
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
 });
 
 test("replyRecapDatePicker - dropdown tanggal + tombol tutup, belum ada tabel apa-apa", () => {
@@ -1013,6 +1024,210 @@ test("replyRecapDatePicker - dropdown tanggal + tombol tutup, belum ada tabel ap
   assert.equal(reply.components.length, 2);
   assert.equal(reply.components[0].components[0].data.custom_id, "recap_date_select");
   assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
+});
+
+// ==== §10's thirty-sixth item: "cok rekap 25 september"/"cok rekap
+// september"/"cok rekap bulan"/"cok rekap senin" dkk ====
+
+const WEEKDAY_NAMES_ID_TEST = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+function todayWeekdayIndex() {
+  return WEEKDAY_NAMES_ID_TEST.indexOf(WEEKDAY_FORMATTER_WIB.format(new Date()));
+}
+function currentYear() {
+  return Number(getTodayWIB().split("-")[0]);
+}
+
+test("parseSpecificDateFromText - 'hari nama-bulan' ATAU 'nama-bulan hari' (urutan bebas), tahun default TAHUN SEKARANG kalau gak disebut", () => {
+  const year = currentYear();
+  assert.equal(parseSpecificDateFromText("cok rekap 25 september"), `${year}-09-25`);
+  assert.equal(parseSpecificDateFromText("cok rekap september 25"), `${year}-09-25`);
+  assert.equal(parseSpecificDateFromText("cok rekap 5 januari"), `${year}-01-05`);
+  assert.equal(parseSpecificDateFromText("cok rekap 25 september 2025"), "2025-09-25");
+});
+
+test("parseSpecificDateFromText - tanggal yang gak mungkin valid (di luar jumlah hari bulan itu, mis. 31 Februari) balikin null, BUKAN Invalid Date", () => {
+  assert.equal(parseSpecificDateFromText("cok rekap 31 februari"), null);
+  assert.equal(parseSpecificDateFromText("cok rekap 32 september"), null);
+});
+
+test("parseSpecificDateFromText - gak ada angka hari + nama bulan sama sekali -> null", () => {
+  assert.equal(parseSpecificDateFromText("cok rekap september"), null);
+  assert.equal(parseSpecificDateFromText("cok rekap bulan ini"), null);
+  assert.equal(parseSpecificDateFromText("cok rekap"), null);
+});
+
+test("parseMonthOnlyFromText - nama bulan TANPA angka hari, tahun default TAHUN SEKARANG kalau gak disebut", () => {
+  const year = currentYear();
+  assert.equal(parseMonthOnlyFromText("cok rekap september"), `${year}-09`);
+  assert.equal(parseMonthOnlyFromText("cok rekap oktober 2027"), "2027-10");
+  assert.equal(parseMonthOnlyFromText("cok rekap bulan ini"), null, "gak nyebut nama bulan sama sekali -> null");
+});
+
+test("parseWeekdayFromText - 'senin'..'sabtu' gak ambigu, ketangkep di mana pun di teksnya", () => {
+  assert.equal(parseWeekdayFromText("cok rekap senin"), 1);
+  assert.equal(parseWeekdayFromText("cok rekap hari senin"), 1);
+  assert.equal(parseWeekdayFromText("cok rekap sabtu"), 6);
+});
+
+test("parseWeekdayFromText - 'minggu' (Minggu/Sunday) CUMA ketangkep kalau kata 'hari' JUGA disebut, biar gak nabrak 'rekap minggu ini' (rentang 7 hari)", () => {
+  assert.equal(parseWeekdayFromText("cok rekap hari minggu"), 0);
+  assert.equal(parseWeekdayFromText("cok rekap minggu ini"), null);
+  assert.equal(parseWeekdayFromText("cok rekap minggu"), null);
+});
+
+test("parseWeekdayFromText - teks tanpa nama hari sama sekali -> null", () => {
+  assert.equal(parseWeekdayFromText("cok rekap bulan ini"), null);
+  assert.equal(parseWeekdayFromText("cok rekap"), null);
+});
+
+test("buildRecapMonthSelectRow - customId recap_month_select, label via formatMonthLabel, default:true buat bulan terpilih", () => {
+  const row = buildRecapMonthSelectRow(["2026-09", "2026-08"], "2026-08");
+  assert.equal(row.components[0].data.custom_id, "recap_month_select");
+  const options = row.components[0].options.map((o) => o.data);
+  assert.equal(options[0].label, "September 2026");
+  assert.equal(options[0].default, false);
+  assert.equal(options[1].label, "Agustus 2026");
+  assert.equal(options[1].default, true);
+});
+
+test("replyRecapMonth - bulan yang diminta kosong DAN cuma 1 bulan yang punya data (kasus arsip baru) -> fallback ke menu 4-opsi biasa", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const thisMonth = getTodayWIB().slice(0, 7);
+  const reply = await fresh.replyRecapMonth(thisMonth, "c-monthempty", "u-monthempty");
+  assert.match(reply.content, /Cok, belum ada live yang kecatet buat bulan/);
+  assert.match(reply.content, /Mau rekap yang mana, cok\?/);
+  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
+});
+
+test("replyRecapMonth - bulan yang diminta kosong TAPI ada bulan LAIN yang punya data -> dropdown bulan lain, bukan menu 4-opsi", async () => {
+  const fresh = freshRepliesForRecapRange();
+  // 32 hari lalu: JAMINAN jatuh di bulan KALENDER yang beda dari sekarang
+  // (bulan paling panjang 31 hari), TAPI masih dalem retensi 35 hari
+  // (dailyLog.js's SESSION_RETENTION_DAYS) biar gak ke-prune diem-diem
+  // sebelum sempet ke-assert.
+  const otherMonthUnix = Math.floor(Date.now() / 1000) - 32 * 24 * 60 * 60;
+  fresh.recordLiveEnded("Oldmonth", "jkt48_oldmonth", new Date(otherMonthUnix * 1000), new Date((otherMonthUnix + 60) * 1000), 5);
+
+  const reply = await fresh.replyRecapMonth("1999-01", "c-monthdropdown", "u-monthdropdown");
+  assert.match(reply.content, /Cok, belum ada live yang kecatet buat bulan/);
+  assert.match(reply.content, /Coba bulan lain/);
+  assert.equal(reply.components[0].components[0].data.custom_id, "recap_month_select");
+  assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
+});
+
+test("replyRecapMonth - bulan BERJALAN (sekarang) ikut gabung sesi yang MASIH LIVE (activeLives), bulan LAIN yang udah lewat enggak", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const thisMonth = getTodayWIB().slice(0, 7);
+  activeLives.set("jkt48_monthongoing", { name: "Monthongoing", username: "jkt48_monthongoing", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    const reply = await fresh.replyRecapMonth(thisMonth, "c-monthongoing", "u-monthongoing");
+    assert.match(reply.content, /📋 \*\*Rekap bulan/);
+    assert.match(reply.content, /Monthongoing/);
+    assert.match(reply.content, /1 masih live/);
+  } finally {
+    activeLives.delete("jkt48_monthongoing");
+  }
+});
+
+test("replyRecapMonth - bulan yang punya sesi SELESAI -> ringkasan + tabel, dan nempelin dropdown bulan buat ganti-ganti", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const thisMonth = getTodayWIB().slice(0, 7);
+  fresh.recordLiveEnded("Monthdata", "jkt48_monthdata", new Date(Date.now() - 60_000), new Date(), 5);
+
+  const reply = await fresh.replyRecapMonth(thisMonth, "c-monthdata", "u-monthdata");
+  assert.match(reply.content, /Monthdata/);
+  assert.equal(reply.components[0].components[0].data.custom_id, "recap_month_select");
+});
+
+test("replyRecapMonthGeneric - cuma 1 bulan yang punya data (kasus arsip baru) -> LANGSUNG tunjukkin bulan itu, gak nanya dropdown", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const reply = await fresh.replyRecapMonthGeneric("c-monthgeneric1", "u-monthgeneric1");
+  assert.doesNotMatch(reply.content, /Rekap bulan berapa nih/);
+});
+
+test("replyRecapMonthGeneric - lebih dari 1 bulan yang punya data -> dropdown milih bulan", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const otherMonthUnix = Math.floor(Date.now() / 1000) - 32 * 24 * 60 * 60; // lihat komen di test sebelumnya soal kenapa 32 hari
+  fresh.recordLiveEnded("Oldmonth2", "jkt48_oldmonth2", new Date(otherMonthUnix * 1000), new Date((otherMonthUnix + 60) * 1000), 5);
+
+  const reply = await fresh.replyRecapMonthGeneric("c-monthgeneric2", "u-monthgeneric2");
+  assert.equal(reply.content, "Rekap bulan berapa nih, cok?");
+  assert.equal(reply.components[0].components[0].data.custom_id, "recap_month_select");
+  assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
+});
+
+test("replyRecapSpecificDate - tanggal yang ada sesinya -> langsung tabel rekap tanggal itu", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
+  fresh.recordLiveEnded("Specdate", "jkt48_specdate", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+
+  const reply = await fresh.replyRecapSpecificDate(targetDate, "c-specdate", "u-specdate");
+  assert.match(reply.content, /📋 \*\*Rekap tanggal/);
+  assert.match(reply.content, /Specdate/);
+});
+
+test("replyRecapSpecificDate - tanggal yang gak ada datanya (sebelum bot mulai/emang kosong) -> 'gak ada data' + fallback menu 4-opsi", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const reply = await fresh.replyRecapSpecificDate("2000-01-01", "c-specdateempty", "u-specdateempty");
+  assert.match(reply.content, /Cok, gak ada data rekap buat tanggal/);
+  assert.match(reply.content, /Mau rekap yang mana, cok\?/);
+  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
+});
+
+test("replyRecapWeekdayPicker - hari yang beneran ada tanggalnya di rentang yang kecatet -> dropdown tanggal buat hari itu + tombol tutup", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const idx = todayWeekdayIndex();
+  const reply = await fresh.replyRecapWeekdayPicker(idx);
+  assert.equal(reply.content, `${WEEKDAY_NAMES_ID_TEST[idx]} tanggal berapa nih, cok?`);
+  assert.equal(reply.components[0].components[0].data.custom_id, "recap_date_select");
+  assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
+  // Hari ini sendiri (weekday-nya PASTI cocok ke idx) harus jadi salah satu opsi.
+  const values = reply.components[0].components[0].options.map((o) => o.data.value);
+  assert.ok(values.includes(getTodayWIB()));
+});
+
+test("replyRecapWeekdayPicker - arsip dibatesin sampe HARI INI doang (earliestDate = hari ini) DAN hari ini BUKAN hari yang diminta -> gak ada tanggal ketemu, dikasih tau jujur", async () => {
+  const fresh = freshRepliesForRecapRange();
+  fresh.recordLiveEnded("Weekdaybound", "jkt48_weekdaybound", new Date(Date.now() - 60_000), new Date(), 5); // earliestSessionDate jadi HARI INI
+
+  const otherIdx = (todayWeekdayIndex() + 1) % 7;
+  const reply = await fresh.replyRecapWeekdayPicker(otherIdx);
+  assert.equal(typeof reply, "string");
+  assert.match(reply, new RegExp(`belum ada tanggal hari ${WEEKDAY_NAMES_ID_TEST[otherIdx]} yang kecatet`));
+});
+
+test("handleRecapMonthSelect - EDIT pesan (update) ke rekap bulan yang dipilih, BUKAN kirim pesan baru", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const thisMonth = getTodayWIB().slice(0, 7);
+  fresh.recordLiveEnded("Monthselect", "jkt48_monthselect", new Date(Date.now() - 60_000), new Date(), 5);
+
+  const interaction = fakeInteraction({ customId: "recap_month_select", values: [thisMonth] });
+  await fresh.handleRecapMonthSelect(interaction);
+
+  assert.equal(interaction.calls.length, 0);
+  assert.equal(interaction.updates.length, 1);
+  assert.match(interaction.updates[0].content, /Monthselect/);
+});
+
+// Rekap bulan yang isinya BANYAK (>1 halaman) harus dapet tombol "🔢 Lompat
+// halaman" juga, sama kayak rekap minggu/bulan-rolling (number) - bulan
+// KALENDER (string "YYYY-MM") secara logis bisa sama panjangnya, jadi harus
+// diperlakukan sama.
+test("replyRecapMonth - bulan dengan lebih dari 1 halaman dapet tombol '🔢 Lompat halaman' juga (bukan cuma rentang N-hari)", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const thisMonth = getTodayWIB().slice(0, 7);
+  for (let i = 0; i < 25; i++) {
+    fresh.recordLiveEnded(`Monthpage${i}`, `jkt48_monthpagetest${i}`, new Date(Date.now() - 120_000), new Date(Date.now() - 60_000), 5);
+  }
+
+  const reply = await fresh.replyRecapMonth(thisMonth, "c-monthjump", "u-monthjump");
+  const navRow = reply.components[1];
+  const jumpButton = navRow.components.find((b) => b.data.custom_id.startsWith("recap_nav:jump:"));
+  assert.ok(jumpButton, "harus ada tombol lompat halaman");
+  assert.equal(jumpButton.data.custom_id, `recap_nav:jump:m${thisMonth}:0`);
 });
 
 test("handleRecapMenuButton - pilihan 'today'/'week'/'month' EDIT pesan menu-nya (update), BUKAN kirim pesan baru", async () => {

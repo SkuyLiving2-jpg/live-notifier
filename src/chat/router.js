@@ -2,7 +2,7 @@ const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { getUsernameForChannel } = require("../storage/channelRouting");
 const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
-const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions } = require("../utils");
+const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
 const { tryHandleWatchConfirmShortcut } = require("./menu");
 const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = require("./pendingState");
 const { replyFallbackMenu } = require("./menu");
@@ -25,12 +25,20 @@ const {
   replyRecapRange,
   replyRecapMenu,
   replyRecapDatePicker,
+  replyRecapMonth,
+  replyRecapMonthGeneric,
+  replyRecapSpecificDate,
+  replyRecapWeekdayPicker,
+  parseSpecificDateFromText,
+  parseMonthOnlyFromText,
+  parseWeekdayFromText,
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
   handleRecapJumpModalSubmit,
   handleRecapMenuButton,
   handleRecapDateSelect,
+  handleRecapMonthSelect,
   handleAddPriority,
   handleRemovePriority,
   handleSubscribe,
@@ -173,28 +181,78 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 
   // Dicek SEBELUM "rekap" polos di bawah - kalimatnya juga ngandung "rekap"
   // jadi harus ketangkep duluan sama check yang lebih spesifik ini, sama
-  // pola-nya kayak "berhenti ingetin" vs "ingetin" di atas.
-  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "minggu")) {
-    return await replyRecapRange(7, "minggu ini", channelId, authorId);
-  }
-  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "bulan")) {
-    return await replyRecapRange(30, "bulan ini", channelId, authorId);
-  }
-  // "rekap tanggal"/"rekap per tanggal" -> langsung dropdown milih tanggal,
-  // skip menu 4-tombol di bawah (orangnya udah jelas mau rekap tanggal).
-  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "tanggal")) {
-    return replyRecapDatePicker();
-  }
-  // "rekap hari ini"/"rekap hari" -> tetep langsung ke rekap hari ini kayak
-  // sebelumnya (BUKAN nunjukkin menu 4-tombol) - orangnya udah eksplisit
-  // nyebut rentangnya, jadi gak perlu ditanya lagi. "rekap" POLOS doang
-  // (gak nyebut minggu/bulan/tanggal/hari ini sama sekali) baru dikasih
-  // menu (replyRecapMenu) - owner minta ini biar user gak bingung mau
-  // ketik apa buat tiap jenis rekap.
-  if (containsWholeWord(text, "rekap") && containsWholeWord(text, "hari")) {
-    return await replyTodayRecapSoFar(channelId, authorId);
-  }
+  // pola-nya kayak "berhenti ingetin" vs "ingetin" di atas. Urutannya
+  // (§10's thirty-sixth item) dari yang PALING SPESIFIK ke yang PALING
+  // POLOS, biar kalimat yang nyebut beberapa kata kunci sekaligus (mis.
+  // "rekap per tanggal 25 september", ngandung "tanggal" DAN tanggal
+  // spesifik) ketangkep sama check yang paling ngerti maksud usernya.
   if (containsWholeWord(text, "rekap")) {
+    // "rekap hari senin"/"rekap senin" dkk - weekday DULUAN (sebelum "rekap
+    // minggu" biasa), soalnya kata "minggu" (Minggu) sendiri BISA ketangkep
+    // di sini juga (lewat parseWeekdayFromText's "hari"+"minggu" khusus) -
+    // lihat komen di parseWeekdayFromText buat kenapa gak nabrak "rekap
+    // minggu ini" (rentang 7 hari) yang udah ada dari dulu.
+    const weekdayIndex = parseWeekdayFromText(text);
+    if (weekdayIndex !== null) {
+      return await replyRecapWeekdayPicker(weekdayIndex);
+    }
+
+    // Tanggal LENGKAP (hari + nama bulan, mis. "25 september") - dicek
+    // SEBELUM cabang bulan/minggu di bawah, soalnya kalimat kayak gitu juga
+    // ngandung nama bulan (bisa kesangkut ke cabang "nama bulan polos") atau
+    // gak sengaja ngandung kata "bulan"/"minggu" juga. User yang udah
+    // eksplisit nyebut tanggal pasti maunya LANGSUNG liat tabel tanggal itu,
+    // bukan ditanya-tanya lagi.
+    const specificDate = parseSpecificDateFromText(text);
+    if (specificDate) {
+      return await replyRecapSpecificDate(specificDate, channelId, authorId);
+    }
+
+    if (containsWholeWord(text, "minggu")) {
+      return await replyRecapRange(7, "minggu ini", channelId, authorId);
+    }
+
+    // "rekap bulan ini" - eksplisit nyebut "ini", jadi SELALU langsung bulan
+    // BERJALAN, gak usah nanya walau nanti udah ada beberapa bulan yang
+    // punya data (beda dari "rekap bulan" polos di bawah).
+    if (containsWholeWord(text, "bulan") && containsWholeWord(text, "ini")) {
+      return await replyRecapMonth(getTodayWIB().slice(0, 7), channelId, authorId);
+    }
+
+    // Nama bulan POLOS tanpa angka hari (mis. "rekap september") - dicek
+    // SETELAH specificDate gagal di atas, biar "rekap 25 september" gak
+    // kepotong jadi ini.
+    const monthOnly = parseMonthOnlyFromText(text);
+    if (monthOnly) {
+      return await replyRecapMonth(monthOnly, channelId, authorId);
+    }
+
+    // "rekap bulan" polos (gak nyebut nama bulan/"ini" sama sekali) -
+    // dropdown milih bulan (atau langsung tunjukkin kalau cuma ada 1 bulan
+    // yang punya data, kasus sekarang).
+    if (containsWholeWord(text, "bulan")) {
+      return await replyRecapMonthGeneric(channelId, authorId);
+    }
+
+    // "rekap tanggal"/"rekap per tanggal" (TANPA tanggal spesifik nempel) ->
+    // langsung dropdown milih tanggal, skip menu 4-tombol di bawah
+    // (orangnya udah jelas mau rekap tanggal, tinggal milih yang mana).
+    if (containsWholeWord(text, "tanggal")) {
+      return replyRecapDatePicker();
+    }
+
+    // "rekap hari ini"/"rekap hari" -> tetep langsung ke rekap hari ini
+    // kayak sebelumnya (BUKAN nunjukkin menu 4-tombol) - orangnya udah
+    // eksplisit nyebut rentangnya, jadi gak perlu ditanya lagi. Weekday
+    // ("rekap hari senin" dkk) udah ketangkep duluan di paling atas, jadi
+    // "hari" yang nyampe sini beneran polos ("hari ini"/"hari" doang).
+    if (containsWholeWord(text, "hari")) {
+      return await replyTodayRecapSoFar(channelId, authorId);
+    }
+
+    // "rekap" POLOS doang (gak nyebut minggu/bulan/tanggal/hari/nama
+    // hari/nama bulan sama sekali) -> menu 4-tombol - owner minta ini biar
+    // user gak bingung mau ketik apa buat tiap jenis rekap.
     return replyRecapMenu();
   }
 
@@ -326,6 +384,8 @@ function wireDiscordEvents(client) {
         await handleRecapMenuButton(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId === "recap_date_select") {
         await handleRecapDateSelect(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId === "recap_month_select") {
+        await handleRecapMonthSelect(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("watch_confirm:")) {
         await handleWatchConfirmButton(interaction);
       }

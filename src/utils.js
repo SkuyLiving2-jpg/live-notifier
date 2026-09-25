@@ -58,6 +58,19 @@ function formatLongDateWIB(date) {
   return new Intl.DateTimeFormat("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric" }).format(date);
 }
 
+// "September 2026" dari sebuah string bulan "YYYY-MM" - dipake buat rekap
+// PER BULAN (chat/replies.js's replyRecapMonth dkk), sama tujuannya kayak
+// formatLongDateWIB tapi granularitasnya BULAN, bukan tanggal spesifik.
+// Dianchor ke tanggal 1 bulan itu lewat Date.UTC (bukan WIB) - kita cuma
+// butuh bulan+tahunnya doang buat label ini, jadi zona waktu gak ngaruh sama
+// sekali (beda dari formatLongDateWIB yang emang butuh WIB buat nentuin
+// TANGGAL yang bener kalau instant-nya deket tengah malam).
+function formatMonthLabel(monthWIB) {
+  const [year, month] = monthWIB.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, 1));
+  return new Intl.DateTimeFormat("id-ID", { timeZone: "UTC", month: "long", year: "numeric" }).format(date);
+}
+
 // Jam WIB (0-23) dari sebuah Date - default ke sekarang kalau dipanggil
 // tanpa argumen. Satu-satunya tempat yang ngitung ini (dulu ada 3 versi
 // nyaris identik yang ditulis manual: getHourWIB() tanpa argumen buat rekap
@@ -192,6 +205,7 @@ module.exports = {
   getDateWIB,
   formatShortDateWIB,
   formatLongDateWIB,
+  formatMonthLabel,
   getHourWIBOf,
   getTimeOfDayBucket,
   getGreeting,

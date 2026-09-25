@@ -172,6 +172,40 @@ test("getCompletedSessionsSince - filter berdasarkan jendela waktu (dipake buat 
   assert.deepEqual(last30Days.sort(), ["jkt48_10dayago", "jkt48_2dayago"]);
 });
 
+// getCompletedSessionsForMonth/getDistinctSessionMonths dites LANGSUNG
+// (§10's thirty-sixth item, dasar buat "cok rekap september"/"cok rekap
+// bulan" polos di chat/replies.js) - mirip getCompletedSessionsForDate/
+// getEarliestSessionDate di atas tapi granularitasnya BULAN.
+test("getCompletedSessionsForMonth - nge-query bulan SEMBARANG, dan gak nyangkut ke bulan lain yang prefix-nya mirip", () => {
+  const { recordLiveEnded, getCompletedSessionsForMonth } = freshDailyLog();
+
+  const today = getTodayWIB();
+  const [year, month] = today.split("-");
+  recordLiveEnded("Nala", "jkt48_nala", new Date(`${today}T10:00:00+07:00`), new Date(`${today}T11:00:00+07:00`), 5);
+
+  const thisMonth = `${year}-${month}`;
+  const sessions = getCompletedSessionsForMonth(thisMonth);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].username, "jkt48_nala");
+
+  assert.deepEqual(getCompletedSessionsForMonth("1999-01"), [], "bulan tanpa sesi sama sekali balikin array kosong, bukan error");
+});
+
+test("getDistinctSessionMonths - daftar bulan unik yang PUNYA sesi, urut dari paling baru", () => {
+  const { recordLiveEnded, getDistinctSessionMonths } = freshDailyLog();
+
+  assert.deepEqual(getDistinctSessionMonths(), [], "arsip kosong -> array kosong");
+
+  const today = getTodayWIB();
+  const thisMonth = today.slice(0, 7);
+  // Dua sesi di bulan yang SAMA (hari ini) - harus cuma muncul SEKALI di
+  // hasilnya (Set, bukan daftar mentah per-sesi).
+  recordLiveEnded("Nala", "jkt48_nala", new Date(`${today}T09:00:00+07:00`), new Date(`${today}T10:00:00+07:00`), 5);
+  recordLiveEnded("Levi", "jkt48_levi", new Date(`${today}T11:00:00+07:00`), new Date(`${today}T12:00:00+07:00`), 5);
+
+  assert.deepEqual(getDistinctSessionMonths(), [thisMonth]);
+});
+
 test("getEarliestSessionDate - tanggal WIB sesi TERTUA di arsip (null kalau arsip kosong)", () => {
   const { getEarliestSessionDate, recordLiveEnded } = freshDailyLog();
 

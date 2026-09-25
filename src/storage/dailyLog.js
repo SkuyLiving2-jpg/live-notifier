@@ -124,6 +124,22 @@ function getCompletedSessionsSince(daysBack) {
   return loadDailyLog().sessions.filter((s) => s.endedAtUnix >= cutoffUnix);
 }
 
+// Sesi yang UDAH SELESAI dan tanggal WIB pas dia SELESAI itu jatuh di bulan
+// `monthWIB` ("YYYY-MM") - dasar buat rekap PER BULAN (chat/replies.js's
+// replyRecapMonth), mirip getCompletedSessionsForDate di atas tapi
+// granularitasnya bulan, bukan tanggal spesifik.
+function getCompletedSessionsForMonth(monthWIB) {
+  return loadDailyLog().sessions.filter((s) => getDateWIB(new Date(s.endedAtUnix * 1000)).startsWith(`${monthWIB}-`));
+}
+
+// Daftar bulan ("YYYY-MM") yang PUNYA sesi selesai di arsip, urut dari yang
+// paling baru - dasar buat dropdown "cok rekap bulan" polos (chat/replies.js's
+// replyRecapMonthGeneric) pas user gak nyebut bulan/tahun spesifik sama sekali.
+function getDistinctSessionMonths() {
+  const months = new Set(loadDailyLog().sessions.map((s) => getDateWIB(new Date(s.endedAtUnix * 1000)).slice(0, 7)));
+  return [...months].sort().reverse();
+}
+
 // Tanggal WIB (YYYY-MM-DD) sesi TERTUA yang ada di arsip SAAT INI - dipake
 // chat/replies.js's replyRecapRange buat ngasih tau kalau arsipnya belum
 // nyakup rentang yang diminta secara penuh (mis. arsip baru mulai kecatet
@@ -173,6 +189,8 @@ module.exports = {
   getCompletedSessionsToday,
   getCompletedSessionsForDate,
   getCompletedSessionsSince,
+  getCompletedSessionsForMonth,
+  getDistinctSessionMonths,
   getEarliestSessionDate,
   recordLiveEnded,
 };
