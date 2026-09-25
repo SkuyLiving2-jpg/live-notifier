@@ -254,6 +254,22 @@ async function handleWatchConfirmButton(interaction) {
 // dijawab lewat resolveBareMenuChoice (fungsi sama yang dipake shortcut
 // angka). Pilihan 4/9 beda - butuh tau membernya SIAPA, jadi alih-alih nyuruh
 // ngetik nama manual, langsung dikasih dropdown isinya member yang lagi live.
+//
+// SEMUA cabang di sini pake interaction.update() (EDIT pesan menu yang
+// tombolnya nempel), BUKAN interaction.reply() (pesan BARU) - owner ngeluh
+// tiap kali mencet tombol yang beda-beda di menu 9-opsi, jawabannya numpuk
+// jadi pesan baru satu-satu, sama persis keluhan yang dulu diomongin soal
+// tabel rekap (lihat handleRecapNavButton). Konsekuensinya: langkah dropdown
+// milih member/gifter (opsi 4/9, di bawah) yang DULU ephemeral (cuma keliatan
+// orang yang mimic) sekarang ikutan jadi publik juga - gak ada cara nge-edit
+// pesan publik jadi ephemeral, dan mengedit pesan yang sama itu justru
+// intinya di sini, bukan bug. Opsi 1/2/3/5/6/7/9(kosong)/4(kosong) balikin
+// STRING polos (gak ada tombol sendiri) - buildFallbackMenuComponents()
+// ditempelin ULANG di bawahnya biar user bisa lanjut mencet opsi LAIN dari
+// pesan yang sama, gak perlu manggil ulang "cok bantuan". Opsi 8 (rekap hari
+// ini) BEDA - baliknya udah bawa tombol navigasi rekap sendiri (Maju/Mundur/
+// Tutup rekap/Cari member), jadi dipake apa adanya tanpa ditempelin menu lagi
+// (nge-gabung 2 sistem tombol beda konteks di 1 pesan cuma bikin bingung).
 async function handleFallbackMenuButton(interaction) {
   const optionId = interaction.customId.split(":")[1];
 
@@ -264,11 +280,7 @@ async function handleFallbackMenuButton(interaction) {
   if (optionId === "4") {
     const sorted = getSortedActiveLives();
     if (sorted.length === 0) {
-      // PUBLIK (bukan ephemeral) - ini jawaban FINAL (gak ada dropdown lanjutan
-      // buat dipilih), sama kayak balesan "cok siapa yang live" biasa lewat
-      // teks (replyListLive), jadi visibility-nya juga harus konsisten sama itu,
-      // bukan cuma keliatan orang yang mimic tombolnya doang.
-      await interaction.reply(safeReplyOptions(replyListLive()));
+      await interaction.update(safeReplyOptions({ content: replyListLive(), components: buildFallbackMenuComponents() }));
       return;
     }
 
@@ -277,24 +289,18 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    // Ephemeral (cuma keliatan yang mimic tombolnya) - ini baru langkah
-    // milih, belum jawaban final, jadi gak perlu numpuk di channel publik.
-    await interaction.reply(
-      safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickCloseRow()], ephemeral: true }),
-    );
+    await interaction.update(safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickCloseRow()] }));
     return;
   }
 
   if (optionId === "9") {
     const sorted = getSortedGifterSnapshotMembers();
     if (sorted.length === 0) {
-      // PUBLIK juga, sama alasannya kayak opsi 4 - ini jawaban final, bukan
-      // langkah milih, jadi konsisten sama balesan "cok gifter <nama>" biasa
-      // yang juga publik pas datanya kosong.
-      await interaction.reply(
-        safeReplyOptions(
-          'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
-        ),
+      await interaction.update(
+        safeReplyOptions({
+          content: 'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
+          components: buildFallbackMenuComponents(),
+        }),
       );
       return;
     }
@@ -304,9 +310,7 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.reply(
-      safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickCloseRow()], ephemeral: true }),
-    );
+    await interaction.update(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickCloseRow()] }));
     return;
   }
 
@@ -316,20 +320,29 @@ async function handleFallbackMenuButton(interaction) {
   // tombol "Tutup", yang nutup pertanyaan "mau nonton?" SETELAH member
   // kepilih - ini nutup langkah SEBELUM sempet milih sama sekali). customId-nya
   // gak bawa optionId (4 vs 9) soalnya aksinya sama persis buat dua-duanya -
-  // edit pesan ephemeral ini sendiri jadi teks "dibatalin", ilangin dropdown.
+  // edit pesan ini sendiri jadi teks "dibatalin", ilangin dropdown.
   if (optionId === "close") {
     await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
     return;
   }
 
   const reply = await resolveBareMenuChoice(optionId, interaction.channelId, interaction.user.id);
-  if (reply) await interaction.reply(safeReplyOptions(reply));
+  if (!reply) return;
+
+  if (typeof reply === "string") {
+    await interaction.update(safeReplyOptions({ content: reply, components: buildFallbackMenuComponents() }));
+    return;
+  }
+
+  // Opsi 8 (rekap hari ini) - udah bawa tombol navigasi sendiri, dipake
+  // apa adanya (lihat komen di atas function ini).
+  await interaction.update(safeReplyOptions(reply));
 }
 
 // Diklik abis milih member dari dropdown yang dimunculin handleFallbackMenuButton.
-// Jawaban FINAL ini sengaja PUBLIK (bukan ephemeral) - informasinya kayak
-// "siapa yang live"/"top gifter" itu kepake bareng, konsisten sama balesan
-// command teks yang emang keliatan semua orang di channel.
+// Sama kayak handleFallbackMenuButton di atas, pake interaction.update() buat
+// nerusin ngedit PESAN MENU yang SAMA (yang tadinya udah diedit jadi dropdown),
+// bukan interaction.reply() yang bakal numpuk pesan baru lagi.
 async function handleFallbackMemberSelect(interaction) {
   const optionId = interaction.customId.split(":")[1];
   const username = interaction.values[0];
@@ -341,14 +354,14 @@ async function handleFallbackMemberSelect(interaction) {
     // nyangkut ke member lain yang kebetulan nama depannya mirip.
     const entry = activeLives.get(username);
     const reply = entry ? startWatchConfirmForEntry(entry, interaction.channelId, interaction.user.id) : replyMemberNotFound(username);
-    await interaction.reply(safeReplyOptions(reply));
+    await interaction.update(safeReplyOptions(reply));
     return;
   }
 
   // username di sini dijamin ada di gifter-snapshot.json - langsung dari
   // pilihan dropdown yang dibangun getSortedGifterSnapshotMembers(), bukan
   // dari activeLives kayak sebelumnya.
-  await interaction.reply(safeReplyOptions(replyGifterSnapshotByUsername(username)));
+  await interaction.update(safeReplyOptions(replyGifterSnapshotByUsername(username)));
 }
 
 module.exports = {
