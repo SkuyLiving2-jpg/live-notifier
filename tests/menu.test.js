@@ -221,6 +221,11 @@ test("handleFallbackMenuButton - opsi 4 (cek member) balikin dropdown kalau ada 
     await handleFallbackMenuButton(withDataInteraction);
     assert.match(withDataInteraction.calls[0].content, /Mau cek member yang mana/);
     assert.ok(withDataInteraction.calls[0].components, "harus ada dropdown select menu");
+    // Baris ke-2 harus tombol "Tutup" - owner ngeluh gak ada cara batalin
+    // kalau salah pencet opsi 4 dan gak jadi mau milih member.
+    const closeRow = withDataInteraction.calls[0].components[1];
+    assert.equal(closeRow.components[0].data.custom_id, "fallback_menu:close");
+    assert.equal(closeRow.components[0].data.label, "Tutup");
   } finally {
     activeLives.delete("jkt48_dropdowntest");
   }
@@ -235,6 +240,16 @@ test("handleFallbackMenuButton - opsi 9 (top gifter) balikin dropdown kalau ada 
   const withDataInteraction = fakeInteraction({ customId: "fallback_menu:9" });
   await handleFallbackMenuButton(withDataInteraction);
   assert.match(withDataInteraction.calls[0].content, /Mau cek top gifter member yang mana/);
+  const closeRow = withDataInteraction.calls[0].components[1];
+  assert.equal(closeRow.components[0].data.custom_id, "fallback_menu:close");
+});
+
+test("handleFallbackMenuButton - tombol 'Tutup' di bawah dropdown 4/9 EDIT pesan ephemeral jadi 'dibatalin', ngilangin dropdown-nya", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_menu:close" });
+  await handleFallbackMenuButton(interaction);
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
+  assert.equal(interaction.updates[0].content, "Oke, dibatalin.");
+  assert.deepEqual(interaction.updates[0].components, []);
 });
 
 test("handleFallbackMenuButton - opsi bare (mis. 1) langsung diteruskan ke resolveBareMenuChoice", async () => {

@@ -41,6 +41,16 @@ function buildFallbackMenuComponents() {
   return [row1, row2];
 }
 
+// Baris tombol "Tutup" yang nempel DI BAWAH dropdown pilih member/gifter
+// (opsi 4/9 di handleFallbackMenuButton) - StringSelectMenu harus sendirian
+// di baris-nya (gak bisa digabung sama tombol di baris yang sama), jadi ini
+// baris KEDUA yang nempel bareng dropdown-nya. customId "fallback_menu:close"
+// dibaca di handleFallbackMenuButton (dispatcher yang sama kayak tombol menu
+// 1-9), bukan handler terpisah.
+function buildFallbackPickCloseRow() {
+  return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("fallback_menu:close").setLabel("Tutup").setStyle(ButtonStyle.Danger));
+}
+
 // Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
 // pertanyaan yang udah dikenali - dikasih menu daripada bot diem aja.
 //
@@ -269,7 +279,9 @@ async function handleFallbackMenuButton(interaction) {
     const row = new ActionRowBuilder().addComponents(selectMenu);
     // Ephemeral (cuma keliatan yang mimic tombolnya) - ini baru langkah
     // milih, belum jawaban final, jadi gak perlu numpuk di channel publik.
-    await interaction.reply(safeReplyOptions({ content: "Mau cek member yang mana?", components: [row], ephemeral: true }));
+    await interaction.reply(
+      safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickCloseRow()], ephemeral: true }),
+    );
     return;
   }
 
@@ -292,7 +304,21 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.reply(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row], ephemeral: true }));
+    await interaction.reply(
+      safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickCloseRow()], ephemeral: true }),
+    );
+    return;
+  }
+
+  // Tombol "Tutup" yang nempel di BAWAH dropdown milih member/gifter di atas
+  // (opsi 4/9) - owner ngeluh gak ada cara buat batalin kalau salah pencet
+  // opsi 4/9 dan gak jadi mau milih siapa-siapa (beda dari watch-confirm's
+  // tombol "Tutup", yang nutup pertanyaan "mau nonton?" SETELAH member
+  // kepilih - ini nutup langkah SEBELUM sempet milih sama sekali). customId-nya
+  // gak bawa optionId (4 vs 9) soalnya aksinya sama persis buat dua-duanya -
+  // edit pesan ephemeral ini sendiri jadi teks "dibatalin", ilangin dropdown.
+  if (optionId === "close") {
+    await interaction.update(safeReplyOptions({ content: "Oke, dibatalin.", components: [] }));
     return;
   }
 
