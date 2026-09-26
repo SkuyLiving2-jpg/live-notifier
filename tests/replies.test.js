@@ -46,6 +46,11 @@ const {
   handleRemovePriority,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapMemberModalSubmit,
+  tryHandleRecapPageShortcut,
+  replyRecapMember,
+  extractRecapMemberFragment,
+  resolveRecapMember,
   handleRecapMenuButton,
   handleRecapDateSelect,
 } = require("../src/chat/replies");
@@ -1305,11 +1310,18 @@ test("buildRecapDateSelectRow - opsi yang cocok sama selectedDate ditandain defa
   assert.ok(others.every((o) => !o.default));
 });
 
-test("replyRecapMenu - 4 tombol pilihan rekap + 1 tombol Tutup, dengan customId recap_menu:<today|week|month|date> + recap_nav:close", () => {
+test('replyRecapMenu - 5 tombol pilihan rekap (baris 1, termasuk "Rekap member") + tombol Tutup sendirian di baris 2 (batas 5 tombol/baris)', () => {
   const reply = replyRecapMenu();
   assert.equal(reply.content, "Mau rekap yang mana, cok?");
-  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
-  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
+  const customIds = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_menu:member", "recap_nav:close"]);
+  assert.equal(reply.components.length, 2);
+  assert.equal(reply.components[0].components.length, 5);
+  assert.deepEqual(
+    reply.components[1].components.map((c) => c.data.custom_id),
+    ["recap_nav:close"],
+  );
+  assert.equal(reply.components[0].components[4].data.label, "Rekap member");
 });
 
 test("replyRecapDatePicker - dropdown tanggal + tombol tutup, belum ada tabel apa-apa", () => {
@@ -1522,8 +1534,8 @@ test("replyRecapMonth - bulan yang diminta kosong DAN cuma 1 bulan yang punya da
   const reply = await fresh.replyRecapMonth(thisMonth, "c-monthempty", "u-monthempty");
   assert.match(reply.content, /Cok, belum ada live yang kecatet buat bulan/);
   assert.match(reply.content, /Mau rekap yang mana, cok\?/);
-  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
-  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
+  const customIds = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_menu:member", "recap_nav:close"]);
 });
 
 test("replyRecapMonth - bulan yang diminta kosong TAPI ada bulan LAIN yang punya data -> dropdown bulan lain, bukan menu 4-opsi", async () => {
@@ -1599,8 +1611,8 @@ test("replyRecapSpecificDate - tanggal yang gak ada datanya (sebelum bot mulai/e
   const reply = await fresh.replyRecapSpecificDate("2000-01-01", "c-specdateempty", "u-specdateempty");
   assert.match(reply.content, /Cok, gak ada data rekap buat tanggal/);
   assert.match(reply.content, /Mau rekap yang mana, cok\?/);
-  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
-  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
+  const customIds = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_menu:member", "recap_nav:close"]);
 });
 
 test("replyRecapWeekdayPicker - hari yang beneran ada tanggalnya di rentang yang kecatet -> dropdown tanggal buat hari itu + tombol tutup", async () => {
@@ -1845,4 +1857,201 @@ test("handleRecapDateSelect - milih tanggal LAIN nge-clear pendingRecapPage tang
 
   const afterSecondPick = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
   assert.equal(afterSecondPick, null, "pendingRecapPage tanggal PERTAMA harus udah kehapus, gak boleh nyangkut ke tanggal kedua yang kosong");
+});
+
+// ==== §10's forty-eighth item: rekap PER MEMBER ("cok rekap <nama>" + tombol "Rekap member") ====
+//
+// Semua test di bawah numpang di state daily-log.json/live-count.json/
+// activeLives bareng test lain di file ini, jadi tiap test dikasih nama member
+// yang BENERAN unik (pencocokan nama itu fuzzy-awalan - jangan ada nama yang
+// jadi awalan nama lain di sini). Sesi dicatet lewat recordLiveEnded beneran.
+function recordMemberSessions(name, username, count, { gapHours = 1 } = {}) {
+  const nowUnix = Math.floor(Date.now() / 1000);
+  for (let i = 0; i < count; i++) {
+    const startUnix = nowUnix - (i + 1) * gapHours * 3600;
+    recordLiveEnded(name, username, new Date(startUnix * 1000), new Date((startUnix + 1800) * 1000), 10);
+  }
+  recordLiveCompleted(username, name);
+}
+
+function allCustomIds(reply) {
+  return reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+}
+
+test("extractRecapMemberFragment - satu kata nama (kata pelengkap dibuang) -> nama; selain itu null", () => {
+  assert.equal(extractRecapMemberFragment("cok rekap aralie"), "aralie");
+  assert.equal(extractRecapMemberFragment("rekap Erine"), "erine");
+  assert.equal(extractRecapMemberFragment("cok rekap aralie dong"), "aralie");
+  assert.equal(extractRecapMemberFragment("cok rekap member aralie"), "aralie");
+  assert.equal(extractRecapMemberFragment("cok rekap kimmy jkt48 live"), "kimmy");
+  // bukan nama member -> null (jatuh ke menu biasa)
+  assert.equal(extractRecapMemberFragment("cok rekap"), null);
+  assert.equal(extractRecapMemberFragment("cok rekap member"), null);
+  assert.equal(extractRecapMemberFragment("cok rekap dong banget kemarin"), null);
+  assert.equal(extractRecapMemberFragment("cok rekap a"), null);
+  assert.equal(extractRecapMemberFragment("halo apa kabar"), null);
+});
+
+test("resolveRecapMember - ketemu di live-count / cuma ada di activeLives (live PERTAMA) / ambigu / exact menang / gak ada", () => {
+  recordLiveCompleted("jkt48_mrecalpha", "Mrecalpha JKT48");
+  assert.deepEqual(resolveRecapMember("mrecalpha"), { status: "ok", username: "jkt48_mrecalpha", name: "Mrecalpha JKT48" });
+  assert.equal(resolveRecapMember("MRECALPHA JKT48").username, "jkt48_mrecalpha"); // huruf besar + kata JKT48 gak ngaruh
+
+  // baru live pertama kali: belum masuk live-count (baru dicatet pas SELESAI), tapi lagi live sekarang
+  activeLives.set("jkt48_mrecfirst", { name: "Mrecfirst JKT48", username: "jkt48_mrecfirst", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    assert.equal(resolveRecapMember("mrecfirst").username, "jkt48_mrecfirst");
+  } finally {
+    activeLives.delete("jkt48_mrecfirst");
+  }
+
+  recordLiveCompleted("jkt48_mrecgamone", "Mrecgamone JKT48");
+  recordLiveCompleted("jkt48_mrecgamtwo", "Mrecgamtwo JKT48");
+  const ambiguous = resolveRecapMember("mrecgam");
+  assert.equal(ambiguous.status, "ambiguous");
+  assert.deepEqual(ambiguous.names, ["Mrecgamone JKT48", "Mrecgamtwo JKT48"]);
+
+  // nama depan yang PERSIS sama menang walau nama lain juga cocok awalan
+  recordLiveCompleted("jkt48_mrecexa", "Mrecexa JKT48");
+  recordLiveCompleted("jkt48_mrecexactly", "Mrecexactly JKT48");
+  assert.equal(resolveRecapMember("mrecexa").username, "jkt48_mrecexa");
+
+  assert.deepEqual(resolveRecapMember("member-yang-gak-pernah-ada"), { status: "none" });
+  assert.deepEqual(resolveRecapMember(""), { status: "none" });
+});
+
+test("replyRecapMember - tabel HANYA sesi member itu (member lain gak ikut), ringkasan bener, tombol Tutup doang (tanpa 'Cari member') kalau 1 halaman", async () => {
+  recordMemberSessions("Mrecbeta JKT48", "jkt48_mrecbeta", 3);
+  recordMemberSessions("Mrecother JKT48", "jkt48_mrecother", 2);
+
+  const reply = await replyRecapMember("mrecbeta", "c-mrec1", "u-mrec1");
+  assert.match(reply.content, /📋 \*\*Rekap live Mrecbeta JKT48\*\*/);
+  assert.match(reply.content, /Total sesi: 3x \(3 udah selesai, 0 masih live\)/);
+  assert.match(reply.content, /Total durasi: 1j 30m \| Rata-rata: 30m \| Paling lama: 30m/);
+  assert.match(reply.content, /35 hari terakhir/);
+  assert.equal((reply.content.match(/Mrecbeta JKT48 \|/g) || []).length, 3, "3 baris tabel buat member ini");
+  assert.doesNotMatch(reply.content, /Mrecother/);
+  assert.match(reply.content, /Halaman 1\/1/);
+
+  const ids = allCustomIds(reply);
+  assert.deepEqual(ids, ["recap_nav:close"]);
+  assert.ok(!ids.some((id) => id.startsWith("recap_nav:search")), "tombol 'Cari member' harus HILANG di rekap member");
+});
+
+test("replyRecapMember - lebih dari 20 sesi: Maju + Tutup + Lompat halaman (tanpa Cari member), navigasi customId bawa member, halaman 2 punya Mundur", async () => {
+  recordMemberSessions("Mrecpaged JKT48", "jkt48_mrecpaged", 25);
+
+  const reply = await replyRecapMember("mrecpaged", "c-mrec2", "u-mrec2");
+  assert.match(reply.content, /Halaman 1\/2/);
+  const ids = allCustomIds(reply);
+  assert.deepEqual(ids, ["recap_nav:next:ujkt48_mrecpaged:0", "recap_nav:close", "recap_nav:jump:ujkt48_mrecpaged:0"]);
+  assert.equal(reply.components[0].components[0].data.label, "Maju ▶");
+
+  // klik "Maju" - pake customId ASLI dari tombolnya (roundtrip encode/decode rentang member)
+  const next = fakeInteraction({ customId: ids[0], channelId: "c-mrec2", authorId: "u-mrec2" });
+  await handleRecapNavButton(next);
+  assert.equal(next.calls.length, 0, "edit di tempat, bukan pesan baru");
+  const page2 = next.updates[0];
+  assert.match(page2.content, /Halaman 2\/2/);
+  assert.equal((page2.content.match(/Mrecpaged JKT48 \|/g) || []).length, 5, "sisa 5 sesi di halaman 2");
+  assert.deepEqual(allCustomIds(page2), ["recap_nav:prev:ujkt48_mrecpaged:1", "recap_nav:close", "recap_nav:jump:ujkt48_mrecpaged:1"]);
+
+  // navigasi teks "mundur" juga jalan (pendingRecapPage nyimpen rentang member)
+  const back = await tryHandleRecapPageShortcut("mundur", "c-mrec2", "u-mrec2");
+  assert.match(back.content, /Halaman 1\/2/);
+});
+
+test("replyRecapMember - member yang LAGI LIVE ikut muncul di tabel (status Live), dihitung di 'masih live' tapi bukan di total durasi", async () => {
+  recordMemberSessions("Mreclive JKT48", "jkt48_mreclive", 1);
+  activeLives.set("jkt48_mreclive", { name: "Mreclive JKT48", username: "jkt48_mreclive", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    const reply = await replyRecapMember("mreclive", "c-mrec3", "u-mrec3");
+    assert.match(reply.content, /Total sesi: 2x \(1 udah selesai, 1 masih live\)/);
+    assert.match(reply.content, /Live/);
+    assert.match(reply.content, /Total durasi: 30m/);
+  } finally {
+    activeLives.delete("jkt48_mreclive");
+  }
+});
+
+test("replyRecapMember - nama yang gak dikenal bot: member JKT48 asli yang belum pernah live -> 'belum pernah live ... buat direkap' + menu rekap", async () => {
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({ jkt48_mrecnever: { name: "Mrecnever JKT48" } });
+  try {
+    const reply = await replyRecapMember("mrecnever", "c-mrec4", "u-mrec4");
+    assert.match(reply.content, /\*\*Mrecnever JKT48\*\* belum pernah live.*buat direkap/);
+    assert.match(reply.content, /Mau rekap yang mana, cok\?/);
+    assert.ok(allCustomIds(reply).includes("recap_menu:member"), "menu rekap ikut nempel biar bisa coba lagi");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyRecapMember - nama yang GAK ADA di IDN -> 'gak nemu member JKT48', IDN gagal -> pesan jujur, ambigu -> daftar nama; semuanya + menu", async () => {
+  const original = global.fetch;
+  try {
+    global.fetch = fakeIdnFetch({});
+    const unknown = await replyRecapMember("namangawurbanget", "c-mrec5", "u-mrec5");
+    assert.match(unknown.content, /gak nemu member JKT48 bernama "namangawurbanget"/);
+    assert.ok(unknown.components.length === 2);
+
+    global.fetch = async () => {
+      throw new Error("network down (simulasi)");
+    };
+    const down = await replyRecapMember("namangawurbanget", "c-mrec5", "u-mrec5");
+    assert.match(down.content, /gak bisa ngecek ke IDN/);
+
+    global.fetch = async () => {
+      throw new Error("ambigu gak boleh nyentuh network");
+    };
+    const ambiguous = await replyRecapMember("mrecgam", "c-mrec5", "u-mrec5");
+    assert.match(ambiguous.content, /ada beberapa member yang cocok sama "mrecgam": Mrecgamone JKT48, Mrecgamtwo JKT48/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyRecapMember - member pernah live tapi gak ada sesi yang masih kesimpen -> penjelasan (bukan tabel kosong) + total live-nya + menu", async () => {
+  recordLiveCompleted("jkt48_mrecold", "Mrecold JKT48");
+  const reply = await replyRecapMember("mrecold", "c-mrec6", "u-mrec6");
+  assert.match(reply.content, /\*\*Mrecold JKT48\*\* gak punya sesi live yang masih kesimpen.*total 1x live/);
+  assert.match(reply.content, /35 hari terakhir/);
+  assert.doesNotMatch(reply.content, /```/);
+});
+
+test("replyRecapMember - nge-clear pendingRecapPage lama biar 'y' nyasar dari rekap sebelumnya gak nerusin", async () => {
+  recordMemberSessions("Mrecclear JKT48", "jkt48_mrecclear", 25);
+  await replyRecapMember("mrecclear", "c-mrec7", "u-mrec7"); // pending halaman 1/2
+  await replyRecapMember("member-yang-gak-pernah-ada", "c-mrec7", "u-mrec7"); // hasil gagal
+  assert.equal(await tryHandleRecapPageShortcut("y", "c-mrec7", "u-mrec7"), null);
+});
+
+test("replyRecapMenu tombol 'Rekap member' (recap_menu:member) -> munculin modal recap_member_modal:x, BUKAN update/reply", async () => {
+  const interaction = fakeInteraction({ customId: "recap_menu:member", channelId: "c-mrec8", authorId: "u-mrec8" });
+  await handleRecapMenuButton(interaction);
+  assert.equal(interaction.modals.length, 1);
+  assert.equal(interaction.modals[0].data.custom_id, "recap_member_modal:x");
+  assert.equal(interaction.updates.length, 0);
+  assert.equal(interaction.calls.length, 0);
+});
+
+test("handleRecapMemberModalSubmit - nama valid -> NGE-EDIT pesan menu jadi tabel rekap member; nama gagal -> jadi pesan gagal + menu lagi", async () => {
+  recordMemberSessions("Mrecmodal JKT48", "jkt48_mrecmodal", 2);
+
+  const ok = fakeInteraction({ customId: "recap_member_modal:x", fieldValue: "Mrecmodal", channelId: "c-mrec9", authorId: "u-mrec9" });
+  await handleRecapMemberModalSubmit(ok);
+  assert.equal(ok.calls.length, 0, "gak boleh bikin pesan baru");
+  assert.match(ok.updates[0].content, /Rekap live Mrecmodal JKT48/);
+  assert.deepEqual(allCustomIds(ok.updates[0]), ["recap_nav:close"]);
+
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({});
+  try {
+    const bad = fakeInteraction({ customId: "recap_member_modal:x", fieldValue: "   ", channelId: "c-mrec9", authorId: "u-mrec9" });
+    await handleRecapMemberModalSubmit(bad);
+    assert.match(bad.updates[0].content, /ketik nama membernya yang jelas/);
+    assert.ok(allCustomIds(bad.updates[0]).includes("recap_menu:member"));
+  } finally {
+    global.fetch = original;
+  }
 });

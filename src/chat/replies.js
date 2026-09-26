@@ -18,9 +18,10 @@ const {
   getDistinctSessionMonths,
   getEarliestSessionDate,
   fetchExternalTodayLiveHistory,
+  SESSION_RETENTION_DAYS,
 } = require("../storage/dailyLog");
 const { findDurationHistoryByNameFragment, loadDurationHistory, getAverageDuration, getPreviousMaxDuration } = require("../storage/durationHistory");
-const { loadLiveCount, findLiveCountByNameFragment, getLiveCountLeaderboard } = require("../storage/liveCount");
+const { loadLiveCount, findLiveCountByNameFragment, searchLiveCountByNameFragment, getLiveCountLeaderboard } = require("../storage/liveCount");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
@@ -258,6 +259,7 @@ function replyHelp() {
     '- "cok bandingin <nama member> dan <nama member>" (atau cukup "cok <nama> dan <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat dicariin lewat dropdown',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
+    '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',
     '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
     '- "cok daftar prioritas" - lihat member prioritas',
     '- "cok ingetin <nama member>" - kamu di-tag pribadi kalau dia mulai live',
@@ -566,7 +568,26 @@ const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 // nama bulan/dropdown "rekap bulan" polos) - lihat getMonthSessionsForRecap
 // buat kenapa bulan BERJALAN ikut digabung sama activeLives juga, sama
 // alasannya kayak tanggal hari ini.
+// Rekap PER MEMBER: SEMUA sesi yang masih kesimpen di arsip (SESSION_RETENTION_DAYS
+// hari terakhir) buat satu username + yang lagi live sekarang.
+function getMemberSessionsForRecap(username) {
+  const completed = getCompletedSessionsSince(SESSION_RETENTION_DAYS).filter((s) => s.username === username);
+  const ongoing = getOngoingSessionsForRecap().filter((s) => s.username === username);
+  return [...completed, ...ongoing];
+}
+
+// Rentang rekap PER MEMBER (fitur "cok rekap <nama member>"/tombol "Rekap
+// member") ditandai string berawalan "@" + username ("@jkt48_aralie"). Awalan
+// itu SENGAJA - username bisa aja panjangnya pas 7 atau 10 karakter, sama
+// kayak panjang string bulan ("YYYY-MM") / tanggal ("YYYY-MM-DD") yang dipake
+// buat ngebedain jenis rentang lain di sini, jadi tanpa penanda eksplisit ini
+// bisa salah kebaca jadi bulan/tanggal. Selalu dicek DULUAN sebelum cek panjang.
+function isMemberRange(rangeDays) {
+  return typeof rangeDays === "string" && rangeDays.startsWith("@");
+}
+
 function getSessionsForRange(rangeDays) {
+  if (isMemberRange(rangeDays)) return getMemberSessionsForRecap(rangeDays.slice(1));
   if (rangeDays == null || rangeDays === getTodayWIB()) return getTodaySessionsForRecap();
   if (typeof rangeDays === "string") {
     if (rangeDays.length === 7) return getMonthSessionsForRecap(rangeDays);
@@ -596,11 +617,13 @@ function getSessionsForRange(rangeDays) {
 // "YYYY-MM" (dibedain dari PANJANG string-nya di situ - lihat komen di sana).
 function encodeRecapRange(rangeDays) {
   if (rangeDays == null) return "today";
+  if (isMemberRange(rangeDays)) return `u${rangeDays.slice(1)}`; // "@jkt48_x" -> "ujkt48_x" (awalan "u" = user/member)
   if (typeof rangeDays === "string") return rangeDays.length === 7 ? `m${rangeDays}` : `d${rangeDays}`;
   return String(rangeDays);
 }
 function decodeRecapRange(range) {
   if (range === "today") return null;
+  if (range.startsWith("u")) return `@${range.slice(1)}`;
   if (range.startsWith("d") || range.startsWith("m")) return range.slice(1);
   return Number(range);
 }
@@ -753,7 +776,8 @@ function buildCloseOnlyRow() {
 // halaman" kalau cuma ada 1 halaman buat dilompatin).
 function buildRecapNavComponents(page, totalPages, rangeDays) {
   const range = encodeRecapRange(rangeDays);
-  const isMonthRange = typeof rangeDays === "string" && rangeDays.length === 7;
+  const memberRange = isMemberRange(rangeDays);
+  const isMonthRange = typeof rangeDays === "string" && !memberRange && rangeDays.length === 7;
   const buttons = [];
   if (page < totalPages - 1) {
     buttons.push(new ButtonBuilder().setCustomId(`recap_nav:next:${range}:${page}`).setLabel("Maju ▶").setStyle(ButtonStyle.Primary));
@@ -762,13 +786,17 @@ function buildRecapNavComponents(page, totalPages, rangeDays) {
     buttons.push(new ButtonBuilder().setCustomId(`recap_nav:prev:${range}:${page}`).setLabel("◀ Mundur").setStyle(ButtonStyle.Secondary));
   }
   buttons.push(new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger));
-  buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
-  if ((typeof rangeDays === "number" || isMonthRange) && totalPages > 1) {
+  // Rekap PER MEMBER (§10's forty-eighth item) cuma isinya satu orang, jadi
+  // "🔍 Cari member" gak ada gunanya di situ (owner minta dihilangkan).
+  if (!memberRange) {
+    buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
+  }
+  if ((typeof rangeDays === "number" || isMonthRange || memberRange) && totalPages > 1) {
     buttons.push(new ButtonBuilder().setCustomId(`recap_nav:jump:${range}:${page}`).setLabel("🔢 Lompat halaman").setStyle(ButtonStyle.Secondary));
   }
 
   const rows = [];
-  if (typeof rangeDays === "string") {
+  if (typeof rangeDays === "string" && !memberRange) {
     if (isMonthRange) {
       rows.push(buildRecapMonthSelectRow(getAvailableRecapMonths(), rangeDays));
     } else {
@@ -982,9 +1010,14 @@ function replyRecapMenu() {
     new ButtonBuilder().setCustomId("recap_menu:week").setLabel("Rekap minggu ini").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("recap_menu:month").setLabel("Rekap bulan ini").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("recap_menu:date").setLabel("Rekap per tanggal").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("recap_menu:member").setLabel("Rekap member").setStyle(ButtonStyle.Success),
+  );
+  // Maksimal 5 tombol per baris Discord - "Rekap member" (§10's forty-eighth
+  // item) jadi tombol ke-5, jadi "Tutup" pindah ke baris sendiri.
+  const closeRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
   );
-  return { content: "Mau rekap yang mana, cok?", components: [row] };
+  return { content: "Mau rekap yang mana, cok?", components: [row, closeRow] };
 }
 
 // Diklik dari salah satu tombol replyRecapMenu() bikin (customId
@@ -1002,6 +1035,14 @@ async function handleRecapMenuButton(interaction) {
 
   if (choice === "date") {
     await interaction.update(safeReplyOptions(buildRecapDatePickerBlock()));
+    return;
+  }
+
+  // "Rekap member" butuh nama member dulu - modal (input teks), bukan langsung
+  // balesan. Submit-nya ditangani handleRecapMemberModalSubmit (ngedit pesan
+  // menu ini jadi tabel rekap member, sama pola in-place-edit tombol lain).
+  if (choice === "member") {
+    await interaction.showModal(buildRecapMemberModal());
     return;
   }
 
@@ -1160,6 +1201,166 @@ async function handleRecapSearchModalSubmit(interaction) {
 // buildRecapTablePage sendiri udah nge-clamp ke totalPages-1 apapun angka
 // yang dikasih, jadi angka gede itu otomatis kepotong pas ke halaman
 // terakhir yang beneran ada - gak perlu tau totalPages duluan di sini.
+// ==== Rekap PER MEMBER (§10's forty-eighth item): "cok rekap <nama member>"
+// dan tombol "Rekap member" di menu "cok rekap" ====
+
+function buildRecapMemberModal() {
+  return new ModalBuilder()
+    .setCustomId("recap_member_modal:x")
+    .setTitle("Rekap member")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("member_name")
+          .setLabel("Nama member")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("misal: Aralie")
+          .setRequired(true),
+      ),
+    );
+}
+
+// Kata-kata pelengkap yang wajar nempel di "rekap <nama>" tapi BUKAN bagian
+// dari nama ("rekap aralie dong", "rekap member aralie", "rekap aralie live").
+const RECAP_MEMBER_FILLER_WORDS = new Set([
+  "member",
+  "live",
+  "nya",
+  "dong",
+  "donk",
+  "deh",
+  "aja",
+  "saja",
+  "si",
+  "kak",
+  "ka",
+  "kk",
+  "tolong",
+  "tlg",
+  "ya",
+  "yah",
+  "dari",
+  "punya",
+  "milik",
+  "jkt48",
+  "cok",
+  "lah",
+  "sih",
+  "pls",
+  "plis",
+  "please",
+  "bang",
+  "bro",
+]);
+
+// Ngambil nama member dari teks "rekap ..." yang UDAH gak nyebut hari/minggu/
+// bulan/tanggal/nama bulan/nama hari (semuanya ditangkep duluan di router.js).
+// Sengaja ketat: harus tepat SATU kata nama (abis kata pelengkap dibuang) -
+// kalimat panjang/gak jelas ("cok rekap dong banget kemarin") tetep jatuh ke
+// menu biasa, bukan disangka nama member. null = bukan permintaan rekap member.
+function extractRecapMemberFragment(text) {
+  const match = (text || "").toLowerCase().match(/\brekap\s+(.+)/);
+  if (!match) return null;
+  const tokens = match[1]
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .filter((t) => !RECAP_MEMBER_FILLER_WORDS.has(t));
+  if (tokens.length !== 1 || tokens[0].length < 2) return null;
+  return tokens[0];
+}
+
+function firstNameOf(name) {
+  return (name || "").split(/[\s|]+/)[0].toLowerCase();
+}
+
+// Nyari member dari live-count.json (pernah SELESAI live semenjak bot jalan)
+// DAN activeLives (lagi live sekarang - bisa aja live PERTAMA-nya, belum masuk
+// live-count sampe selesai). Kalau ada beberapa yang cocok, nama yang PERSIS
+// sama nama depan menang; kalau tetep >1, ambigu (user disuruh lebih spesifik
+// - jangan asal pilih yang pertama). "none" -> pemanggil nanya ke IDN lewat
+// describeMissingMember (belum pernah live vs gak ada sama sekali).
+function resolveRecapMember(fragment) {
+  const needle = normalizeMemberFragment(fragment);
+  if (!needle) return { status: "none" };
+
+  const candidates = new Map();
+  for (const m of searchLiveCountByNameFragment(needle)) candidates.set(m.username, { username: m.username, name: m.name });
+  for (const [username, entry] of activeLives) {
+    if (!candidates.has(username) && entry.name && matchesNameFragment(needle, firstNameOf(entry.name))) {
+      candidates.set(username, { username, name: entry.name });
+    }
+  }
+
+  const all = [...candidates.values()];
+  if (all.length === 0) return { status: "none" };
+  if (all.length === 1) return { status: "ok", ...all[0] };
+  const exact = all.filter((c) => firstNameOf(c.name) === needle);
+  if (exact.length === 1) return { status: "ok", ...exact[0] };
+  return { status: "ambiguous", names: all.map((c) => c.name).sort() };
+}
+
+function withRecapMenu(message) {
+  const menu = replyRecapMenu();
+  return { content: `${message}\n\n${menu.content}`, components: menu.components };
+}
+
+// Tabel rekap live SATU member (semua sesi yang masih kesimpen di arsip) -
+// tabel + tombol Maju/Mundur/Tutup/Lompat halaman SAMA persis kayak rekap
+// lain (buildRecapPageBlock), cuma tanpa "🔍 Cari member" (lihat
+// buildRecapNavComponents). Member harus BENERAN member JKT48 yang pernah live:
+// nama yang gak dikenal bot dicek ke IDN (describeMissingMember) - jadi
+// "belum pernah live" vs "gak ada member itu" dibedain, sama kayak
+// "bandingin". Hasil gagal SELALU balik bawa menu rekap biar bisa coba lagi.
+async function replyRecapMember(fragment, channelId, authorId) {
+  pendingRecapPage.delete(`${channelId}:${authorId}`);
+  const shown = (fragment || "").trim();
+
+  const resolved = resolveRecapMember(shown);
+  if (resolved.status === "ambiguous") {
+    return withRecapMenu(`Cok, ada beberapa member yang cocok sama "${shown}": ${resolved.names.join(", ")}. Ketik nama yang lebih lengkap ya.`);
+  }
+  if (resolved.status === "none") {
+    return withRecapMenu(await describeMissingMember(shown, "direkap"));
+  }
+
+  const rangeDays = `@${resolved.username}`;
+  const sessions = getSessionsForRange(rangeDays);
+  if (sessions.length === 0) {
+    const total = loadLiveCount()[resolved.username]?.count;
+    const totalNote = total ? ` (total ${total}x live semenjak bot ini mulai mantau)` : "";
+    return withRecapMenu(
+      `Cok, **${resolved.name}** gak punya sesi live yang masih kesimpen di rekap${totalNote} - arsip sesi cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir.`,
+    );
+  }
+
+  const completed = sessions.filter((s) => s.endedAtUnix !== null);
+  const ongoingCount = sessions.length - completed.length;
+  const summaryLines = [
+    `📋 **Rekap live ${resolved.name}**`,
+    `Total sesi: ${sessions.length}x (${completed.length} udah selesai, ${ongoingCount} masih live)`,
+  ];
+  if (completed.length > 0) {
+    const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
+    const longest = completed.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), completed[0]);
+    summaryLines.push(
+      `Total durasi: ${formatDuration(totalDurationMs)} | Rata-rata: ${formatDuration(totalDurationMs / completed.length)} | Paling lama: ${formatDuration(longest.durationMs)}`,
+    );
+  }
+  summaryLines.push(`_(Rekap cuma nyimpen sesi ${SESSION_RETENTION_DAYS} hari terakhir.)_`);
+
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, rangeDays);
+  return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
+}
+
+// Submit modal "Rekap member" (dibuka tombol menu "recap_menu:member") -
+// NGE-EDIT pesan menu-nya jadi tabel rekap member (interaction.update, bukan
+// pesan baru), atau jadi pesan gagal + menu lagi biar bisa coba nama lain.
+async function handleRecapMemberModalSubmit(interaction) {
+  const fragment = interaction.fields.getTextInputValue("member_name");
+  const reply = await replyRecapMember(fragment, interaction.channelId, interaction.user.id);
+  await interaction.update(safeReplyOptions(reply));
+}
+
 const JUMP_FIRST_WORDS = ["awal", "pertama", "first"];
 const JUMP_LAST_WORDS = ["akhir", "terakhir", "last"];
 
@@ -1572,7 +1773,7 @@ function sameMemberMessage(fragmentA, fragmentB) {
 // - profil gak ada          -> beneran gak ketemu (typo/bukan member/belum
 //                              punya akun IDN)
 // - IDN gagal dihubungi     -> bilang gak bisa ngecek, BUKAN nebak salah satunya
-async function describeMissingMember(fragment) {
+async function describeMissingMember(fragment, purpose = "dibandingin") {
   const shown = (fragment || "").trim();
   const token = normalizeMemberFragment(shown).split(" ")[0];
   if (!token || token.length < 2) return `Cok, ketik nama membernya yang jelas ya - "${shown}" terlalu pendek/gak valid.`;
@@ -1580,7 +1781,7 @@ async function describeMissingMember(fragment) {
   try {
     const profile = await fetchPublicProfileByUsername(`jkt48_${token}`);
     if (profile && isJkt48Member(profile)) {
-      return `Cok, **${profile.name}** belum pernah live semenjak bot ini mulai mantau, jadi belum ada datanya buat dibandingin.`;
+      return `Cok, **${profile.name}** belum pernah live semenjak bot ini mulai mantau, jadi belum ada datanya buat ${purpose}.`;
     }
     return `Cok, gak nemu member JKT48 bernama "${shown}" di IDN - cek lagi ejaan namanya (atau mungkin dia belum punya akun IDN).`;
   } catch (error) {
@@ -1788,6 +1989,10 @@ module.exports = {
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapMemberModalSubmit,
+  replyRecapMember,
+  extractRecapMemberFragment,
+  resolveRecapMember,
   handleRecapJumpModalSubmit,
   handleRecapMenuButton,
   handleRecapDateSelect,

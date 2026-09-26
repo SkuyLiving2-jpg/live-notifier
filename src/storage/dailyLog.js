@@ -193,6 +193,7 @@ function recordLiveEnded(name, username, startedAtDate, endedAtDate, peakViewCou
 }
 
 module.exports = {
+  SESSION_RETENTION_DAYS,
   loadDailyLog,
   saveDailyLog,
   getTodayWIBRangeUnix,

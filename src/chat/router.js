@@ -43,6 +43,9 @@ const {
   tryHandleRecapPageShortcut,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
+  handleRecapMemberModalSubmit,
+  replyRecapMember,
+  extractRecapMemberFragment,
   handleRecapJumpModalSubmit,
   handleRecapMenuButton,
   handleRecapDateSelect,
@@ -300,8 +303,18 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
       return await replyTodayRecapSoFar(channelId, authorId);
     }
 
+    // "rekap <nama member>" (§10's forty-eighth item, mis. "rekap aralie") -
+    // dicek PALING AKHIR, setelah semua kata kunci rekap lain (hari/minggu/
+    // bulan/tanggal/nama bulan/nama hari) gagal, jadi gak pernah nabrak
+    // mereka. extractRecapMemberFragment ketat (tepat satu kata nama), kalimat
+    // yang gak jelas tetep jatuh ke menu di bawah.
+    const memberFragment = extractRecapMemberFragment(text);
+    if (memberFragment) {
+      return await replyRecapMember(memberFragment, channelId, authorId);
+    }
+
     // "rekap" POLOS doang (gak nyebut minggu/bulan/tanggal/hari/nama
-    // hari/nama bulan sama sekali) -> menu 4-tombol - owner minta ini biar
+    // hari/nama bulan sama sekali) -> menu tombol - owner minta ini biar
     // user gak bingung mau ketik apa buat tiap jenis rekap.
     return replyRecapMenu();
   }
@@ -446,6 +459,8 @@ function wireDiscordEvents(client) {
         await handleRecapNavButton(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_search_modal:")) {
         await handleRecapSearchModalSubmit(interaction);
+      } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_member_modal:")) {
+        await handleRecapMemberModalSubmit(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("recap_jump_modal:")) {
         await handleRecapJumpModalSubmit(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("recap_menu:")) {

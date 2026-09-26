@@ -9,6 +9,7 @@ const assert = require("node:assert/strict");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveDuration } = require("../src/storage/durationHistory");
 const { recordLiveCompleted } = require("../src/storage/liveCount");
+const { recordLiveEnded } = require("../src/storage/dailyLog");
 const { saveChannelRouting } = require("../src/storage/channelRouting");
 const { buildChatReply } = require("../src/chat/router");
 
@@ -325,11 +326,11 @@ test("rekap tanggal - dispatch ke replyRecapDatePicker (dropdown tanggal), BUKAN
 // "rekap" POLOS (gak nyebut minggu/bulan/tanggal/hari ini sama sekali) ->
 // menu 4-tombol, BUKAN langsung rekap hari ini kayak sebelumnya - owner
 // minta ini biar user gak bingung mau ketik apa.
-test("rekap polos (tanpa minggu/bulan/tanggal/hari) - dispatch ke menu 4-tombol + Tutup", async () => {
+test("rekap polos (tanpa minggu/bulan/tanggal/hari) - dispatch ke menu 5-tombol (termasuk Rekap member) + Tutup", async () => {
   const reply = await buildChatReply("cok rekap");
   assert.equal(reply.content, "Mau rekap yang mana, cok?");
-  const customIds = reply.components[0].components.map((c) => c.data.custom_id);
-  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_nav:close"]);
+  const customIds = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+  assert.deepEqual(customIds, ["recap_menu:today", "recap_menu:week", "recap_menu:month", "recap_menu:date", "recap_menu:member", "recap_nav:close"]);
 });
 
 // §10's thirty-sixth item: "cok rekap <tanggal spesifik>"/"cok rekap
@@ -463,3 +464,66 @@ test("channel BIASA (gak ke-mapping): pesan tanpa 'cok'/kata tanya-live TETEP di
   const reply = await buildChatReply("halo semuanya, apa kabar", { channelId: "c-plain-no-wakeword-test", authorId: "u-plain-no-wakeword" });
   assert.equal(reply, null);
 });
+
+// §10's forty-eighth item: "rekap <nama member>" - dicek PALING AKHIR di dispatch
+// "rekap" (setelah hari/minggu/bulan/tanggal/nama bulan/nama hari), jadi gak
+// boleh nabrak satupun dari itu. Data member di-seed langsung (nama unik).
+const rtrNowUnix = Math.floor(Date.now() / 1000);
+for (let i = 0; i < 2; i++) {
+  recordLiveEnded(
+    "Rtrrecap JKT48",
+    "jkt48_rtrrecap",
+    new Date((rtrNowUnix - (i + 1) * 7200) * 1000),
+    new Date((rtrNowUnix - (i + 1) * 7200 + 3600) * 1000),
+    5,
+  );
+}
+recordLiveCompleted("jkt48_rtrrecap", "Rtrrecap JKT48");
+
+test("'cok rekap <nama member>' - dispatch ke tabel rekap member (cuma sesi dia, tombol Tutup doang, tanpa 'Cari member')", async () => {
+  const reply = await buildChatReply("cok rekap rtrrecap", { channelId: "c-rtr1", authorId: "u-rtr1" });
+  assert.match(reply.content, /📋 \*\*Rekap live Rtrrecap JKT48\*\*/);
+  assert.match(reply.content, /Total sesi: 2x/);
+  const ids = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+  assert.deepEqual(ids, ["recap_nav:close"]);
+});
+
+test("'rekap <nama>' tanpa 'cok' di bot channel juga jalan, dan kata pelengkap ('dong') diabaikan", async () => {
+  const reply = await buildChatReply("rekap Rtrrecap dong", { isBotChannel: true, channelId: "c-rtr2", authorId: "u-rtr2" });
+  assert.match(reply.content, /Rekap live Rtrrecap JKT48/);
+});
+
+test("kata kunci rekap lain TIDAK ketabrak rekap member: minggu ini / bulan ini / nama bulan / nama hari tetep ke jalurnya masing-masing", async () => {
+  const week = await buildChatReply("cok rekap minggu ini", { channelId: "c-rtr3", authorId: "u-rtr3" });
+  assert.match(textOf(week), /Rekap minggu ini|belum ada live yang kecatet dalam minggu ini/);
+
+  const month = await buildChatReply("cok rekap bulan ini", { channelId: "c-rtr3", authorId: "u-rtr3" });
+  assert.match(textOf(month), /Rekap bulan|belum ada live yang kecatet buat bulan|Mau rekap yang mana/);
+
+  const monthName = await buildChatReply("cok rekap september", { channelId: "c-rtr3", authorId: "u-rtr3" });
+  assert.doesNotMatch(textOf(monthName), /gak nemu member|belum pernah live/);
+
+  const weekday = await buildChatReply("cok rekap senin", { channelId: "c-rtr3", authorId: "u-rtr3" });
+  assert.doesNotMatch(textOf(weekday), /gak nemu member|belum pernah live/);
+});
+
+test("'cok rekap' polos dan 'cok rekap member' (tanpa nama) -> menu rekap yang sekarang punya tombol 'Rekap member'", async () => {
+  for (const text of ["cok rekap", "cok rekap member"]) {
+    const reply = await buildChatReply(text);
+    assert.equal(reply.content, "Mau rekap yang mana, cok?", text);
+    const ids = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+    assert.ok(ids.includes("recap_menu:member"), text);
+  }
+});
+
+test(
+  "kalimat rekap yang gak jelas ('cok rekap dong banget kemarin') gak dianggep nama member - tetep menu; nama yang gak ada -> gak nemu + menu",
+  withFakeIdn(async () => {
+    const vague = await buildChatReply("cok rekap dong banget kemarin");
+    assert.equal(vague.content, "Mau rekap yang mana, cok?");
+
+    const unknown = await buildChatReply("cok rekap namangawurbanget");
+    assert.match(unknown.content, /gak nemu member JKT48 bernama "namangawurbanget"/);
+    assert.match(unknown.content, /Mau rekap yang mana, cok\?/);
+  }),
+);
