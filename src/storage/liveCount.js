@@ -91,11 +91,37 @@ function findLiveCountByNameFragment(fragment) {
   return null;
 }
 
+// Beda dari findLiveCountByNameFragment di atas (balikin SATU match PERTAMA
+// doang, buat "cok bandingin <A> vs <B>" yang teksnya udah jelas nyebut satu
+// nama spesifik) - ini buat dropdown pencarian "cok bandingin" POLOS (§10's
+// item baru, chat/compareFlow.js), yang perlu nunjukkin SEMUA kandidat yang
+// cocok (fragment pendek/ambigu bisa kena banyak member) biar usernya milih
+// sendiri lewat dropdown, bukan asal kepilih yang pertama ketemu di urutan
+// object.entries (yang gak dijamin match paling relevan). `excludeUsername`
+// dipake pas nyari member B - biar member yang udah kepilih jadi A gak
+// muncul lagi jadi opsi buat B.
+function searchLiveCountByNameFragment(fragment, excludeUsername = null) {
+  const needle = (fragment || "").trim().toLowerCase();
+  if (!needle) return [];
+
+  const data = loadLiveCount();
+  const results = [];
+  for (const [username, entry] of Object.entries(data)) {
+    if (username === excludeUsername) continue;
+    const givenName = (entry.name || username).split(/[\s|]+/)[0].toLowerCase();
+    if (matchesNameFragment(needle, givenName)) {
+      results.push({ username, name: entry.name, count: entry.count });
+    }
+  }
+  return results.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 module.exports = {
   loadLiveCount,
   saveLiveCount,
   recordLiveCompleted,
   rebuildLiveCountFromSessions,
   findLiveCountByNameFragment,
+  searchLiveCountByNameFragment,
   getLiveCountLeaderboard,
 };

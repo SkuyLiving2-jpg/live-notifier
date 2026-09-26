@@ -7,6 +7,7 @@ const { tryHandleWatchConfirmShortcut } = require("./menu");
 const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = require("./pendingState");
 const { replyFallbackMenu } = require("./menu");
 const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
+const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
 const {
   replyListLive,
   replyLongestLive,
@@ -172,6 +173,15 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const compareMatch = text.match(/bandingin\s+(.+?)\s+(?:vs\.?|lawan|sama|dan|dengan)\s+(.+)/);
   if (compareMatch) {
     return await replyCompareMembers(compareMatch[1], compareMatch[2]);
+  }
+
+  // "cok bandingin" DIKETIK POLOS (gak nyebut "<A> vs <B>" sekaligus, jadi
+  // compareMatch di atas gak match) - owner ngeluh ini kepentok jatuh ke
+  // fallback menu 9-opsi generik, padahal maksudnya jelas mau bandingin,
+  // cuma belum mutusin lawannya siapa. Sekarang dikasih flow dropdown/search
+  // 2 langkah (chat/compareFlow.js) daripada dianggep gak jelas.
+  if (containsWholeWord(text, "bandingin")) {
+    return replyStartComparePick();
   }
 
   // Dua cara natural buat nanya pola jadwal: "cok jadwal nala" (pola
@@ -435,6 +445,12 @@ function wireDiscordEvents(client) {
         await handleRecapMonthSelect(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("watch_confirm:")) {
         await handleWatchConfirmButton(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("compare_pick:")) {
+        await handleComparePickButton(interaction);
+      } else if (interaction.isModalSubmit() && interaction.customId.startsWith("compare_modal:")) {
+        await handleCompareModalSubmit(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("compare_select:")) {
+        await handleCompareSelect(interaction);
       }
     } catch (error) {
       console.error("Gagal proses tombol/menu Discord:", error.message);

@@ -172,6 +172,18 @@ test("bandingin <A> vs <B> - dispatch ke replyCompareMembers", async () => {
   assert.match(reply, /belum ada catatan live buat "membertidakada1"/);
 });
 
+// §10 item baru: "cok bandingin" DIKETIK POLOS (compareMatch di atas butuh
+// pemisah "vs"/"lawan"/dst, jadi gak match) - owner ngeluh ini kepentok jatuh
+// ke fallback menu 9-opsi generik. Sekarang harus dispatch ke flow dropdown
+// (chat/compareFlow.js's replyStartComparePick), BUKAN replyFallbackMenu.
+test("bandingin POLOS (tanpa vs/lawan/dst) - dispatch ke flow dropdown pencarian, BUKAN fallback menu generik", async () => {
+  const reply = await buildChatReply("cok bandingin");
+  assert.match(reply.content, /cari member a/i);
+  assert.doesNotMatch(reply.content, /selamat (pagi|siang|sore|malam)/i);
+  const customIds = reply.components[0].components.map((b) => b.data.custom_id);
+  assert.deepEqual(customIds, ["compare_pick:searchA", "compare_pick:close"]);
+});
+
 // Dicek SEBELUM check "live" + "siapa" polos (replyListLive) di router.js -
 // kalimatnya juga ngandung "live" + "siapa", jadi harus ketangkep duluan
 // sama check leaderboard yang lebih spesifik. "cok siapa yang live" (tanpa

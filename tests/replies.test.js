@@ -24,6 +24,7 @@ const {
   replyLiveCount,
   replyLiveCountLeaderboard,
   replyCompareMembers,
+  replyCompareMembersByUsername,
   replySchedulePattern,
   replyPriorityList,
   replySpecificMember,
@@ -392,6 +393,27 @@ test("replyCompareMembers - dibandingin sama diri sendiri -> ditolak dengan pesa
   recordLiveCompleted("jkt48_comparef", "CompareF");
   const reply = await replyCompareMembers("comparef", "comparef");
   assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
+});
+
+// Dipake chat/compareFlow.js (dropdown pencarian "cok bandingin" polos) -
+// usernameA/usernameB di sini DIJAMIN valid & beda (hasil resolusi dropdown),
+// jadi gak ada validasi "belum ada catatan"/"member yang sama" kayak versi
+// fragment - cukup dites hasil embednya kebentuk bener dari username langsung.
+test("replyCompareMembersByUsername - langsung dari username (bukan fragment) -> hasil embed sama lengkapnya kayak replyCompareMembers", async () => {
+  recordLiveCompleted("jkt48_compareg", "CompareG");
+  recordLiveCompleted("jkt48_compareg", "CompareG");
+  recordLiveCompleted("jkt48_compareh", "CompareH");
+
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({ data: { getPublicProfileByUsername: null } }) });
+  try {
+    const reply = await replyCompareMembersByUsername("jkt48_compareg", "jkt48_compareh");
+    assert.equal(reply.content, "⚔️ **CompareG** vs **CompareH**");
+    assert.equal(reply.embeds.length, 2);
+    assert.equal(reply.embeds[0].title, "🏆 CompareG"); // 2x > 1x live
+  } finally {
+    global.fetch = original;
+  }
 });
 
 test("replySpecificMember - liveAt normal nyantumin jam mulai & elapsed time", () => {

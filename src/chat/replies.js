@@ -20,7 +20,7 @@ const {
   fetchExternalTodayLiveHistory,
 } = require("../storage/dailyLog");
 const { findDurationHistoryByNameFragment, loadDurationHistory, getAverageDuration, getPreviousMaxDuration } = require("../storage/durationHistory");
-const { findLiveCountByNameFragment, getLiveCountLeaderboard } = require("../storage/liveCount");
+const { loadLiveCount, findLiveCountByNameFragment, getLiveCountLeaderboard } = require("../storage/liveCount");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
@@ -255,7 +255,7 @@ function replyHelp() {
     '- "cok siapa yang paling sering live" - leaderboard total live count semua member',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
-    '- "cok bandingin <nama member> vs <nama member>" - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya',
+    '- "cok bandingin <nama member> vs <nama member>" - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya (atau ketik "cok bandingin" polos buat dicariin lewat dropdown)',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
     '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
@@ -1487,14 +1487,11 @@ function buildCompareMemberEmbed(entry, avatarUrl, avgDurationMs, maxDurationMs,
   };
 }
 
-async function replyCompareMembers(fragmentA, fragmentB) {
-  const a = findLiveCountByNameFragment(fragmentA);
-  if (!a) return `Cok, belum ada catatan live buat "${fragmentA.trim()}" semenjak bot ini jalan.`;
-  const b = findLiveCountByNameFragment(fragmentB);
-  if (!b) return `Cok, belum ada catatan live buat "${fragmentB.trim()}" semenjak bot ini jalan.`;
-  if (a.username === b.username)
-    return `Cok, "${fragmentA.trim()}" sama "${fragmentB.trim()}" itu member yang sama, gak bisa dibandingin sama diri sendiri.`;
-
+// Diekstrak dari replyCompareMembers (di bawah) biar bisa dipake bareng sama
+// replyCompareMembersByUsername - dua-duanya ujung-ujungnya ngerakit embed
+// yang SAMA persis, cuma beda cara nyari `a`/`b`-nya (fragment teks vs
+// username yang udah pasti valid dari dropdown pencarian).
+async function buildCompareReply(a, b) {
   const durationHistory = loadDurationHistory();
   const avgA = getAverageDuration(durationHistory, a.username);
   const avgB = getAverageDuration(durationHistory, b.username);
@@ -1510,6 +1507,31 @@ async function replyCompareMembers(fragmentA, fragmentB) {
     content: `⚔️ **${a.name}** vs **${b.name}**`,
     embeds: [buildCompareMemberEmbed(a, avatarA, avgA, maxA, countWinnerIsA), buildCompareMemberEmbed(b, avatarB, avgB, maxB, countWinnerIsB)],
   };
+}
+
+async function replyCompareMembers(fragmentA, fragmentB) {
+  const a = findLiveCountByNameFragment(fragmentA);
+  if (!a) return `Cok, belum ada catatan live buat "${fragmentA.trim()}" semenjak bot ini jalan.`;
+  const b = findLiveCountByNameFragment(fragmentB);
+  if (!b) return `Cok, belum ada catatan live buat "${fragmentB.trim()}" semenjak bot ini jalan.`;
+  if (a.username === b.username)
+    return `Cok, "${fragmentA.trim()}" sama "${fragmentB.trim()}" itu member yang sama, gak bisa dibandingin sama diri sendiri.`;
+
+  return buildCompareReply(a, b);
+}
+
+// Dipake chat/compareFlow.js (dropdown pencarian buat "cok bandingin" POLOS,
+// tanpa nyebut "<A> vs <B>" sekaligus) - beda dari replyCompareMembers di
+// atas, di sini `usernameA`/`usernameB` udah DIJAMIN valid & beda (hasil
+// resolusi lewat search+pilih dropdown di storage/liveCount.js's
+// searchLiveCountByNameFragment, yang emang udah nge-exclude username A pas
+// nyari kandidat B), jadi gak perlu validasi "belum ada catatan"/"member yang
+// sama" ulang kayak versi fragment.
+async function replyCompareMembersByUsername(usernameA, usernameB) {
+  const data = loadLiveCount();
+  const a = { username: usernameA, ...data[usernameA] };
+  const b = { username: usernameB, ...data[usernameB] };
+  return buildCompareReply(a, b);
 }
 
 // PENTING: IDN nggak nyediain jadwal live resmi sama sekali (udah dicek
@@ -1637,6 +1659,7 @@ module.exports = {
   replyExportRecap,
   buildExportCsv,
   replyCompareMembers,
+  replyCompareMembersByUsername,
   replyBotStatus,
   replySpecificMember,
   replyMemberNotFound,

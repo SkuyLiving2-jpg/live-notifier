@@ -109,3 +109,41 @@ test("getLiveCountLeaderboard - diurutin count DESC, dibatesin limit-nya, kosong
   assert.equal(top2[0].username, "jkt48_nala");
   assert.equal(top2[1].username, "jkt48_levi");
 });
+
+// §10 item baru (dropdown pencarian "cok bandingin" polos, chat/compareFlow.js)
+test("searchLiveCountByNameFragment - balikin SEMUA kandidat yang cocok (bukan cuma satu), diurutin nama", () => {
+  const { recordLiveCompleted, searchLiveCountByNameFragment } = freshLiveCount();
+
+  recordLiveCompleted("jkt48_freya", "Freya");
+  recordLiveCompleted("jkt48_frelyn", "Frelyn");
+  recordLiveCompleted("jkt48_nala", "Nala");
+
+  const matches = searchLiveCountByNameFragment("fre");
+  // Diurutin ALFABETIS by name ("Frelyn" < "Freya" - 'l' duluan ketimbang
+  // 'y' di karakter ke-4), BUKAN urutan insersi/count.
+  assert.deepEqual(
+    matches.map((m) => m.username),
+    ["jkt48_frelyn", "jkt48_freya"],
+  );
+});
+
+test("searchLiveCountByNameFragment - excludeUsername nyaring satu username biar gak ikut jadi kandidat", () => {
+  const { recordLiveCompleted, searchLiveCountByNameFragment } = freshLiveCount();
+
+  recordLiveCompleted("jkt48_freya", "Freya");
+  recordLiveCompleted("jkt48_frelyn", "Frelyn");
+
+  const matches = searchLiveCountByNameFragment("fre", "jkt48_freya");
+  assert.deepEqual(
+    matches.map((m) => m.username),
+    ["jkt48_frelyn"],
+  );
+});
+
+test("searchLiveCountByNameFragment - fragment kosong/gak ketemu -> array kosong", () => {
+  const { recordLiveCompleted, searchLiveCountByNameFragment } = freshLiveCount();
+  recordLiveCompleted("jkt48_nala", "Nala");
+
+  assert.deepEqual(searchLiveCountByNameFragment(""), []);
+  assert.deepEqual(searchLiveCountByNameFragment("member-yang-gak-ada"), []);
+});
