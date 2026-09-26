@@ -173,11 +173,14 @@ const PRIORITY_COLOR_PALETTE = [0x9b59b6, 0x2ecc71, 0xe91e63, 0xe67e22, 0xf1c40f
 
 const DAILY_RECAP_HOUR = envInt("DAILY_RECAP_HOUR", 23); // jam WIB
 
-// Warna embed rekap harian otomatis (notify/publicAlerts.js's
-// maybeSendDailyRecap) - Discord "blurple", netral/gak nyerempet warna
-// member prioritas manapun (teal Nala 0x1abc9c, merah Levi 0xff0000, biru
-// Lily 0x3498db, atau PRIORITY_COLOR_PALETTE di atas), soalnya rekap ini
-// ngerangkum SEMUA member bareng, bukan punya satu orang.
+// Warna embed rekap harian/mingguan/bulanan OTOMATIS (notify/publicAlerts.js's
+// maybeSendDailyRecap/maybeSendWeeklyRecap/maybeSendMonthlyRecap) - Discord
+// "blurple", netral/gak nyerempet warna member prioritas manapun (teal Nala
+// 0x1abc9c, merah Levi 0xff0000, biru Lily 0x3498db, atau
+// PRIORITY_COLOR_PALETTE di atas), soalnya ketiga rekap ini ngerangkum SEMUA
+// member bareng, bukan punya satu orang - dipakein warna yang SAMA buat
+// ketiganya (bukan 3 warna beda) biar user langsung ngenalin "oh ini rekap
+// otomatis" apapun periodenya, tanpa perlu baca title-nya dulu.
 const DAILY_RECAP_COLOR = 0x5865f2;
 
 const PORT = process.env.PORT || 3000;

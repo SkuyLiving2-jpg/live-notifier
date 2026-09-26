@@ -88,7 +88,18 @@ function loadDailyLog() {
   // activeLives satu-satunya sumber kebenaran buat itu - jadi dibuang aja
   // di sini, gak pernah ditulis lagi ke file ini sejak sekarang.
   const sessions = (raw.sessions || []).filter((s) => s.endedAtUnix !== null);
-  return { sessions, recapSentDate: raw.recapSentDate || null };
+  // recapSentWeek/recapSentMonth - penanda "hari apa (WIB) rekap mingguan/
+  // bulanan OTOMATIS terakhir kekirim" (notify/publicAlerts.js's
+  // maybeSendWeeklyRecap/maybeSendMonthlyRecap), sama pola-nya kayak
+  // recapSentDate buat rekap harian - dipisah jadi 2 field beda soalnya
+  // ketiganya independen (bisa aja rekap harian udah kekirim tapi mingguan
+  // belum, dst).
+  return {
+    sessions,
+    recapSentDate: raw.recapSentDate || null,
+    recapSentWeek: raw.recapSentWeek || null,
+    recapSentMonth: raw.recapSentMonth || null,
+  };
 }
 
 function saveDailyLog(log) {

@@ -87,7 +87,7 @@ test("GET /api/backup - request yang di-sign bener balikin agregasi semua storag
     assert.ok(data.exportedAt);
     assert.deepEqual(data.activeLives, {});
     assert.deepEqual(data.durationHistory, {});
-    assert.deepEqual(data.dailyLog, { sessions: [], recapSentDate: null });
+    assert.deepEqual(data.dailyLog, { sessions: [], recapSentDate: null, recapSentWeek: null, recapSentMonth: null });
     assert.deepEqual(data.customPriority, []);
     assert.deepEqual(data.subscriptions, {});
     assert.deepEqual(data.gifterSnapshot, { members: {} });

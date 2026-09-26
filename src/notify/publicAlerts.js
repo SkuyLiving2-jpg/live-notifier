@@ -1,7 +1,13 @@
 const { postToWebhook } = require("./webhook");
-const { formatDuration, getHourWIBOf, getTodayWIB } = require("../utils");
+const { formatDuration, formatMonthLabel, getHourWIBOf, getTodayWIB, getDateWIB, WEEKDAY_FORMATTER_WIB } = require("../utils");
 const { getPreviousMaxDuration } = require("../storage/durationHistory");
-const { loadDailyLog, saveDailyLog, getCompletedSessionsToday } = require("../storage/dailyLog");
+const {
+  loadDailyLog,
+  saveDailyLog,
+  getCompletedSessionsToday,
+  getCompletedSessionsSince,
+  getCompletedSessionsForMonth,
+} = require("../storage/dailyLog");
 const { saveActiveLives } = require("../storage/activeLives");
 const { DAILY_RECAP_HOUR, DAILY_RECAP_COLOR } = require("../config");
 
@@ -67,7 +73,13 @@ async function maybeAnnounceNewRecord(username, memberName, durationMs, duration
 // SINI juga - bukan cuma di pemanggil - biar fungsi murni ini aman dipanggil
 // langsung (mis. dari test lain di masa depan) tanpa perlu inget syarat
 // tersembunyi itu.
-function buildDailyRecapPayload(completed, today) {
+// Embed rekap generik - SAMA persis strukturnya buat harian/mingguan/bulanan,
+// cuma title-nya beda (dan datanya, tapi itu tanggung jawab pemanggil). Dulu
+// ini nyatu di dalem buildDailyRecapPayload doang; diekstrak pas rekap
+// mingguan/bulanan otomatis ditambahin (§10's thirty-ninth item) biar 3
+// fungsi buildXRecapPayload gak nulis ulang hitungan total/paling lama yang
+// sama persis 3x.
+function buildRecapEmbedPayload(completed, title) {
   if (completed.length === 0) return null;
 
   const totalLives = completed.length;
@@ -78,7 +90,7 @@ function buildDailyRecapPayload(completed, today) {
   return {
     embeds: [
       {
-        title: `📋 Rekap live hari ini (${today})`,
+        title,
         color: DAILY_RECAP_COLOR,
         fields: [
           { name: "Total live", value: `${totalLives}x dari ${uniqueMembers} member`, inline: true },
@@ -89,6 +101,27 @@ function buildDailyRecapPayload(completed, today) {
       },
     ],
   };
+}
+
+function buildDailyRecapPayload(completed, today) {
+  return buildRecapEmbedPayload(completed, `📋 Rekap live hari ini (${today})`);
+}
+
+// Rekap MINGGUAN otomatis (§10's thirty-ninth item, owner minta) - datanya
+// getCompletedSessionsSince(7), SAMA persis sumber yang dipake "cok rekap
+// minggu ini" on-demand (rentang 7 hari rolling, BUKAN minggu kalender
+// Senin-Minggu) - biar rekap otomatis ini gak ngasih angka beda dari yang
+// user liat kalau nanya manual di hari yang sama.
+function buildWeeklyRecapPayload(completed) {
+  return buildRecapEmbedPayload(completed, "📋 Rekap live mingguan (7 hari terakhir)");
+}
+
+// Rekap BULANAN otomatis - datanya getCompletedSessionsForMonth(monthWIB),
+// bulan KALENDER yang lagi ditutup (dikirim di hari TERAKHIR bulan itu,
+// lihat isLastDayOfMonthWIB), sama sumbernya kayak "cok rekap bulan ini"/
+// "cok rekap <nama bulan>" on-demand.
+function buildMonthlyRecapPayload(completed, monthWIB) {
+  return buildRecapEmbedPayload(completed, `📋 Rekap live bulanan (${formatMonthLabel(monthWIB)})`);
 }
 
 async function maybeSendDailyRecap() {
@@ -109,4 +142,80 @@ async function maybeSendDailyRecap() {
   saveDailyLog(log);
 }
 
-module.exports = { maybeAlertViewerMilestone, maybeAnnounceNewRecord, maybeSendDailyRecap, buildDailyRecapPayload };
+// Hari WIB "Minggu" (Sunday) dipilih sebagai hari pengiriman rekap mingguan
+// otomatis - bukan soal "itu hari yang BENER secara kalender", cuma butuh
+// SATU hari tetap yang konsisten. Dites dengan `now` eksplisit (bukan cuma
+// `new Date()` default) biar deterministik - gak gantungan sama hari
+// beneran pas test ini kebetulan dijalanin.
+function isSundayWIB(now = new Date()) {
+  return WEEKDAY_FORMATTER_WIB.format(now) === "Minggu";
+}
+
+// Hari TERAKHIR di bulan kalender WIB - dicek dengan "besok" udah beda bulan
+// apa belum, bukan tabel jumlah-hari-per-bulan manual (otomatis bener buat
+// tahun kabisat juga, sama trik yang dipake chat/replies.js's daysInMonth,
+// cuma dari arah sebaliknya).
+function isLastDayOfMonthWIB(now = new Date()) {
+  const todayMonth = getDateWIB(now).slice(0, 7);
+  const tomorrowMonth = getDateWIB(new Date(now.getTime() + 24 * 60 * 60 * 1000)).slice(0, 7);
+  return tomorrowMonth !== todayMonth;
+}
+
+// `now` opsional (default beneran "sekarang") SATU-SATUNYA buat gerbang
+// hari/jam DAN kunci dedup recapSentWeek/recapSentMonth di bawah - BUKAN
+// buat nentuin data yang direkap (getCompletedSessionsSince/
+// getCompletedSessionsForMonth tetap narik dari waktu BENERAN sekarang,
+// gak ikut di-"palsuin"). Dipisah gini SENGAJA biar testable: tes bisa
+// maksa gerbangnya "hari ini pasti Minggu"/"hari ini pasti akhir bulan"
+// pakai tanggal palsu tanpa perlu bikin data rekap-nya ikut palsu juga -
+// di produksi dua-duanya sama-sama "sekarang beneran" soalnya `now` gak
+// pernah dioper manual dari monitor.js.
+async function maybeSendWeeklyRecap(now = new Date()) {
+  if (!isSundayWIB(now) || getHourWIBOf(now) < DAILY_RECAP_HOUR) return;
+
+  const todayKey = getDateWIB(now);
+  const log = loadDailyLog();
+  if (log.recapSentWeek === todayKey) return; // udah kekirim buat Minggu ini
+
+  const payload = buildWeeklyRecapPayload(getCompletedSessionsSince(7));
+  if (payload) {
+    if (await postToWebhook(payload, "Gagal ngirim rekap mingguan:")) {
+      console.log("Rekap mingguan terkirim");
+    }
+  }
+
+  log.recapSentWeek = todayKey;
+  saveDailyLog(log);
+}
+
+async function maybeSendMonthlyRecap(now = new Date()) {
+  if (!isLastDayOfMonthWIB(now) || getHourWIBOf(now) < DAILY_RECAP_HOUR) return;
+
+  const todayKey = getDateWIB(now);
+  const log = loadDailyLog();
+  if (log.recapSentMonth === todayKey) return; // udah kekirim buat penutupan bulan ini
+
+  const monthWIB = getTodayWIB().slice(0, 7); // bulan yang BENERAN lagi ditutup hari ini
+  const payload = buildMonthlyRecapPayload(getCompletedSessionsForMonth(monthWIB), monthWIB);
+  if (payload) {
+    if (await postToWebhook(payload, "Gagal ngirim rekap bulanan:")) {
+      console.log("Rekap bulanan terkirim");
+    }
+  }
+
+  log.recapSentMonth = todayKey;
+  saveDailyLog(log);
+}
+
+module.exports = {
+  maybeAlertViewerMilestone,
+  maybeAnnounceNewRecord,
+  maybeSendDailyRecap,
+  maybeSendWeeklyRecap,
+  maybeSendMonthlyRecap,
+  buildDailyRecapPayload,
+  buildWeeklyRecapPayload,
+  buildMonthlyRecapPayload,
+  isSundayWIB,
+  isLastDayOfMonthWIB,
+};

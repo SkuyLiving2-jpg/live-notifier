@@ -6,7 +6,13 @@ const { recordLiveCompleted } = require("./storage/liveCount");
 const { getPriorityConfig } = require("./priority");
 const { sendDiscordNotif } = require("./notify/liveNotify");
 const { maybePartyModeAlert, maybeAlertEndingSoon } = require("./notify/priorityDm");
-const { maybeAlertViewerMilestone, maybeAnnounceNewRecord, maybeSendDailyRecap } = require("./notify/publicAlerts");
+const {
+  maybeAlertViewerMilestone,
+  maybeAnnounceNewRecord,
+  maybeSendDailyRecap,
+  maybeSendWeeklyRecap,
+  maybeSendMonthlyRecap,
+} = require("./notify/publicAlerts");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
 // Berapa siklus polling BERTURUT-TURUT (~POLL_INTERVAL_MS/siklus, default 20
@@ -154,6 +160,8 @@ async function checkLiveMembers() {
     }
 
     await maybeSendDailyRecap();
+    await maybeSendWeeklyRecap();
+    await maybeSendMonthlyRecap();
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);
   }
