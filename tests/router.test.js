@@ -8,6 +8,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveDuration } = require("../src/storage/durationHistory");
+const { recordLiveCompleted } = require("../src/storage/liveCount");
 const { saveChannelRouting } = require("../src/storage/channelRouting");
 const { buildChatReply } = require("../src/chat/router");
 
@@ -162,26 +163,105 @@ test("export rekap - dispatch ke replyExportRecap (balesan bawa file CSV), BUKAN
   }
 });
 
-// §10's forty-second item: "cok bandingin <A> vs <B>" - dua-duanya fragment
-// yang sengaja gak pernah ada di live-count.json, jadi resolve-nya berhenti
-// di "belum ada catatan" SEBELUM sempet nyoba fetchPublicProfileByUsername
-// (network beneran ke IDN) - aman dites langsung tanpa mock fetch, sama
-// filosofinya kayak tes lain di file ini yang ngindarin panggilan network.
-test("bandingin <A> vs <B> - dispatch ke replyCompareMembers", async () => {
-  const reply = await buildChatReply("cok bandingin membertidakada1 vs membertidakada2");
-  assert.match(reply, /belum ada catatan live buat "membertidakada1"/);
+// §10's forty-second/forty-sixth item: "cok bandingin <A> dan <B>". Pemisahnya
+// CUMA "dan" (owner minta "vs"/"versus" dibuang), kata kuncinya
+// "bandingin"/"bandingkan"/"banding", dan "<A> dan <B>" doang (tanpa kata
+// kunci) juga jadi perbandingan. Member di-seed langsung ke live-count.json
+// (nama-nama unik, gak ada yang jadi awalan nama lain - pencocokan nama itu
+// fuzzy-awalan) dan fetch di-mock biar foto profil gak nembak network beneran.
+function withFakeIdn(fn) {
+  return async () => {
+    const original = global.fetch;
+    global.fetch = async () => ({ ok: true, json: async () => ({ data: { getPublicProfileByUsername: null } }) });
+    try {
+      await fn();
+    } finally {
+      global.fetch = original;
+    }
+  };
+}
+
+recordLiveCompleted("jkt48_zorrawx", "Zorrawx JKT48");
+recordLiveCompleted("jkt48_yelvaqp", "Yelvaqp JKT48");
+
+test(
+  "bandingin <A> dan <B> - dispatch ke replyCompareMembers (2 embed + tombol Tutup)",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok bandingin zorrawx dan yelvaqp");
+    assert.equal(reply.content, "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**");
+    assert.equal(reply.embeds.length, 2);
+    assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
+  }),
+);
+
+test(
+  "kata kunci 'bandingkan' dan 'banding' juga jalan, sama kayak 'bandingin'",
+  withFakeIdn(async () => {
+    for (const word of ["bandingkan", "banding"]) {
+      const reply = await buildChatReply(`cok ${word} zorrawx dan yelvaqp`);
+      assert.equal(reply.content, "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**", word);
+    }
+  }),
+);
+
+test(
+  "'<A> dan <B>' TANPA kata kunci (di belakang 'cok') langsung jadi perbandingan",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok zorrawx dan yelvaqp");
+    assert.equal(reply.content, "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**");
+  }),
+);
+
+test(
+  "'<A> dan <B>' tanpa 'cok' di bot channel juga jadi perbandingan, tapi di channel biasa (tanpa 'cok') diabaikan kayak pesan biasa",
+  withFakeIdn(async () => {
+    const inBotChannel = await buildChatReply("Zorrawx dan Yelvaqp", { isBotChannel: true, channelId: "c-cmp", authorId: "u-cmp" });
+    assert.equal(inBotChannel.content, "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**");
+
+    const elsewhere = await buildChatReply("Zorrawx dan Yelvaqp", { isBotChannel: false });
+    assert.equal(elsewhere, null);
+  }),
+);
+
+test("'vs' SUDAH BUKAN pemisah: 'bandingin <A> vs <B>' jatuh ke flow dropdown, dan '<A> vs <B>' polos bukan perbandingan", async () => {
+  const withKeyword = await buildChatReply("cok bandingin zorrawx vs yelvaqp");
+  assert.match(withKeyword.content, /cari member a/i);
+
+  const bare = await buildChatReply("cok zorrawx vs yelvaqp");
+  assert.doesNotMatch(JSON.stringify(bare), /⚔️|compare_pick/);
 });
 
-// §10 item baru: "cok bandingin" DIKETIK POLOS (compareMatch di atas butuh
-// pemisah "vs"/"lawan"/dst, jadi gak match) - owner ngeluh ini kepentok jatuh
-// ke fallback menu 9-opsi generik. Sekarang harus dispatch ke flow dropdown
-// (chat/compareFlow.js's replyStartComparePick), BUKAN replyFallbackMenu.
-test("bandingin POLOS (tanpa vs/lawan/dst) - dispatch ke flow dropdown pencarian, BUKAN fallback menu generik", async () => {
-  const reply = await buildChatReply("cok bandingin");
+test("bandingin dengan SATU nama doang (pasangannya belum ada) - dispatch ke flow dropdown, bukan menu fallback generik", async () => {
+  const reply = await buildChatReply("cok bandingin zorrawx");
   assert.match(reply.content, /cari member a/i);
-  assert.doesNotMatch(reply.content, /selamat (pagi|siang|sore|malam)/i);
-  const customIds = reply.components[0].components.map((b) => b.data.custom_id);
-  assert.deepEqual(customIds, ["compare_pick:searchA", "compare_pick:close"]);
+});
+
+test("member SAMA di dua sisi ('A dan A') ditolak dengan pesan jelas, baik pakai kata kunci maupun polos", async () => {
+  for (const text of ["cok bandingin zorrawx dan zorrawx", "cok bandingkan zorrawx dan zorrawx", "cok zorrawx dan zorrawx"]) {
+    const reply = await buildChatReply(text);
+    assert.match(reply, /gak bisa dibandingin sama diri sendiri/, text);
+  }
+  // beda huruf besar/kecil + tambahan "JKT48" tetep dianggep orang yang sama
+  const withJkt48 = await buildChatReply("cok bandingin Zorrawx dan zorrawx JKT48");
+  assert.match(withJkt48, /gak bisa dibandingin sama diri sendiri/);
+});
+
+test("kalimat biasa berpola '<kata> dan <kata>' yang BUKAN nama member gak dibajak jadi perbandingan", async () => {
+  const reply = await buildChatReply("cok makan dan tidur");
+  assert.doesNotMatch(JSON.stringify(reply), /⚔️|compare_pick|belum pernah live/);
+});
+
+// "cok bandingin" DIKETIK POLOS - owner ngeluh ini kepentok jatuh ke fallback
+// menu 9-opsi generik. Harus dispatch ke flow dropdown (chat/compareFlow.js's
+// replyStartComparePick), BUKAN replyFallbackMenu.
+test("bandingin POLOS - dispatch ke flow dropdown pencarian, BUKAN fallback menu generik", async () => {
+  for (const word of ["bandingin", "bandingkan", "banding"]) {
+    const reply = await buildChatReply(`cok ${word}`);
+    assert.match(reply.content, /cari member a/i, word);
+    assert.doesNotMatch(reply.content, /selamat (pagi|siang|sore|malam)/i);
+    const customIds = reply.components[0].components.map((b) => b.data.custom_id);
+    assert.deepEqual(customIds, ["compare_pick:searchA", "compare_pick:close"]);
+  }
 });
 
 // Dicek SEBELUM check "live" + "siapa" polos (replyListLive) di router.js -

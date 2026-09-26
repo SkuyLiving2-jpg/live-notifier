@@ -25,6 +25,8 @@ const {
   replyLiveCountLeaderboard,
   replyCompareMembers,
   replyCompareMembersByUsername,
+  describeMissingMember,
+  normalizeMemberFragment,
   replySchedulePattern,
   replyPriorityList,
   replySpecificMember,
@@ -331,9 +333,24 @@ test("replyLiveCountLeaderboard - diurutin dari yang paling sering live, format 
   assert.match(reply, /LeaderboardTestB\*\* - 3x live/);
 });
 
-// ==== §10's forty-second item: "cok bandingin <A> vs <B>" ====
+// ==== §10's forty-second/forty-sixth item: "cok bandingin <A> dan <B>" ====
 
-test("replyCompareMembers - dua member ketemu -> content 'vs', 2 embed (masing-masing thumbnail foto), pemenang total-live dikasih 🏆", async () => {
+// Mock fetch ala IDN: nama yang ada di `profiles` balikin profil, sisanya
+// balikin error "User Not found" (bentuk ASLI respons IDN buat username yang
+// gak ada). Semua test di bawah yang ujungnya nyentuh IDN pake ini - test
+// unit gak boleh nembak network beneran.
+function fakeIdnFetch(profiles = {}) {
+  return async (url, options) => {
+    const { variables } = JSON.parse(options.body);
+    const profile = profiles[variables.username];
+    if (!profile) {
+      return { ok: true, json: async () => ({ errors: [{ message: "client.IDNAccountGetPublicProfileByUsername: User Not found" }], data: null }) };
+    }
+    return { ok: true, json: async () => ({ data: { getPublicProfileByUsername: { username: variables.username, ...profile } } }) };
+  };
+}
+
+test("replyCompareMembers - dua member ketemu -> content 'dan', 2 embed (masing-masing thumbnail foto), pemenang total-live dikasih 🏆, plus tombol Tutup", async () => {
   recordLiveCompleted("jkt48_comparea", "CompareA");
   recordLiveCompleted("jkt48_comparea", "CompareA");
   recordLiveCompleted("jkt48_comparea", "CompareA");
@@ -351,7 +368,8 @@ test("replyCompareMembers - dua member ketemu -> content 'vs', 2 embed (masing-m
   };
   try {
     const reply = await replyCompareMembers("comparea", "compareb");
-    assert.equal(reply.content, "⚔️ **CompareA** vs **CompareB**");
+    assert.equal(reply.content, "⚔️ **CompareA** dan **CompareB**");
+    assert.doesNotMatch(reply.content, /\bvs\b/i);
     assert.equal(reply.embeds.length, 2);
     assert.equal(reply.embeds[0].title, "🏆 CompareA"); // 3x > 1x live
     assert.equal(reply.embeds[1].title, "CompareB");
@@ -360,6 +378,13 @@ test("replyCompareMembers - dua member ketemu -> content 'vs', 2 embed (masing-m
     const fieldA = Object.fromEntries(reply.embeds[0].fields.map((f) => [f.name, f.value]));
     assert.equal(fieldA["Total live"], "3x");
     assert.equal(fieldA["Rata-rata durasi"], "1j 0m");
+
+    // Regresi (dilaporin owner): ketikan langsung "bandingin <A> dan <B>"
+    // dulu gak punya tombol Tutup sama sekali.
+    assert.equal(reply.components.length, 1);
+    assert.equal(reply.components[0].components.length, 1);
+    assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
+    assert.equal(reply.components[0].components[0].data.label, "Tutup");
   } finally {
     global.fetch = original;
   }
@@ -383,34 +408,149 @@ test("replyCompareMembers - gagal ambil foto profil (network/IDN API error) -> p
   }
 });
 
-test("replyCompareMembers - salah satu member gak ketemu -> pesan 'belum ada catatan', nyebut nama fragment yang gak ketemu", async () => {
-  recordLiveCompleted("jkt48_comparee", "CompareE");
-  const reply = await replyCompareMembers("comparee", "member-yang-gak-pernah-ada");
-  assert.match(reply, /belum ada catatan live buat "member-yang-gak-pernah-ada"/);
+// Regresi (dilaporin owner): "Kimmy" beneran member JKT48 (ada akun IDN
+// jkt48_kimmy) tapi belum pernah live semenjak bot ini jalan - dulu dibilang
+// gak ketemu seolah bukan member. Sekarang dicek ke IDN dulu.
+test("replyCompareMembers - member JKT48 asli yang BELUM PERNAH live (ada akun IDN, gak ada di live-count) -> bilang 'belum pernah live', bukan 'gak ketemu'", async () => {
+  recordLiveCompleted("jkt48_alphaone", "Alphaone");
+
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({ jkt48_belumpernahlive: { name: "Belumpernahlive JKT48" } });
+  try {
+    const reply = await replyCompareMembers("alphaone", "belumpernahlive");
+    assert.match(reply, /\*\*Belumpernahlive JKT48\*\* belum pernah live/);
+    assert.doesNotMatch(reply, /gak nemu/);
+  } finally {
+    global.fetch = original;
+  }
 });
 
-test("replyCompareMembers - dibandingin sama diri sendiri -> ditolak dengan pesan jelas, gak nyoba compare beneran", async () => {
-  recordLiveCompleted("jkt48_comparef", "CompareF");
-  const reply = await replyCompareMembers("comparef", "comparef");
+test("replyCompareMembers - nama yang GAK ADA di IDN sama sekali -> 'gak nemu member JKT48 bernama ...', beda dari 'belum pernah live'", async () => {
+  recordLiveCompleted("jkt48_alphatwo", "Alphatwo");
+
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({});
+  try {
+    const reply = await replyCompareMembers("alphatwo", "member-yang-gak-pernah-ada");
+    assert.match(reply, /gak nemu member JKT48 bernama "member-yang-gak-pernah-ada"/);
+    assert.doesNotMatch(reply, /belum pernah live/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembers - profil ada tapi BUKAN akun member JKT48 (username gak berawalan jkt48_) -> tetep 'gak nemu', bukan 'belum pernah live'", async () => {
+  recordLiveCompleted("jkt48_alphathree", "Alphathree");
+
+  const original = global.fetch;
+  // describeMissingMember selalu nanya username "jkt48_<token>", jadi profil
+  // yang balik dengan username LAIN (defensif) gak boleh dianggep member.
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ data: { getPublicProfileByUsername: { username: "fanaccount_xyz", name: "Fan Account" } } }),
+  });
+  try {
+    const reply = await replyCompareMembers("alphathree", "xyz");
+    assert.match(reply, /gak nemu member JKT48 bernama "xyz"/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembers - IDN gagal dihubungi pas ngecek nama yang gak ada di catatan -> pesan jujur 'gak bisa ngecek', bukan nebak", async () => {
+  recordLiveCompleted("jkt48_alphafour", "Alphafour");
+
+  const original = global.fetch;
+  global.fetch = async () => {
+    throw new Error("network down (simulasi)");
+  };
+  try {
+    const reply = await replyCompareMembers("alphafour", "siapasaja");
+    assert.match(reply, /gak bisa ngecek ke IDN/);
+    assert.doesNotMatch(reply, /belum pernah live/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembers - dua-duanya gak ada di catatan -> dua-duanya dijelasin sekaligus (satu baris per nama)", async () => {
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({ jkt48_duabelumlive: { name: "Duabelumlive JKT48" } });
+  try {
+    const reply = await replyCompareMembers("duabelumlive", "namangawur");
+    const lines = reply.split("\n");
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /Duabelumlive JKT48\*\* belum pernah live/);
+    assert.match(lines[1], /gak nemu member JKT48 bernama "namangawur"/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembers - dibandingin sama diri sendiri (nama yang sama persis) -> ditolak SEBELUM nyentuh storage/network", async () => {
+  recordLiveCompleted("jkt48_alphafive", "Alphafive");
+  const original = global.fetch;
+  global.fetch = async () => {
+    throw new Error("gak boleh ada panggilan network buat kasus ini");
+  };
+  try {
+    const reply = await replyCompareMembers("alphafive", "alphafive");
+    assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembers - nama yang sama tapi beda huruf besar/spasi/'JKT48' ('Nala' vs ' nala JKT48 ') tetep dianggep member yang sama", async () => {
+  recordLiveCompleted("jkt48_alphasix", "Alphasix JKT48");
+  const reply = await replyCompareMembers("Alphasix", " alphasix JKT48 ");
   assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
 });
 
+test("replyCompareMembers - dua fragment BEDA yang ternyata nunjuk member yang sama (mis. 'qwertyu' dan 'qwertyux') -> tetep ditolak", async () => {
+  recordLiveCompleted("jkt48_qwertyu", "Qwertyu");
+  const reply = await replyCompareMembers("qwertyu", "qwertyux");
+  // "qwertyux" gak sama persis, tapi fuzzy match (awalan) nunjuk ke Qwertyu juga
+  assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
+});
+
+test("describeMissingMember - input kosong/kependekan -> minta ketik nama yang jelas, tanpa nyentuh network", async () => {
+  const original = global.fetch;
+  global.fetch = async () => {
+    throw new Error("gak boleh ada panggilan network");
+  };
+  try {
+    assert.match(await describeMissingMember(""), /ketik nama membernya yang jelas/);
+    assert.match(await describeMissingMember("a"), /ketik nama membernya yang jelas/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("normalizeMemberFragment - lowercase, buang 'JKT48' & tanda baca, rapiin spasi", () => {
+  assert.equal(normalizeMemberFragment("  Nala JKT48 "), "nala");
+  assert.equal(normalizeMemberFragment("nala"), "nala");
+  assert.equal(normalizeMemberFragment("Nala!!"), "nala");
+  assert.equal(normalizeMemberFragment(""), "");
+});
+
 // Dipake chat/compareFlow.js (dropdown pencarian "cok bandingin" polos) -
-// usernameA/usernameB di sini DIJAMIN valid & beda (hasil resolusi dropdown),
-// jadi gak ada validasi "belum ada catatan"/"member yang sama" kayak versi
-// fragment - cukup dites hasil embednya kebentuk bener dari username langsung.
+// usernameA/usernameB di sini DIJAMIN ada di live-count.json (hasil
+// dropdown/pencarian) - cukup dites hasil embednya kebentuk bener dari
+// username langsung, termasuk tombol Tutup-nya.
 test("replyCompareMembersByUsername - langsung dari username (bukan fragment) -> hasil embed sama lengkapnya kayak replyCompareMembers", async () => {
   recordLiveCompleted("jkt48_compareg", "CompareG");
   recordLiveCompleted("jkt48_compareg", "CompareG");
   recordLiveCompleted("jkt48_compareh", "CompareH");
 
   const original = global.fetch;
-  global.fetch = async () => ({ ok: true, json: async () => ({ data: { getPublicProfileByUsername: null } }) });
+  global.fetch = fakeIdnFetch({});
   try {
     const reply = await replyCompareMembersByUsername("jkt48_compareg", "jkt48_compareh");
-    assert.equal(reply.content, "⚔️ **CompareG** vs **CompareH**");
+    assert.equal(reply.content, "⚔️ **CompareG** dan **CompareH**");
     assert.equal(reply.embeds.length, 2);
     assert.equal(reply.embeds[0].title, "🏆 CompareG"); // 2x > 1x live
+    assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
   } finally {
     global.fetch = original;
   }

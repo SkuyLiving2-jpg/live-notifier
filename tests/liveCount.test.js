@@ -127,16 +127,17 @@ test("searchLiveCountByNameFragment - balikin SEMUA kandidat yang cocok (bukan c
   );
 });
 
-test("searchLiveCountByNameFragment - excludeUsername nyaring satu username biar gak ikut jadi kandidat", () => {
+test("searchLiveCountByNameFragment - nama lengkap dengan 'JKT48' + huruf besar tetep ketemu (cocok nama depan, gak case-sensitive)", () => {
   const { recordLiveCompleted, searchLiveCountByNameFragment } = freshLiveCount();
+  recordLiveCompleted("jkt48_kimmy", "Kimmy JKT48");
 
-  recordLiveCompleted("jkt48_freya", "Freya");
-  recordLiveCompleted("jkt48_frelyn", "Frelyn");
-
-  const matches = searchLiveCountByNameFragment("fre", "jkt48_freya");
   assert.deepEqual(
-    matches.map((m) => m.username),
-    ["jkt48_frelyn"],
+    searchLiveCountByNameFragment("KIMMY").map((m) => m.username),
+    ["jkt48_kimmy"],
+  );
+  assert.deepEqual(
+    searchLiveCountByNameFragment("kimmy jkt48").map((m) => m.username),
+    ["jkt48_kimmy"],
   );
 });
 

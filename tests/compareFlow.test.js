@@ -31,13 +31,28 @@ function fakeInteraction({ customId, channelId = "c-compare", authorId = "u-comp
   };
 }
 
+// Mock fetch ala IDN (bentuk ASLI respons-nya): username di `profiles` balikin
+// profil, sisanya error "User Not found". Test unit gak boleh nembak IDN beneran.
+async function withFakeIdn(profiles, fn) {
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    const { variables } = JSON.parse(options.body);
+    const profile = profiles[variables.username];
+    if (!profile) return { ok: true, json: async () => ({ errors: [{ message: "IDNAccount: User Not found" }], data: null }) };
+    return { ok: true, json: async () => ({ data: { getPublicProfileByUsername: { username: variables.username, ...profile } } }) };
+  };
+  try {
+    await fn();
+  } finally {
+    global.fetch = original;
+  }
+}
+
 // Data dites ini SEMUA numpang di satu file test yang sama (gak ada
 // "fresh"-reload per test kayak tests/liveCount.test.js) - jadi tiap test di
 // bawah dikasih nama member yang beneran BEDA (bukan cuma beda akhiran dari
-// prefix yang sama, mis. "compareflowa"/"compareflowb"/"compareflowsingle"
-// dulu nyangkut, query "compareflow" ke-match semuanya termasuk yang dicatet
-// test LAIN) biar query fragment di satu test gak keceplos nyangkut ke data
-// yang dicatet test lain.
+// prefix yang sama - pencocokan nama itu fuzzy-awalan, query "compareflow"
+// dulu nyangkut ke SEMUA member yang dicatet test LAIN).
 test("replyStartComparePick - teks ngajak cari member A dulu, satu tombol cari + satu tombol tutup", () => {
   const reply = replyStartComparePick();
   assert.match(reply.content, /cari member a/i);
@@ -66,14 +81,30 @@ test("handleComparePickButton - action 'searchB:<usernameA>' -> munculin modal c
   assert.equal(interaction.modals[0].data.custom_id, "compare_modal:B:jkt48_nala");
 });
 
-test("handleCompareModalSubmit - step A, 0 match -> update balik nempelin tombol cari lagi (customId sama, step A)", async () => {
-  const interaction = fakeInteraction({ customId: "compare_modal:A", fieldValue: "member-yang-gak-ada" });
-  await handleCompareModalSubmit(interaction);
+test("handleCompareModalSubmit - step A, nama yang gak ada di IDN sama sekali -> 'gak nemu member JKT48', tombol cari lagi + Tutup nempel", async () => {
+  await withFakeIdn({}, async () => {
+    const interaction = fakeInteraction({ customId: "compare_modal:A", fieldValue: "member-yang-gak-ada" });
+    await handleCompareModalSubmit(interaction);
 
-  assert.equal(interaction.updates.length, 1);
-  assert.match(interaction.updates[0].content, /gak ketemu member "member-yang-gak-ada"/i);
-  const customIds = interaction.updates[0].components[0].components.map((b) => b.data.custom_id);
-  assert.deepEqual(customIds, ["compare_pick:searchA", "compare_pick:close"]);
+    assert.equal(interaction.updates.length, 1);
+    assert.match(interaction.updates[0].content, /gak nemu member JKT48 bernama "member-yang-gak-ada"/i);
+    const customIds = interaction.updates[0].components[0].components.map((b) => b.data.custom_id);
+    assert.deepEqual(customIds, ["compare_pick:searchA", "compare_pick:close"]);
+  });
+});
+
+// Regresi (dilaporin owner): "Kimmy" beneran member JKT48 tapi belum pernah
+// live semenjak bot ini jalan - dulu dibilang "gak ketemu member Kimmy".
+test("handleCompareModalSubmit - member JKT48 asli yang BELUM PERNAH live (Kimmy) -> bilang 'belum pernah live', bukan 'gak ketemu'", async () => {
+  await withFakeIdn({ jkt48_kimmy: { name: "Kimmy JKT48" } }, async () => {
+    const interaction = fakeInteraction({ customId: "compare_modal:A", fieldValue: "Kimmy" });
+    await handleCompareModalSubmit(interaction);
+
+    assert.match(interaction.updates[0].content, /\*\*Kimmy JKT48\*\* belum pernah live/);
+    assert.doesNotMatch(interaction.updates[0].content, /gak nemu/);
+    const customIds = interaction.updates[0].components[0].components.map((b) => b.data.custom_id);
+    assert.deepEqual(customIds, ["compare_pick:searchA", "compare_pick:close"]);
+  });
 });
 
 test("handleCompareModalSubmit - step A, TEPAT 1 match -> langsung lanjut ke prompt cari Member B (gak perlu dropdown buat 1 opsi)", async () => {
@@ -104,33 +135,60 @@ test("handleCompareModalSubmit - step A, LEBIH dari 1 match -> dropdown select b
   assert.equal(closeRow.components[0].data.custom_id, "compare_pick:close");
 });
 
-test("handleCompareModalSubmit - step B nge-exclude usernameA dari kandidat, walau namanya juga cocok sama query", async () => {
+// Regresi (dicurigai owner): Member B = Member A gak boleh lanjut. Dulu
+// dibuang diem-diem dari kandidat dan dilaporin "gak ketemu" - padahal
+// jelas ketemu, cuma orangnya sama.
+test("handleCompareModalSubmit - step B, query cuma cocok member A sendiri -> pesan 'member yang sama' (BUKAN 'gak ketemu'), tombol cari lagi + Tutup", async () => {
   recordLiveCompleted("jkt48_cfexcl", "Cfexcl");
   const interaction = fakeInteraction({ customId: "compare_modal:B:jkt48_cfexcl", fieldValue: "cfexcl" });
   await handleCompareModalSubmit(interaction);
 
-  assert.match(interaction.updates[0].content, /gak ketemu member "cfexcl" buat Member B/i);
+  assert.match(interaction.updates[0].content, /member yang sama, gak bisa dibandingin sama diri sendiri/);
+  assert.doesNotMatch(interaction.updates[0].content, /gak nemu|gak ketemu/);
+  assert.equal(interaction.updates[0].embeds, undefined, "gak boleh sampai nampilin perbandingan");
+  const customIds = interaction.updates[0].components[0].components.map((b) => b.data.custom_id);
+  assert.deepEqual(customIds, ["compare_pick:searchB:jkt48_cfexcl", "compare_pick:close"]);
+});
+
+test("handleCompareModalSubmit - step B, query cocok A DAN member lain -> A dibuang dari kandidat, sisanya lanjut", async () => {
+  recordLiveCompleted("jkt48_cfpairone", "Cfpairone");
+  recordLiveCompleted("jkt48_cfpairtwo", "Cfpairtwo");
+
+  await withFakeIdn({}, async () => {
+    const interaction = fakeInteraction({ customId: "compare_modal:B:jkt48_cfpairone", fieldValue: "cfpair" });
+    await handleCompareModalSubmit(interaction);
+
+    // sisa 1 kandidat (Cfpairtwo) -> langsung ke hasil perbandingan
+    assert.equal(interaction.updates[0].content, "⚔️ **Cfpairone** dan **Cfpairtwo**");
+  });
+});
+
+test("handleCompareModalSubmit - step B, member JKT48 yang belum pernah live juga dijelasin 'belum pernah live'", async () => {
+  recordLiveCompleted("jkt48_cfneverpair", "Cfneverpair");
+  await withFakeIdn({ jkt48_kimmy: { name: "Kimmy JKT48" } }, async () => {
+    const interaction = fakeInteraction({ customId: "compare_modal:B:jkt48_cfneverpair", fieldValue: "kimmy" });
+    await handleCompareModalSubmit(interaction);
+    assert.match(interaction.updates[0].content, /\*\*Kimmy JKT48\*\* belum pernah live/);
+    const customIds = interaction.updates[0].components[0].components.map((b) => b.data.custom_id);
+    assert.deepEqual(customIds, ["compare_pick:searchB:jkt48_cfneverpair", "compare_pick:close"]);
+  });
 });
 
 test("handleCompareModalSubmit - step B, 1 match -> LANGSUNG tampilin hasil perbandingan lengkap + tombol tutup", async () => {
   recordLiveCompleted("jkt48_cfmodalc", "Cfmodalc");
   recordLiveCompleted("jkt48_cfmodald", "Cfmodald");
 
-  const originalFetch = global.fetch;
-  global.fetch = async () => ({ ok: true, json: async () => ({ data: { getPublicProfileByUsername: null } }) });
-  try {
+  await withFakeIdn({}, async () => {
     const interaction = fakeInteraction({ customId: "compare_modal:B:jkt48_cfmodalc", fieldValue: "cfmodald" });
     await handleCompareModalSubmit(interaction);
 
     assert.equal(interaction.updates.length, 1);
     const reply = interaction.updates[0];
-    assert.equal(reply.content, "⚔️ **Cfmodalc** vs **Cfmodald**");
+    assert.equal(reply.content, "⚔️ **Cfmodalc** dan **Cfmodald**");
     assert.equal(reply.embeds.length, 2);
     assert.equal(reply.components.length, 1);
     assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
-  } finally {
-    global.fetch = originalFetch;
-  }
+  });
 });
 
 test("handleCompareSelect - step A -> lanjut prompt Member B (sama kayak jalur 1-match otomatis)", async () => {
@@ -145,16 +203,22 @@ test("handleCompareSelect - step B -> tampilin hasil perbandingan lengkap", asyn
   recordLiveCompleted("jkt48_cfselectb1", "Cfselectb1");
   recordLiveCompleted("jkt48_cfselectb2", "Cfselectb2");
 
-  const originalFetch = global.fetch;
-  global.fetch = async () => ({ ok: true, json: async () => ({ data: { getPublicProfileByUsername: null } }) });
-  try {
+  await withFakeIdn({}, async () => {
     const interaction = fakeInteraction({ customId: "compare_select:B:jkt48_cfselectb1", values: ["jkt48_cfselectb2"] });
     await handleCompareSelect(interaction);
 
     const reply = interaction.updates[0];
-    assert.equal(reply.content, "⚔️ **Cfselectb1** vs **Cfselectb2**");
+    assert.equal(reply.content, "⚔️ **Cfselectb1** dan **Cfselectb2**");
     assert.equal(reply.embeds.length, 2);
-  } finally {
-    global.fetch = originalFetch;
-  }
+    assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
+  });
+});
+
+test("handleCompareSelect - step B yang (entah gimana) milih member SAMA kayak A -> ditolak, gak nampilin perbandingan", async () => {
+  recordLiveCompleted("jkt48_cfselfsel", "Cfselfsel");
+  const interaction = fakeInteraction({ customId: "compare_select:B:jkt48_cfselfsel", values: ["jkt48_cfselfsel"] });
+  await handleCompareSelect(interaction);
+
+  assert.match(interaction.updates[0].content, /gak bisa dibandingin sama diri sendiri/);
+  assert.equal(interaction.updates[0].embeds, undefined);
 });

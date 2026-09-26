@@ -1,5 +1,6 @@
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
+const { findLiveCountByNameFragment } = require("../storage/liveCount");
 const { getUsernameForChannel } = require("../storage/channelRouting");
 const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
 const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
@@ -8,7 +9,7 @@ const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = 
 const { replyFallbackMenu } = require("./menu");
 const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
 const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
-const { deletePreviousReplyIfRepeated, rememberReply } = require("./repeatedReplyGuard");
+const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const {
   replyListLive,
   replyLongestLive,
@@ -166,23 +167,35 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return replyGifterSnapshot(gifterMatch[1]);
   }
 
-  // §10's forty-second item: "cok bandingin <A> vs <B>" (juga nerima
-  // "lawan"/"sama"/"dan"/"dengan" sebagai pemisah, biar natural apapun cara
-  // orangnya nulis) - dua nama fragment-nya diselesaiin lewat
-  // findLiveCountByNameFragment yang sama dipake replyLiveCount, jadi
-  // konsisten sama cara "cok berapa kali <nama> live" ngenalin member.
-  const compareMatch = text.match(/bandingin\s+(.+?)\s+(?:vs\.?|lawan|sama|dan|dengan)\s+(.+)/);
+  // §10's forty-second item: "cok bandingin <A> dan <B>" - pemisahnya SENGAJA
+  // cuma "dan" (owner minta "vs"/"versus" dibuang: "nala dan lily", bukan
+  // "nala vs lily"). Kata kuncinya "bandingin"/"bandingkan"/"banding". Dua
+  // nama fragment-nya diselesaiin lewat findLiveCountByNameFragment yang sama
+  // dipake replyLiveCount, jadi konsisten sama cara "cok berapa kali <nama>
+  // live" ngenalin member.
+  const compareMatch = text.match(/\bbanding(?:in|kan)?\s+(.+?)\s+dan\s+(.+)/);
   if (compareMatch) {
-    return await replyCompareMembers(compareMatch[1], compareMatch[2]);
+    return await replyCompareMembers(compareMatch[1].trim(), compareMatch[2].replace(/[?!.\s]+$/, ""));
   }
 
-  // "cok bandingin" DIKETIK POLOS (gak nyebut "<A> vs <B>" sekaligus, jadi
-  // compareMatch di atas gak match) - owner ngeluh ini kepentok jatuh ke
-  // fallback menu 9-opsi generik, padahal maksudnya jelas mau bandingin,
-  // cuma belum mutusin lawannya siapa. Sekarang dikasih flow dropdown/search
-  // 2 langkah (chat/compareFlow.js) daripada dianggep gak jelas.
-  if (containsWholeWord(text, "bandingin")) {
+  // Kata kuncinya diketik tapi pasangannya gak lengkap (mis. "cok bandingin"
+  // polos, atau cuma satu nama) - owner ngeluh ini kepentok jatuh ke fallback
+  // menu 9-opsi generik, padahal maksudnya jelas mau bandingin, cuma belum
+  // mutusin lawannya siapa. Dikasih flow dropdown/search 2 langkah
+  // (chat/compareFlow.js).
+  if (/\bbanding(?:in|kan)?\b/.test(text)) {
     return replyStartComparePick();
+  }
+
+  // Tanpa kata kunci sama sekali: "<nama> dan <nama>" doang (owner minta
+  // "nala dan lily" langsung jadi perbandingan). Ini pola yang LONGGAR banget
+  // ("dan" ada di mana-mana), jadi dijaga ketat: harus persis dua kata
+  // tunggal di kiri-kanan "dan", DAN minimal salah satunya dikenali sebagai
+  // member yang ada di catatan bot - biar kalimat biasa ("cok makan dan
+  // tidur") gak salah dibajak jadi perbandingan.
+  const bareCompareMatch = commandText.match(/^([a-z0-9]+)\s+dan\s+([a-z0-9]+)[?!.]*$/);
+  if (bareCompareMatch && (findLiveCountByNameFragment(bareCompareMatch[1]) || findLiveCountByNameFragment(bareCompareMatch[2]))) {
+    return await replyCompareMembers(bareCompareMatch[1], bareCompareMatch[2]);
   }
 
   // Dua cara natural buat nanya pola jadwal: "cok jadwal nala" (pola
@@ -406,16 +419,11 @@ function wireDiscordEvents(client) {
         authorId: message.author.id,
       });
       if (reply) {
-        // Owner ngeluh ngetik ulang keyword yang sama berkali-kali (mis.
-        // "bandingin" 5x nyoba-nyoba mulai chat/compareFlow.js) numpuk jadi
-        // banyak pesan bot yang identik - lihat repeatedReplyGuard.js. Hapus
-        // balesan LAMA (kalau teksnya beneran diulang persis sama) SEBELUM
-        // ngirim yang baru, biar channel-nya gak sempet nampilin dua-duanya
-        // bareng walau cuma sekejap.
-        const normalizedText = (message.content || "").trim().toLowerCase();
-        await deletePreviousReplyIfRepeated(message, normalizedText);
         const sent = await message.reply(safeReplyOptions(reply));
-        rememberReply(message, normalizedText, sent);
+        // Ketikan yang SAMA diulang lebih dari 2x -> ketikan lama + balesan
+        // bot lamanya dihapus (lihat repeatedReplyGuard.js). Dipanggil abis
+        // balesan kekirim, dan gak pernah throw (kegagalan hapus cuma di-log).
+        await pruneRepeatedExchange(message, (message.content || "").trim().toLowerCase(), sent);
       }
     } catch (error) {
       // Sebelumnya cuma nyetak error.message - kalau ini beneran gagal

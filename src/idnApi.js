@@ -74,6 +74,8 @@ async function fetchAllLivestreams() {
 // SEMUA yang lagi live, ini query `getPublicProfileByUsername` yang IDN
 // sediain buat SATU akun spesifik, jalan independen dari status live-nya
 // sekarang (member yang lagi nggak live tetep bisa dicari profilnya).
+const PROFILE_FETCH_TIMEOUT_MS = 2000;
+
 async function fetchPublicProfileByUsername(username) {
   const query = `
     query GetPublicProfile($username: String!) {
@@ -85,10 +87,14 @@ async function fetchPublicProfileByUsername(username) {
     }
   `;
 
+  // Timeout pendek: fungsi ini dipanggil di tengah interaksi tombol/modal
+  // Discord (chat/compareFlow.js), yang WAJIB dibales dalam ~3 detik - IDN
+  // yang lagi lemot gak boleh bikin interaksinya kadaluarsa.
   const response = await fetch(IDN_API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, variables: { username } }),
+    signal: AbortSignal.timeout(PROFILE_FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -97,6 +103,11 @@ async function fetchPublicProfileByUsername(username) {
 
   const result = await response.json();
   if (result.errors) {
+    // Dicek langsung ke API asli: username yang gak ada BUKAN balikin
+    // `data: null`, tapi error GraphQL "User Not found" - itu kasus normal
+    // (member/nama yang gak ada), bukan gangguan, jadi dianggap "gak ketemu".
+    const onlyNotFound = result.errors.every((e) => /not found/i.test(e?.message || ""));
+    if (onlyNotFound) return null;
     throw new Error(`GraphQL error: ${JSON.stringify(result.errors)}`);
   }
 

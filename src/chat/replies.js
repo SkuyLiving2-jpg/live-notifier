@@ -24,7 +24,7 @@ const { loadLiveCount, findLiveCountByNameFragment, getLiveCountLeaderboard } = 
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
-const { fetchPublicProfileByUsername } = require("../idnApi");
+const { fetchPublicProfileByUsername, isJkt48Member } = require("../idnApi");
 const { computeSchedulePattern } = require("../schedulePattern");
 const { PRIORITY_PING_USER_ID, DAILY_RECAP_COLOR } = require("../config");
 const {
@@ -255,7 +255,7 @@ function replyHelp() {
     '- "cok siapa yang paling sering live" - leaderboard total live count semua member',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
-    '- "cok bandingin <nama member> vs <nama member>" - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya (atau ketik "cok bandingin" polos buat dicariin lewat dropdown)',
+    '- "cok bandingin <nama member> dan <nama member>" (atau cukup "cok <nama> dan <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat dicariin lewat dropdown',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
     '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
@@ -1503,30 +1503,94 @@ async function buildCompareReply(a, b) {
   const countWinnerIsA = a.count !== b.count && a.count > b.count;
   const countWinnerIsB = a.count !== b.count && b.count > a.count;
 
+  // Tombol "Tutup" nempel di SEMUA jalur hasil perbandingan (ketikan langsung
+  // "bandingin <A> dan <B>" MAUPUN lewat flow dropdown compareFlow.js) -
+  // dulu cuma flow dropdown yang punya, jadi ketikan langsung ninggalin
+  // kotak hasil yang gak bisa ditutup.
   return {
-    content: `⚔️ **${a.name}** vs **${b.name}**`,
+    content: `⚔️ **${a.name}** dan **${b.name}**`,
     embeds: [buildCompareMemberEmbed(a, avatarA, avgA, maxA, countWinnerIsA), buildCompareMemberEmbed(b, avatarB, avgB, maxB, countWinnerIsB)],
+    components: [buildCompareCloseRow()],
   };
 }
 
+// customId "compare_pick:close" dibaca chat/compareFlow.js's
+// handleComparePickButton (router.js dispatch by prefix "compare_pick:") -
+// didefinisiin di SINI (bukan di compareFlow.js) soalnya compareFlow.js yang
+// require replies.js, bukan sebaliknya (biar gak circular require).
+const COMPARE_CLOSE_ID = "compare_pick:close";
+
+function buildCompareCloseRow() {
+  return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(COMPARE_CLOSE_ID).setLabel("Tutup").setStyle(ButtonStyle.Danger));
+}
+
+// Kunci buat ngebandingin dua ketikan nama tanpa peduli huruf besar/kecil,
+// spasi ekstra, atau kata "JKT48" di belakangnya ("Nala" == " nala JKT48 ").
+function normalizeMemberFragment(fragment) {
+  return (fragment || "")
+    .toLowerCase()
+    .replace(/\bjkt48\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function sameMemberMessage(fragmentA, fragmentB) {
+  return `Cok, "${fragmentA.trim()}" sama "${fragmentB.trim()}" itu member yang sama, gak bisa dibandingin sama diri sendiri. Pilih dua member yang BEDA ya.`;
+}
+
+// Nama yang gak ada di live-count.json (belum pernah ke-track live-nya) BUKAN
+// berarti "member itu gak ada" - Kimmy misalnya beneran member JKT48 dengan
+// akun IDN (jkt48_kimmy), cuma belum pernah live semenjak bot ini mulai
+// mantau. Jadi sebelum bilang "gak ketemu", dicek langsung ke IDN (username
+// member konsisten "jkt48_<nama depan>", lihat idnApi.js's isJkt48Member):
+// - profil ada & akun JKT48 -> "belum pernah live" (jujur, sesuai datanya)
+// - profil gak ada          -> beneran gak ketemu (typo/bukan member/belum
+//                              punya akun IDN)
+// - IDN gagal dihubungi     -> bilang gak bisa ngecek, BUKAN nebak salah satunya
+async function describeMissingMember(fragment) {
+  const shown = (fragment || "").trim();
+  const token = normalizeMemberFragment(shown).split(" ")[0];
+  if (!token || token.length < 2) return `Cok, ketik nama membernya yang jelas ya - "${shown}" terlalu pendek/gak valid.`;
+
+  try {
+    const profile = await fetchPublicProfileByUsername(`jkt48_${token}`);
+    if (profile && isJkt48Member(profile)) {
+      return `Cok, **${profile.name}** belum pernah live semenjak bot ini mulai mantau, jadi belum ada datanya buat dibandingin.`;
+    }
+    return `Cok, gak nemu member JKT48 bernama "${shown}" di IDN - cek lagi ejaan namanya (atau mungkin dia belum punya akun IDN).`;
+  } catch (error) {
+    console.error(`Gagal ngecek member "${shown}" ke IDN:`, error.message);
+    return `Cok, "${shown}" belum ada di catatan bot, dan bot lagi gak bisa ngecek ke IDN buat mastiin dia member atau bukan. Coba lagi bentar.`;
+  }
+}
+
+// "cok bandingin <A> dan <B>" (juga "bandingkan"/"banding", dan ketikan
+// "<A> dan <B>" doang - lihat router.js). Urutan cek: nama yang SAMA
+// dulu (sebelum nyentuh storage/network), baru resolusi kedua member, dan
+// kalau ada yang gak ketemu, dua-duanya dijelasin sekaligus (bukan satu-satu
+// tiap user coba ulang).
 async function replyCompareMembers(fragmentA, fragmentB) {
+  if (normalizeMemberFragment(fragmentA) === normalizeMemberFragment(fragmentB)) return sameMemberMessage(fragmentA, fragmentB);
+
   const a = findLiveCountByNameFragment(fragmentA);
-  if (!a) return `Cok, belum ada catatan live buat "${fragmentA.trim()}" semenjak bot ini jalan.`;
   const b = findLiveCountByNameFragment(fragmentB);
-  if (!b) return `Cok, belum ada catatan live buat "${fragmentB.trim()}" semenjak bot ini jalan.`;
-  if (a.username === b.username)
-    return `Cok, "${fragmentA.trim()}" sama "${fragmentB.trim()}" itu member yang sama, gak bisa dibandingin sama diri sendiri.`;
+
+  const missing = [];
+  if (!a) missing.push(describeMissingMember(fragmentA));
+  if (!b) missing.push(describeMissingMember(fragmentB));
+  if (missing.length > 0) return (await Promise.all(missing)).join("\n");
+
+  if (a.username === b.username) return sameMemberMessage(fragmentA, fragmentB);
 
   return buildCompareReply(a, b);
 }
 
 // Dipake chat/compareFlow.js (dropdown pencarian buat "cok bandingin" POLOS,
-// tanpa nyebut "<A> vs <B>" sekaligus) - beda dari replyCompareMembers di
-// atas, di sini `usernameA`/`usernameB` udah DIJAMIN valid & beda (hasil
-// resolusi lewat search+pilih dropdown di storage/liveCount.js's
-// searchLiveCountByNameFragment, yang emang udah nge-exclude username A pas
-// nyari kandidat B), jadi gak perlu validasi "belum ada catatan"/"member yang
-// sama" ulang kayak versi fragment.
+// tanpa nyebut "<A> dan <B>" sekaligus) - beda dari replyCompareMembers di
+// atas, di sini `usernameA`/`usernameB` udah DIJAMIN ada di live-count.json
+// (hasil pilihan dropdown/pencarian) dan compareFlow.js sendiri yang nolak
+// pasangan member yang sama SEBELUM sampai sini, jadi gak perlu validasi
+// "belum ada catatan"/"member yang sama" ulang kayak versi fragment.
 async function replyCompareMembersByUsername(usernameA, usernameB) {
   const data = loadLiveCount();
   const a = { username: usernameA, ...data[usernameA] };
@@ -1660,6 +1724,11 @@ module.exports = {
   buildExportCsv,
   replyCompareMembers,
   replyCompareMembersByUsername,
+  describeMissingMember,
+  normalizeMemberFragment,
+  sameMemberMessage,
+  buildCompareCloseRow,
+  COMPARE_CLOSE_ID,
   replyBotStatus,
   replySpecificMember,
   replyMemberNotFound,

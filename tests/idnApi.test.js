@@ -40,6 +40,35 @@ test("fetchPublicProfileByUsername - username yang gak ketemu di IDN balikin nul
   }
 });
 
+// Bentuk respons ASLI IDN buat username yang gak ada (dicek langsung ke API):
+// bukan `data: null`, tapi error GraphQL "User Not found". Itu kasus normal
+// (nama gak ada/typo), bukan gangguan - harus jadi null, BUKAN throw.
+test("fetchPublicProfileByUsername - error GraphQL 'User Not found' (bentuk asli respons IDN) -> null, bukan throw", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      errors: [{ message: "profileUC.GetPublicProfileByUsername: client.IDNAccountGetPublicProfileByUsername: User Not found" }],
+      data: null,
+    }),
+  });
+  try {
+    assert.equal(await fetchPublicProfileByUsername("jkt48_gakada"), null);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("fetchPublicProfileByUsername - error GraphQL CAMPURAN (ada yang bukan 'not found') tetep throw", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({ errors: [{ message: "User Not found" }, { message: "internal boom" }] }) });
+  try {
+    await assert.rejects(() => fetchPublicProfileByUsername("jkt48_nala"), /GraphQL error/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
 test("fetchPublicProfileByUsername - HTTP status gagal -> throw (pemanggil yang nentuin gimana nanganinnya)", async () => {
   const original = global.fetch;
   global.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) });
