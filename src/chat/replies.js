@@ -6,6 +6,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
   StringSelectMenuBuilder,
+  AttachmentBuilder,
 } = require("discord.js");
 const { deleteInteractionMessage } = require("./interactionHelpers");
 const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
@@ -135,6 +136,87 @@ function replyTopViewers() {
   return replyTopViewersForRange(null, "hari ini");
 }
 
+// §10's forty-first item, owner minta ("Q2" fitur ke-3): export rekap ke
+// file CSV yang bisa didownload, buat dibuka di luar Discord (spreadsheet/
+// laporan) - beda dari tabel `cok rekap` yang cuma keliatan di Discord doang.
+//
+// Dua hal yang owner sengaja pesen dijaga ("jangan sampai terlalu mahal di
+// storage"): (1) file-nya dibikin MURNI di memori (`Buffer.from(csvText)`)
+// terus langsung dilampirin ke balesan - GAK PERNAH ditulis ke disk bot ini
+// sama sekali (beda dari fitur lain yang nulis ke CACHE_DIR), jadi gak nambah
+// beban storage Railway Volume-nya sedikit pun, walau dipanggil berkali-kali.
+// (2) formatnya CSV polos (bukan JSON/PDF/gambar) - paling ringkes buat
+// jumlah baris yang sama, dan `EXPORT_MAX_ROWS` jadi jaring pengaman kalau
+// suatu saat data separah apapun tetap gak bisa ngasilin file yang
+// kegedean buat di-download (di skala member JKT48 + retensi 35 hari
+// `dailyLog.js`, jumlah sesi realistisnya gak bakal deket-deket batas ini
+// sama sekali - ini murni jaga-jaga, bukan batasan yang bakal kena beneran).
+const EXPORT_MAX_ROWS = 10000;
+
+// "," / "\"" / baris baru di dalem sebuah value HARUS dibungkus tanda kutip
+// (standar format CSV) - member name teoretisnya bisa aja ngandung koma,
+// dan biarpun kemungkinannya kecil, mendingan CSV-nya tetep valid dibuka di
+// Excel/Sheets manapun daripada kolom-nya geser gara-gara 1 koma nyempil.
+function csvEscape(value) {
+  const str = String(value);
+  return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function formatSessionMomentWIB(unixSec) {
+  const d = new Date(unixSec * 1000);
+  return `${getDateWIB(d)} ${formatClockWIB(d)}`;
+}
+
+function buildExportCsv(sessions) {
+  const sorted = [...sessions].sort((a, b) => a.startedAtUnix - b.startedAtUnix).slice(0, EXPORT_MAX_ROWS);
+  const header = ["No", "Member", "Username", "Status", "Mulai (WIB)", "Berakhir (WIB)", "Durasi", "Puncak Penonton"];
+  const rows = sorted.map((s, i) => [
+    i + 1,
+    s.name,
+    s.username,
+    s.endedAtUnix !== null ? "Selesai" : "Live",
+    formatSessionMomentWIB(s.startedAtUnix),
+    s.endedAtUnix !== null ? formatSessionMomentWIB(s.endedAtUnix) : "-",
+    s.endedAtUnix !== null ? formatDuration(s.durationMs) : "-",
+    s.peakViewCount != null ? s.peakViewCount : "",
+  ]);
+  return [header, ...rows].map((row) => row.map(csvEscape).join(",")).join("\r\n");
+}
+
+// Nama file-nya dilucutin dari karakter yang bukan huruf/angka/tanda hubung
+// biar aman dipake sebagai nama file lintas OS (spasi/tanda baca di label
+// rentang, mis. "tanggal 25 September 2026", jadi "tanggal-25-september-2026").
+function sanitizeExportFileNamePart(label) {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// Dipanggil "cok export rekap ..." (chat/router.js) - reuse resolveStatRangeFromText
+// yang SAMA persis dipake "paling lama live"/"paling rame ditonton" (§10's
+// fortieth item), biar rentang yang didukung/gak didukung (mis. nama hari)
+// konsisten di ketiga fitur ini, bukan nulis parser rentang yang keempat.
+function replyExportRecap(text) {
+  const range = resolveStatRangeFromText(text);
+  const rangeDays = range ? range.rangeDays : null;
+  const label = range ? range.label : "hari ini";
+
+  const sessions = getSessionsForRange(rangeDays);
+  if (sessions.length === 0) {
+    return `Cok, belum ada data live buat diexport (${label}).`;
+  }
+
+  const csv = buildExportCsv(sessions);
+  const truncatedNote = sessions.length > EXPORT_MAX_ROWS ? `\n_(dibatesin ${EXPORT_MAX_ROWS} baris pertama dari ${sessions.length} sesi)_` : "";
+  const fileName = `rekap-${sanitizeExportFileNamePart(label)}.csv`;
+
+  return {
+    content: `📄 Rekap ${label} (${sessions.length} sesi) - diexport ke CSV, cok.${truncatedNote}`,
+    files: [new AttachmentBuilder(Buffer.from(csv, "utf-8"), { name: fileName })],
+  };
+}
+
 function replyBotStatus() {
   return `✅ Bot jalan normal. Lagi mantau ${activeLives.size} member yang live sekarang.`;
 }
@@ -165,8 +247,7 @@ function replyHelp() {
   return [
     "Cok bisa jawab ini:",
     '- "cok ini yang masih live siapa aja?"',
-    '- "cok siapa yang paling lama live hari ini?"',
-    '- "cok siapa yang paling rame ditonton hari ini?"',
+    '- "cok siapa yang paling lama live" / "cok siapa yang paling rame ditonton" - tambahin "minggu ini"/"bulan ini"/nama bulan/tanggal buat rentang laen, default hari ini',
     '- "cok status"',
     '- "cok <nama member> masih live?"',
     '- "cok stats <nama member>" - statistik durasi live-nya',
@@ -175,7 +256,8 @@ function replyHelp() {
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
-    '- "cok rekap minggu ini" / "cok rekap bulan ini" - rekap 7/30 hari terakhir',
+    '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
+    '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
     '- "cok daftar prioritas" - lihat member prioritas',
     '- "cok ingetin <nama member>" - kamu di-tag pribadi kalau dia mulai live',
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
@@ -1509,6 +1591,8 @@ module.exports = {
   replyTopViewers,
   replyTopViewersForRange,
   resolveStatRangeFromText,
+  replyExportRecap,
+  buildExportCsv,
   replyBotStatus,
   replySpecificMember,
   replyMemberNotFound,

@@ -14,6 +14,7 @@ const {
   replyTopViewers,
   replyTopViewersForRange,
   resolveStatRangeFromText,
+  replyExportRecap,
   replyBotStatus,
   replySpecificMember,
   replyHelp,
@@ -180,6 +181,17 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     (containsWholeWord(text, "daftar") || containsWholeWord(text, "siapa") || containsWholeWord(text, "list"))
   ) {
     return replyPriorityList();
+  }
+
+  // §10's forty-first item: "cok export rekap ..." - dicek SEBELUM "rekap"
+  // polos di bawah, soalnya kalimatnya juga ngandung kata "rekap" (bakal
+  // ketangkep sama dispatch rekap biasa dan nunjukkin TABEL kalau ini
+  // dibiarin ke bawah, bukan file CSV yang diminta). Rentangnya reuse
+  // resolveStatRangeFromText yang sama kayak "paling lama live"/"paling
+  // rame ditonton" (§10's fortieth item) - "export rekap" doang (gak nyebut
+  // rentang) default ke hari ini, sama kayak dua fitur itu.
+  if (containsWholeWord(text, "export") && containsWholeWord(text, "rekap")) {
+    return replyExportRecap(text);
   }
 
   // Dicek SEBELUM "rekap" polos di bawah - kalimatnya juga ngandung "rekap"

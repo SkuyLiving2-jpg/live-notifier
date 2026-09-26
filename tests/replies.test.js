@@ -34,6 +34,7 @@ const {
   parseMonthOnlyFromText,
   parseWeekdayFromText,
   resolveStatRangeFromText,
+  buildExportCsv,
   handleSubscribe,
   handleUnsubscribe,
   isOwner,
@@ -88,6 +89,8 @@ function freshRepliesForRecapRange() {
     replyLongestLiveForRange: replies.replyLongestLiveForRange,
     replyTopViewersForRange: replies.replyTopViewersForRange,
     resolveStatRangeFromText: replies.resolveStatRangeFromText,
+    replyExportRecap: replies.replyExportRecap,
+    buildExportCsv: replies.buildExportCsv,
   };
 }
 
@@ -1165,6 +1168,55 @@ test("replyTopViewersForRange - bulan BERJALAN ikut gabung peak penonton dari se
 test("replyTopViewersForRange - rentang yang kosong sama sekali -> pesan 'belum ada data', bukan throw", () => {
   const fresh = freshRepliesForRecapRange();
   assert.equal(fresh.replyTopViewersForRange(7, "minggu ini"), "Cok, belum ada data penonton buat minggu ini.");
+});
+
+// ==== §10's forty-first item: "cok export rekap ..." -> file CSV ====
+
+test("buildExportCsv - header + baris sesuai data, sesi yang masih live tetep kebentuk ('Live'/'-' bukan crash)", () => {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const sessions = [
+    { name: "Nala", username: "jkt48_nala", startedAtUnix: nowSec - 3600, endedAtUnix: nowSec, durationMs: 3600_000, peakViewCount: 500 },
+    { name: "Levi", username: "jkt48_levi", startedAtUnix: nowSec - 600, endedAtUnix: null, durationMs: null, peakViewCount: 10 },
+  ];
+  const csv = buildExportCsv(sessions);
+  const lines = csv.split("\r\n");
+  assert.equal(lines[0], "No,Member,Username,Status,Mulai (WIB),Berakhir (WIB),Durasi,Puncak Penonton");
+  assert.match(lines[1], /^1,Nala,jkt48_nala,Selesai,/);
+  assert.match(lines[2], /^2,Levi,jkt48_levi,Live,.*,-,-,10$/);
+});
+
+test("buildExportCsv - value yang ngandung koma dibungkus tanda kutip (CSV valid)", () => {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const csv = buildExportCsv([
+    { name: "Nama, Dengan Koma", username: "jkt48_test", startedAtUnix: nowSec - 60, endedAtUnix: nowSec, durationMs: 60_000, peakViewCount: 5 },
+  ]);
+  assert.match(csv.split("\r\n")[1], /^1,"Nama, Dengan Koma",jkt48_test,/);
+});
+
+test("replyExportRecap - ada sesi hari ini (default, gak nyebut rentang) -> balesan bawa 1 file CSV, nama file & isi bener", async () => {
+  const fresh = freshRepliesForRecapRange();
+  fresh.recordLiveEnded("Exportme", "jkt48_exportme", new Date(Date.now() - 60_000), new Date(), 5);
+
+  const reply = fresh.replyExportRecap("cok export rekap");
+  assert.match(reply.content, /📄 Rekap hari ini \(1 sesi\) - diexport ke CSV, cok\./);
+  assert.equal(reply.files.length, 1);
+  assert.equal(reply.files[0].name, "rekap-hari-ini.csv");
+  assert.match(reply.files[0].attachment.toString("utf-8"), /Exportme/);
+});
+
+test("replyExportRecap - rentang bulan ini (via resolveStatRangeFromText) -> nama file & label ikut rentangnya", async () => {
+  const fresh = freshRepliesForRecapRange();
+  fresh.recordLiveEnded("Exportmonth", "jkt48_exportmonth", new Date(Date.now() - 60_000), new Date(), 5);
+
+  const reply = fresh.replyExportRecap("cok export rekap bulan ini");
+  assert.match(reply.content, /Rekap bulan .* - diexport ke CSV/);
+  assert.match(reply.files[0].name, /^rekap-bulan-/);
+});
+
+test("replyExportRecap - rentang yang kosong sama sekali -> pesan 'belum ada data', TANPA file sama sekali", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const reply = fresh.replyExportRecap("cok export rekap minggu ini");
+  assert.equal(reply, "Cok, belum ada data live buat diexport (minggu ini).");
 });
 
 test("buildRecapMonthSelectRow - customId recap_month_select, label via formatMonthLabel, default:true buat bulan terpilih", () => {

@@ -150,6 +150,18 @@ test("paling rame ditonton bulan ini - dispatch ke replyTopViewersForRange (bula
   assert.doesNotMatch(reply, /hari ini/);
 });
 
+// §10's forty-first item: "cok export rekap ..." harus ketangkep SEBELUM
+// dispatch "rekap" biasa (kalimatnya juga ngandung kata "rekap") - kalau
+// kebalik urutannya, ini bakal nunjukkin TABEL rekap biasa, bukan file CSV.
+test("export rekap - dispatch ke replyExportRecap (balesan bawa file CSV), BUKAN ke dispatch 'rekap' biasa", async () => {
+  const reply = await buildChatReply("cok export rekap");
+  const content = textOf(reply);
+  assert.match(content, /diexport ke CSV|belum ada data live buat diexport/);
+  if (typeof reply === "object") {
+    assert.ok(reply.files, "balesan yang ada datanya harus bawa file CSV");
+  }
+});
+
 // Dicek SEBELUM check "live" + "siapa" polos (replyListLive) di router.js -
 // kalimatnya juga ngandung "live" + "siapa", jadi harus ketangkep duluan
 // sama check leaderboard yang lebih spesifik. "cok siapa yang live" (tanpa
