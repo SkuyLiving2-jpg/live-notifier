@@ -25,6 +25,7 @@ const { loadSubscriptions, addSubscription, removeSubscription } = require("../s
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
 const { fetchPublicProfileByUsername } = require("../idnApi");
+const { computeSchedulePattern } = require("../schedulePattern");
 const { PRIORITY_PING_USER_ID, DAILY_RECAP_COLOR } = require("../config");
 const {
   formatDuration,
@@ -37,8 +38,6 @@ const {
   formatLongDateWIB,
   formatMonthLabel,
   describeElapsed,
-  getTimeOfDayBucket,
-  getHourWIBOf,
   WEEKDAY_FORMATTER_WIB,
   stripTrailingLiveWord,
   matchesNameFragment,
@@ -1517,9 +1516,10 @@ async function replyCompareMembers(fragmentA, fragmentB) {
 // langsung ke API-nya). Jadi ini PURE statistik dari histori kita SENDIRI
 // (live-duration-history.json, maks 10 entry terakhir per orang) - bukan
 // jaminan/jadwal pasti, bisa aja meleset kalau pola live-nya emang nggak
-// tetap. live-duration-history.json cuma nyimpen timestamp SELESAI (`at`)
-// + durasinya, BUKAN timestamp mulai eksplisit - jadi waktu MULAI live
-// diperkirakan mundur (at - durationMs), bukan dibaca langsung dari field.
+// tetap. Matematika pola-nya sendiri (`computeSchedulePattern`) diekstrak ke
+// ../schedulePattern.js (§10's forty-third item) - dipake bareng sama
+// notify/priorityDm.js's alert heads-up proaktif, biar dua-duanya narik dari
+// definisi "pola jam paling sering" yang SAMA persis.
 function replySchedulePattern(fragment) {
   const found = findDurationHistoryByNameFragment(fragment);
   if (!found || found.entries.length === 0) {
@@ -1527,46 +1527,18 @@ function replySchedulePattern(fragment) {
   }
 
   const { entries, displayName } = found;
-  if (entries.length < 3) {
+  const pattern = computeSchedulePattern(entries);
+  if (!pattern) {
     return `Cok, riwayat **${displayName}** baru ada ${entries.length}x - masih kurang buat nebak pola jadwalnya (minimal 3x live yang ke-track). Coba tanya lagi lain kali.`;
   }
 
-  const startTimes = entries.map((e) => new Date(new Date(e.at).getTime() - e.durationMs));
-  const total = startTimes.length;
-
-  const bucketCounts = {};
-  const weekdayCounts = {};
-  const hoursByBucket = {};
-  for (const startDate of startTimes) {
-    const hourWIB = getHourWIBOf(startDate);
-    const bucket = getTimeOfDayBucket(hourWIB);
-    bucketCounts[bucket] = (bucketCounts[bucket] || 0) + 1;
-    (hoursByBucket[bucket] = hoursByBucket[bucket] || []).push(hourWIB);
-
-    const weekday = WEEKDAY_FORMATTER_WIB.format(startDate);
-    weekdayCounts[weekday] = (weekdayCounts[weekday] || 0) + 1;
-  }
-
-  const [topBucketName, topBucketCount] = Object.entries(bucketCounts).sort((a, b) => b[1] - a[1])[0];
-  const [topWeekdayName, topWeekdayCount] = Object.entries(weekdayCounts).sort((a, b) => b[1] - a[1])[0];
-
-  // "malam" ngerangkum jam 18-23 SAMA 0-3 (lewat tengah malam) - kalau
-  // dihitung range min/max mentah, itu bisa keliatan salah ("00-23", nutupin
-  // seharian) padahal beneran cuma sekelompok jam malam yang nyambung lewat
-  // pergantian hari. Digeser +24 dulu buat jam dini hari (0-3) biar urutannya
-  // bener secara matematis, baru di-mod 24 lagi pas ditampilin.
-  const rawHours = hoursByBucket[topBucketName];
-  const rangeHours = topBucketName === "malam" ? rawHours.map((h) => (h < 4 ? h + 24 : h)) : rawHours;
-  const rangeMin = Math.min(...rangeHours) % 24;
-  const rangeMax = Math.max(...rangeHours) % 24;
   const pad2 = (n) => String(n).padStart(2, "0");
-
   const lines = [
-    `📅 Pola live **${displayName}** (dari ${total} live terakhir yang ke-track):`,
-    `- Paling sering **${topBucketName}**, sekitar jam ${pad2(rangeMin)}-${pad2(rangeMax)} WIB (${topBucketCount}/${total}x)`,
+    `📅 Pola live **${displayName}** (dari ${pattern.total} live terakhir yang ke-track):`,
+    `- Paling sering **${pattern.topBucketName}**, sekitar jam ${pad2(pattern.rangeMin)}-${pad2(pattern.rangeMax)} WIB (${pattern.topBucketCount}/${pattern.total}x)`,
   ];
-  if (topWeekdayCount / total >= 0.4) {
-    lines.push(`- Hari yang sering: **${topWeekdayName}** (${topWeekdayCount}/${total}x)`);
+  if (pattern.topWeekdayCount / pattern.total >= 0.4) {
+    lines.push(`- Hari yang sering: **${pattern.topWeekdayName}** (${pattern.topWeekdayCount}/${pattern.total}x)`);
   }
   lines.push("_(Pola dari histori doang, BUKAN jadwal resmi - IDN nggak nyediain jadwal, jadi bisa aja meleset.)_");
 

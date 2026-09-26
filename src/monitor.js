@@ -5,7 +5,7 @@ const { recordLiveEnded } = require("./storage/dailyLog");
 const { recordLiveCompleted } = require("./storage/liveCount");
 const { getPriorityConfig } = require("./priority");
 const { sendDiscordNotif } = require("./notify/liveNotify");
-const { maybePartyModeAlert, maybeAlertEndingSoon } = require("./notify/priorityDm");
+const { maybePartyModeAlert, maybeAlertEndingSoon, maybeSendHeadsUpAlerts } = require("./notify/priorityDm");
 const {
   maybeAlertViewerMilestone,
   maybeAnnounceNewRecord,
@@ -162,6 +162,7 @@ async function checkLiveMembers() {
     await maybeSendDailyRecap();
     await maybeSendWeeklyRecap();
     await maybeSendMonthlyRecap();
+    await maybeSendHeadsUpAlerts();
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);
   }
