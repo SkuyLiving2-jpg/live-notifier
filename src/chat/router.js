@@ -8,6 +8,7 @@ const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = 
 const { replyFallbackMenu } = require("./menu");
 const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
 const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
+const { deletePreviousReplyIfRepeated, rememberReply } = require("./repeatedReplyGuard");
 const {
   replyListLive,
   replyLongestLive,
@@ -405,14 +406,16 @@ function wireDiscordEvents(client) {
         authorId: message.author.id,
       });
       if (reply) {
-        // Instrumentasi SEMENTARA (lagi nyari kenapa "cok bandingin" cuma
-        // muncul teksnya doang tanpa embed foto+statistik di produksi,
-        // padahal replyCompareMembers kebukti balikin embeds-nya pas dites
-        // lokal) - dibuang lagi begitu ketauan akar masalahnya.
-        if (reply.embeds) {
-          console.log(`[debug embeds] ngirim ${reply.embeds.length} embed buat balesan chat ini`);
-        }
-        await message.reply(safeReplyOptions(reply));
+        // Owner ngeluh ngetik ulang keyword yang sama berkali-kali (mis.
+        // "bandingin" 5x nyoba-nyoba mulai chat/compareFlow.js) numpuk jadi
+        // banyak pesan bot yang identik - lihat repeatedReplyGuard.js. Hapus
+        // balesan LAMA (kalau teksnya beneran diulang persis sama) SEBELUM
+        // ngirim yang baru, biar channel-nya gak sempet nampilin dua-duanya
+        // bareng walau cuma sekejap.
+        const normalizedText = (message.content || "").trim().toLowerCase();
+        await deletePreviousReplyIfRepeated(message, normalizedText);
+        const sent = await message.reply(safeReplyOptions(reply));
+        rememberReply(message, normalizedText, sent);
       }
     } catch (error) {
       // Sebelumnya cuma nyetak error.message - kalau ini beneran gagal
