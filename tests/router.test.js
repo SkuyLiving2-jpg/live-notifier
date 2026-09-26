@@ -135,6 +135,21 @@ test("paling lama live hari ini - dispatch ke replyLongestLive", async () => {
   assert.match(reply, /Paling lama live hari ini|belum ada data live hari ini/);
 });
 
+// §10's fortieth item: "paling lama live"/"paling rame ditonton" bisa dikasih
+// rentang juga (minggu ini/bulan ini/nama bulan/tanggal spesifik), gak cuma
+// "hari ini" - dispatch ini gak nyentuh network sama sekali (murni activeLives
+// + daily-log lokal), jadi aman dites langsung kayak replyRecapRange.
+test("paling lama live minggu ini - dispatch ke replyLongestLiveForRange(7, 'minggu ini'), BUKAN 'hari ini'", async () => {
+  const reply = await buildChatReply("cok siapa yang paling lama live minggu ini?");
+  assert.match(reply, /Paling lama live minggu ini|belum ada data live minggu ini/);
+});
+
+test("paling rame ditonton bulan ini - dispatch ke replyTopViewersForRange (bulan berjalan), BUKAN 'hari ini'", async () => {
+  const reply = await buildChatReply("cok siapa yang paling rame ditonton bulan ini?");
+  assert.match(reply, /Paling rame ditonton bulan|belum ada data penonton buat bulan/);
+  assert.doesNotMatch(reply, /hari ini/);
+});
+
 // Dicek SEBELUM check "live" + "siapa" polos (replyListLive) di router.js -
 // kalimatnya juga ngandung "live" + "siapa", jadi harus ketangkep duluan
 // sama check leaderboard yang lebih spesifik. "cok siapa yang live" (tanpa

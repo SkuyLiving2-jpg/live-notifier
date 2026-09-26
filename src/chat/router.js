@@ -10,7 +10,10 @@ const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = requir
 const {
   replyListLive,
   replyLongestLive,
+  replyLongestLiveForRange,
   replyTopViewers,
+  replyTopViewersForRange,
+  resolveStatRangeFromText,
   replyBotStatus,
   replySpecificMember,
   replyHelp,
@@ -261,12 +264,20 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     (containsWholeWord(text, "penonton") &&
       (containsWholeWord(text, "banyak") || containsWholeWord(text, "terbanyak") || containsWholeWord(text, "rame"))) ||
     (containsWholeWord(text, "ditonton") && (containsWholeWord(text, "banyak") || containsWholeWord(text, "rame")));
+  // §10's fortieth item: "paling rame ditonton"/"paling lama live" sekarang
+  // bisa dikasih rentang juga (minggu ini/bulan ini/nama bulan/tanggal
+  // spesifik) - resolveStatRangeFromText balikin null kalau kalimatnya gak
+  // nyebut rentang apapun, dan pemanggilnya (replyTopViewers/replyLongestLive)
+  // tetep dipake apa adanya buat itu, jadi perilaku default "hari ini" gak
+  // berubah sama sekali.
   if (asksTopViewers) {
-    return replyTopViewers();
+    const range = resolveStatRangeFromText(text);
+    return range ? replyTopViewersForRange(range.rangeDays, range.label) : replyTopViewers();
   }
 
   if (containsWholeWord(text, "live") && (containsWholeWord(text, "paling lama") || containsWholeWord(text, "udah lama"))) {
-    return replyLongestLive();
+    const range = resolveStatRangeFromText(text);
+    return range ? replyLongestLiveForRange(range.rangeDays, range.label) : replyLongestLive();
   }
 
   // Dicek SEBELUM check "siapa yang live" polos di bawah - kalimatnya juga

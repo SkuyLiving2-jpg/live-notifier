@@ -67,25 +67,32 @@ function replyListLive() {
 // selesai udah ilang dari activeLives). Sekarang gabungin durasi live yang
 // LAGI JALAN (activeLives) SAMA sesi yang UDAH SELESAI hari ini (daily log)
 // biar rekap-nya beneran akurat sepanjang hari, bukan cuma potret sesaat.
-function replyLongestLive() {
-  const candidates = [];
+//
+// §10's fortieth item: diekstrak jadi replyLongestLiveForRange(rangeDays,
+// label) biar "paling lama live" bisa nanya rentang laen juga (minggu ini/
+// bulan ini/tanggal spesifik), bukan cuma "hari ini" - reuse getSessionsForRange
+// yang SAMA persis dipake fitur rekap, jadi "paling lama live bulan ini" dan
+// "rekap bulan ini" narik dari sumber data yang identik. Sesi yang MASIH LIVE
+// (endedAtUnix null, dari getOngoingSessionsForRecap) durationMs-nya SENGAJA
+// null di situ (belum final) - dihitung ULANG di sini dari startedAtUnix biar
+// tetep bisa dibandingin ke sesi yang udah selesai.
+function replyLongestLiveForRange(rangeDays, label) {
+  const sessions = getSessionsForRange(rangeDays);
+  if (sessions.length === 0) return `Cok, belum ada data live ${label}.`;
 
-  for (const entry of activeLives.values()) {
-    candidates.push({
-      name: entry.name,
-      durationMs: Date.now() - new Date(entry.liveAt).getTime(),
-      isLive: true,
-    });
-  }
-  for (const session of getCompletedSessionsToday()) {
-    candidates.push({ name: session.name, durationMs: session.durationMs, isLive: false });
-  }
-
-  if (candidates.length === 0) return "Cok, belum ada data live hari ini.";
+  const candidates = sessions.map((s) => ({
+    name: s.name,
+    isLive: s.endedAtUnix === null,
+    durationMs: s.endedAtUnix === null ? Date.now() - s.startedAtUnix * 1000 : s.durationMs,
+  }));
 
   const longest = candidates.reduce((max, c) => (c.durationMs > max.durationMs ? c : max), candidates[0]);
   const statusText = longest.isLive ? "masih live sekarang" : "udah selesai";
-  return `Paling lama live hari ini: **${longest.name}**, ${formatDuration(longest.durationMs)} (${statusText}).`;
+  return `Paling lama live ${label}: **${longest.name}**, ${formatDuration(longest.durationMs)} (${statusText}).`;
+}
+
+function replyLongestLive() {
+  return replyLongestLiveForRange(null, "hari ini");
 }
 
 // Sama kayak replyLongestLive - dulu cuma liat viewCount member yang LAGI
@@ -95,25 +102,24 @@ function replyLongestLive() {
 // yang lagi jalan MAUPUN yang udah selesai hari ini, terus ambil puncak
 // tertinggi per member (kalau dia live 2x hari ini, yang diitung yang
 // paling rame di antara keduanya).
-function replyTopViewers() {
+//
+// Sama alasannya kayak replyLongestLiveForRange di atas (§10's fortieth
+// item) - `peakViewCount` sesi yang MASIH LIVE udah keisi (getOngoingSessionsForRecap
+// narik dari activeLives-nya langsung), jadi gak butuh perlakuan khusus
+// kayak durationMs di atas.
+function replyTopViewersForRange(rangeDays, label) {
+  const sessions = getSessionsForRange(rangeDays);
   const peakByUsername = new Map();
 
-  for (const session of getCompletedSessionsToday()) {
-    if (session.peakViewCount == null) continue;
-    const prev = peakByUsername.get(session.username);
-    if (!prev || session.peakViewCount > prev.peak) {
-      peakByUsername.set(session.username, { name: session.name, peak: session.peakViewCount });
-    }
-  }
-  for (const entry of activeLives.values()) {
-    if (entry.peakViewCount == null) continue;
-    const prev = peakByUsername.get(entry.username);
-    if (!prev || entry.peakViewCount > prev.peak) {
-      peakByUsername.set(entry.username, { name: entry.name, peak: entry.peakViewCount });
+  for (const s of sessions) {
+    if (s.peakViewCount == null) continue;
+    const prev = peakByUsername.get(s.username);
+    if (!prev || s.peakViewCount > prev.peak) {
+      peakByUsername.set(s.username, { name: s.name, peak: s.peakViewCount });
     }
   }
 
-  if (peakByUsername.size === 0) return "Cok, belum ada data penonton buat hari ini.";
+  if (peakByUsername.size === 0) return `Cok, belum ada data penonton buat ${label}.`;
 
   const sorted = [...peakByUsername.values()].sort((a, b) => b.peak - a.peak);
   const medals = ["🥇", "🥈", "🥉"];
@@ -122,7 +128,11 @@ function replyTopViewers() {
     return `${medal} **${entry.name}** - 👁️ ${formatViewCount(entry.peak)} (puncak)`;
   });
 
-  return `👀 Paling rame ditonton hari ini (puncak penonton):\n${lines.join("\n")}`;
+  return `👀 Paling rame ditonton ${label} (puncak penonton):\n${lines.join("\n")}`;
+}
+
+function replyTopViewers() {
+  return replyTopViewersForRange(null, "hari ini");
 }
 
 function replyBotStatus() {
@@ -328,6 +338,44 @@ function parseWeekdayFromText(text) {
     if (containsWholeWord(text, WEEKDAY_NAMES_ID[i].toLowerCase())) return i;
   }
   if (containsWholeWord(text, "hari") && containsWholeWord(text, "minggu")) return 0;
+  return null;
+}
+
+// §10's fortieth item: dipake "paling lama live"/"paling rame ditonton"
+// (chat/router.js) buat ngedeteksi rentang waktu yang disebut di kalimatnya,
+// biar bisa nanya "minggu ini"/"bulan ini"/nama bulan/tanggal spesifik, gak
+// cuma "hari ini" - null kalau gak nyebut rentang apapun (pemanggil default
+// ke "hari ini" sendiri). SENGAJA gak dukung nama hari ("senin" dst) kayak
+// fitur rekap - "Senin yang mana" butuh dropdown buat resolve ke SATU
+// tanggal pasti dulu, di luar scope jawaban satu baris kayak fitur ini.
+// Tanggal spesifik dicek DULUAN (sebelum cek nama bulan polos), sama urutan
+// alesannya kayak chat/router.js's "rekap" dispatch - biar "25 september"
+// kebaca sebagai tanggal, bukan kepotong jadi "bulan september polos".
+// "bulan" dicek TANPA syarat "ini" (beda dari rekap yang punya jalur
+// dropdown-per-bulan tersendiri buat "bulan" bener-bener polos) - di sini
+// gak ada dropdown yang bisa ditawarin buat jawaban satu baris, jadi
+// default-nya SELALU bulan berjalan begitu kata "bulan" disebut tanpa nama
+// bulan spesifik.
+function resolveStatRangeFromText(text) {
+  const specificDate = parseSpecificDateFromText(text);
+  if (specificDate) {
+    return { rangeDays: specificDate, label: `tanggal ${formatLongDateWIB(new Date(`${specificDate}T00:00:00+07:00`))}` };
+  }
+
+  const monthOnly = parseMonthOnlyFromText(text);
+  if (monthOnly) {
+    return { rangeDays: monthOnly, label: `bulan ${formatMonthLabel(monthOnly)}` };
+  }
+
+  if (containsWholeWord(text, "bulan")) {
+    const thisMonth = getTodayWIB().slice(0, 7);
+    return { rangeDays: thisMonth, label: `bulan ${formatMonthLabel(thisMonth)}` };
+  }
+
+  if (containsWholeWord(text, "minggu")) {
+    return { rangeDays: 7, label: "minggu ini" };
+  }
+
   return null;
 }
 
@@ -1457,7 +1505,10 @@ function handleUnsubscribe(rawName, authorId) {
 module.exports = {
   replyListLive,
   replyLongestLive,
+  replyLongestLiveForRange,
   replyTopViewers,
+  replyTopViewersForRange,
+  resolveStatRangeFromText,
   replyBotStatus,
   replySpecificMember,
   replyMemberNotFound,

@@ -33,6 +33,7 @@ const {
   parseSpecificDateFromText,
   parseMonthOnlyFromText,
   parseWeekdayFromText,
+  resolveStatRangeFromText,
   handleSubscribe,
   handleUnsubscribe,
   isOwner,
@@ -84,6 +85,9 @@ function freshRepliesForRecapRange() {
     replyRecapSpecificDate: replies.replyRecapSpecificDate,
     replyRecapWeekdayPicker: replies.replyRecapWeekdayPicker,
     getAvailableRecapMonths: replies.getAvailableRecapMonths,
+    replyLongestLiveForRange: replies.replyLongestLiveForRange,
+    replyTopViewersForRange: replies.replyTopViewersForRange,
+    resolveStatRangeFromText: replies.resolveStatRangeFromText,
   };
 }
 
@@ -1078,6 +1082,89 @@ test("parseWeekdayFromText - 'minggu' (Minggu/Sunday) CUMA ketangkep kalau kata 
 test("parseWeekdayFromText - teks tanpa nama hari sama sekali -> null", () => {
   assert.equal(parseWeekdayFromText("cok rekap bulan ini"), null);
   assert.equal(parseWeekdayFromText("cok rekap"), null);
+});
+
+// ==== §10's fortieth item: "paling lama live"/"paling rame ditonton" bisa
+// dikasih rentang (minggu ini/bulan ini/nama bulan/tanggal spesifik) ====
+
+test("resolveStatRangeFromText - tanggal spesifik ('25 september') dicek DULUAN, gak kepotong jadi nama bulan polos", () => {
+  const year = currentYear();
+  const result = resolveStatRangeFromText("cok siapa yang paling lama live 25 september");
+  assert.equal(result.rangeDays, `${year}-09-25`);
+  assert.match(result.label, /^tanggal 25 September/);
+});
+
+test("resolveStatRangeFromText - nama bulan polos ('september') -> rangeDays 'YYYY-MM'", () => {
+  const year = currentYear();
+  const result = resolveStatRangeFromText("cok siapa yang paling rame ditonton september");
+  assert.equal(result.rangeDays, `${year}-09`);
+  assert.equal(result.label, `bulan September ${year}`);
+});
+
+test("resolveStatRangeFromText - 'bulan' TANPA nama spesifik (dengan/tanpa 'ini') -> selalu bulan BERJALAN", () => {
+  const thisMonth = getTodayWIB().slice(0, 7);
+  assert.equal(resolveStatRangeFromText("cok siapa yang paling lama live bulan ini").rangeDays, thisMonth);
+  assert.equal(resolveStatRangeFromText("cok siapa yang paling lama live bulan").rangeDays, thisMonth);
+});
+
+test("resolveStatRangeFromText - 'minggu' -> rangeDays 7 (rolling 7 hari, sama kayak rekap minggu ini)", () => {
+  const result = resolveStatRangeFromText("cok siapa yang paling rame ditonton minggu ini");
+  assert.equal(result.rangeDays, 7);
+  assert.equal(result.label, "minggu ini");
+});
+
+test("resolveStatRangeFromText - gak nyebut rentang apapun -> null (pemanggil default ke hari ini)", () => {
+  assert.equal(resolveStatRangeFromText("cok siapa yang paling lama live hari ini"), null);
+  assert.equal(resolveStatRangeFromText("cok siapa yang paling rame ditonton"), null);
+});
+
+test("replyLongestLiveForRange - bulan BERJALAN ikut gabung sesi yang MASIH LIVE, durasinya dihitung dari startedAtUnix (bukan null)", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const thisMonth = getTodayWIB().slice(0, 7);
+  fresh.recordLiveEnded("Shortlive", "jkt48_shortlive", new Date(Date.now() - 10 * 60_000), new Date(), 5);
+  activeLives.set("jkt48_longlive", {
+    name: "Longlive",
+    username: "jkt48_longlive",
+    slug: "s",
+    liveAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+  });
+  try {
+    const reply = fresh.replyLongestLiveForRange(thisMonth, "bulan ini");
+    assert.match(reply, /Paling lama live bulan ini: \*\*Longlive\*\*/);
+    assert.match(reply, /masih live sekarang/);
+  } finally {
+    activeLives.delete("jkt48_longlive");
+  }
+});
+
+test("replyLongestLiveForRange - rentang yang kosong sama sekali -> pesan 'belum ada data', bukan throw", () => {
+  const fresh = freshRepliesForRecapRange();
+  assert.equal(fresh.replyLongestLiveForRange(7, "minggu ini"), "Cok, belum ada data live minggu ini.");
+});
+
+test("replyTopViewersForRange - bulan BERJALAN ikut gabung peak penonton dari sesi yang MASIH LIVE", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const thisMonth = getTodayWIB().slice(0, 7);
+  fresh.recordLiveEnded("Quietviewer", "jkt48_quietviewer", new Date(Date.now() - 60_000), new Date(), 100);
+  activeLives.set("jkt48_loudviewer", {
+    name: "Loudviewer",
+    username: "jkt48_loudviewer",
+    slug: "s",
+    liveAt: new Date().toISOString(),
+    peakViewCount: 9999,
+  });
+  try {
+    const reply = fresh.replyTopViewersForRange(thisMonth, "bulan ini");
+    assert.match(reply, /Paling rame ditonton bulan ini \(puncak penonton\)/);
+    assert.match(reply, /🥇 \*\*Loudviewer\*\*/);
+  } finally {
+    activeLives.delete("jkt48_loudviewer");
+  }
+});
+
+test("replyTopViewersForRange - rentang yang kosong sama sekali -> pesan 'belum ada data', bukan throw", () => {
+  const fresh = freshRepliesForRecapRange();
+  assert.equal(fresh.replyTopViewersForRange(7, "minggu ini"), "Cok, belum ada data penonton buat minggu ini.");
 });
 
 test("buildRecapMonthSelectRow - customId recap_month_select, label via formatMonthLabel, default:true buat bulan terpilih", () => {
