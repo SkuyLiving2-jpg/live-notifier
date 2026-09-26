@@ -438,7 +438,12 @@ const PENDING_RECAP_PAGE_TTL_MS = 2 * 60000;
 function getSessionsForRange(rangeDays) {
   if (rangeDays == null || rangeDays === getTodayWIB()) return getTodaySessionsForRecap();
   if (typeof rangeDays === "string") {
-    return rangeDays.length === 7 ? getMonthSessionsForRecap(rangeDays) : getCompletedSessionsForDate(rangeDays);
+    if (rangeDays.length === 7) return getMonthSessionsForRecap(rangeDays);
+    // Tanggal yang di-TAG weekday-nya (buildWeekdayDateSelectRow, mis.
+    // "2026-09-14#1") harus dilucutin dulu tag-nya sebelum di-query - date
+    // yang beneran dicari cuma bagian sebelum "#"-nya.
+    const { date } = parseDateRangeValue(rangeDays);
+    return date === getTodayWIB() ? getTodaySessionsForRecap() : getCompletedSessionsForDate(date);
   }
   return [...getCompletedSessionsSince(rangeDays), ...getOngoingSessionsForRecap()];
 }
@@ -532,10 +537,37 @@ function findRecentDatesForWeekday(weekdayIndex) {
   return dates;
 }
 
-function buildWeekdayDateSelectRow(weekdayIndex, selectedDate = null) {
+// BUG SEBELUMNYA (dilaporin owner): milih tanggal dari dropdown weekday
+// ("cok rekap senin") nunjukkin tabelnya bener, TAPI dropdown yang nempel di
+// tabel itu (buat ganti-ganti tanggal tanpa nutup dulu, lihat
+// buildRecapNavComponents) balik ke dropdown SEMUA tanggal (buildRecapDateSelectRow),
+// bukan tetep ke dropdown khusus hari Senin - soalnya rangeDays yang
+// nge-alir ke situ cuma tanggal POLOS ("YYYY-MM-DD"), gak ada jejak sama
+// sekali "ini dipilih lewat filter weekday yang mana". Fix-nya: tanggal yang
+// dipilih dari dropdown weekday di-TAG sekalian sama weekday-nya di NILAI
+// opsinya sendiri ("YYYY-MM-DD#W", W = 0-6 - encodeWeekdayTaggedDate) - beda
+// dari tanggal biasa yang value-nya tetep polos 10 karakter. Tag ini ngalir
+// transparan lewat semua tempat yang udah nganggep rangeDays date "cuma
+// string" (getSessionsForRange, encodeRecapRange/decodeRecapRange,
+// pendingRecapPage) TANPA perlu diubah - satu-satunya tempat yang perlu
+// SADAR ada tag ini ya buildRecapNavComponents (buat milih dropdown yang mana
+// yang ditempelin balik) dan handleRecapDateSelect (buat misahin tanggal
+// asli dari tag-nya pas format label/bikin Date). Tanggal yang dipilih dari
+// dropdown "rekap tanggal" biasa TETEP polos, gak pernah ke-tag - dropdown
+// itu emang didesain buat lompat ke tanggal MANAPUN, bukan dibatesin ke 1 hari.
+function encodeWeekdayTaggedDate(dateWIB, weekdayIndex) {
+  return `${dateWIB}#${weekdayIndex}`;
+}
+function parseDateRangeValue(rangeValue) {
+  const hashIndex = rangeValue.indexOf("#");
+  if (hashIndex === -1) return { date: rangeValue, weekdayIndex: null };
+  return { date: rangeValue.slice(0, hashIndex), weekdayIndex: Number(rangeValue.slice(hashIndex + 1)) };
+}
+
+function buildWeekdayDateSelectRow(weekdayIndex, selectedRangeValue = null) {
   const options = findRecentDatesForWeekday(weekdayIndex).map((d) => {
-    const value = getDateWIB(d);
-    return { label: formatLongDateWIB(d), value, default: value === selectedDate };
+    const value = encodeWeekdayTaggedDate(getDateWIB(d), weekdayIndex);
+    return { label: formatLongDateWIB(d), value, default: value === selectedRangeValue };
   });
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId("recap_date_select")
@@ -606,7 +638,18 @@ function buildRecapNavComponents(page, totalPages, rangeDays) {
 
   const rows = [];
   if (typeof rangeDays === "string") {
-    rows.push(isMonthRange ? buildRecapMonthSelectRow(getAvailableRecapMonths(), rangeDays) : buildRecapDateSelectRow(rangeDays));
+    if (isMonthRange) {
+      rows.push(buildRecapMonthSelectRow(getAvailableRecapMonths(), rangeDays));
+    } else {
+      // Tanggal yang di-TAG weekday-nya (dipilih lewat dropdown "cok rekap
+      // senin" dkk, lihat komen di buildWeekdayDateSelectRow) harus TETEP
+      // nempelin dropdown yang di-filter ke hari itu juga di sini, BUKAN
+      // balik ke dropdown semua tanggal - itu bug yang dilaporin owner:
+      // dropdown-nya nunjukkin semua hari lagi begitu tabelnya nge-render,
+      // padahal user udah eksplisit milih dari dropdown yang di-filter.
+      const { date, weekdayIndex } = parseDateRangeValue(rangeDays);
+      rows.push(weekdayIndex !== null ? buildWeekdayDateSelectRow(weekdayIndex, rangeDays) : buildRecapDateSelectRow(date));
+    }
   }
   rows.push(new ActionRowBuilder().addComponents(buttons));
   return rows;
@@ -847,28 +890,45 @@ async function handleRecapMenuButton(interaction) {
 // tombol tutup TETEP ditampilin (bukan diganti pesan polos tanpa komponen)
 // biar user bisa langsung coba tanggal lain tanpa harus ngetik "rekap
 // tanggal" dari awal lagi.
+//
+// `interaction.values[0]` bisa berupa tanggal POLOS ("YYYY-MM-DD", dari
+// dropdown "rekap tanggal" biasa) ATAU tanggal yang di-TAG weekday-nya
+// ("YYYY-MM-DD#W", dari dropdown "cok rekap senin" dkk - lihat
+// buildWeekdayDateSelectRow/parseDateRangeValue) - `selectedRange` di bawah
+// nyimpen NILAI MENTAHNYA (buat diterusin apa adanya ke getSessionsForRange/
+// buildRecapPageBlock, biar tag-nya ikut ke-bawa ke tombol Maju/Mundur/dst),
+// sementara `date` udah dilucutin tag-nya (buat format label/Date beneran -
+// nge-parse "2026-09-14#1T00:00:00+07:00" bakal jadi Invalid Date dan bikin
+// Intl.DateTimeFormat.format() THROW).
 async function handleRecapDateSelect(interaction) {
-  const selectedDate = interaction.values[0];
+  const selectedRange = interaction.values[0];
+  const { date, weekdayIndex } = parseDateRangeValue(selectedRange);
   pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
 
   // getSessionsForRange (bukan getCompletedSessionsForDate langsung) - kalau
   // selectedDate kebetulan HARI INI (sekarang bisa dipilih, lihat komen di
   // buildRecapDateSelectRow), ini otomatis ikut gabung sesi yang MASIH LIVE
   // dari activeLives juga, sama kayak tombol "Rekap hari ini".
-  const sessions = getSessionsForRange(selectedDate);
-  const label = formatLongDateWIB(new Date(`${selectedDate}T00:00:00+07:00`));
+  const sessions = getSessionsForRange(selectedRange);
+  const label = formatLongDateWIB(new Date(`${date}T00:00:00+07:00`));
 
   if (sessions.length === 0) {
+    // BUG SEBELUMNYA (dilaporin owner): dropdown fallback di sini SELALU
+    // buildRecapDateSelectRow (semua tanggal), walau tanggal yang barusan
+    // dipilih datang dari dropdown weekday - begitu tabelnya "kosong",
+    // filter weekday-nya ilang. Sekarang nempelin balik dropdown yang SAMA
+    // (di-filter ke weekday itu lagi) kalau memang asalnya dari situ.
+    const dateRow = weekdayIndex !== null ? buildWeekdayDateSelectRow(weekdayIndex, selectedRange) : buildRecapDateSelectRow(date);
     await interaction.update(
       safeReplyOptions({
         content: `Cok, belum ada live yang kecatet tanggal ${label}.`,
-        components: [buildRecapDateSelectRow(selectedDate), buildCloseOnlyRow()],
+        components: [dateRow, buildCloseOnlyRow()],
       }),
     );
     return;
   }
 
-  const block = buildRecapPageBlock(sessions, 0, interaction.channelId, interaction.user.id, selectedDate);
+  const block = buildRecapPageBlock(sessions, 0, interaction.channelId, interaction.user.id, selectedRange);
   await interaction.update(safeReplyOptions({ content: `📋 **Rekap tanggal ${label}**\n${block.content}`, components: block.components }));
 }
 

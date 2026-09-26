@@ -1184,9 +1184,12 @@ test("replyRecapWeekdayPicker - hari yang beneran ada tanggalnya di rentang yang
   assert.equal(reply.content, `${WEEKDAY_NAMES_ID_TEST[idx]} tanggal berapa nih, cok?`);
   assert.equal(reply.components[0].components[0].data.custom_id, "recap_date_select");
   assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
-  // Hari ini sendiri (weekday-nya PASTI cocok ke idx) harus jadi salah satu opsi.
+  // Hari ini sendiri (weekday-nya PASTI cocok ke idx) harus jadi salah satu
+  // opsi - value-nya di-TAG weekday-nya ("YYYY-MM-DD#W", §10's thirty-
+  // seventh item), BUKAN tanggal polos, biar milih dari sini "inget" filter
+  // weekday-nya pas tabelnya muncul (lihat parseDateRangeValue).
   const values = reply.components[0].components[0].options.map((o) => o.data.value);
-  assert.ok(values.includes(getTodayWIB()));
+  assert.ok(values.includes(`${getTodayWIB()}#${idx}`));
 });
 
 test("replyRecapWeekdayPicker - arsip dibatesin sampe HARI INI doang (earliestDate = hari ini) DAN hari ini BUKAN hari yang diminta -> gak ada tanggal ketemu, dikasih tau jujur", async () => {
@@ -1341,6 +1344,49 @@ test("handleRecapDateSelect - customId tombol Maju/Mundur/Cari di tabel yang dih
   const navRow = interaction.updates[0].components[1]; // baris ke-2: dropdown di baris ke-1
   const searchButton = navRow.components.find((b) => b.data.custom_id.startsWith("recap_nav:search:"));
   assert.equal(searchButton.data.custom_id, `recap_nav:search:d${targetDate}`);
+});
+
+// §10's thirty-seventh item, bug beneran yang dilaporin owner: milih
+// tanggal dari dropdown weekday ("cok rekap senin") nunjukkin tabelnya
+// bener, TAPI dropdown yang nempel di tabel itu (buat ganti-ganti tanggal)
+// balik nunjukkin SEMUA tanggal, bukan tetep di-filter ke hari itu doang.
+test("handleRecapDateSelect - milih tanggal dari dropdown WEEKDAY (ke-tag '#W') -> dropdown yang nempel di tabelnya TETEP di-filter ke hari itu, BUKAN balik ke semua tanggal", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
+  const weekdayIdx = WEEKDAY_NAMES_ID_TEST.indexOf(WEEKDAY_FORMATTER_WIB.format(new Date(threeDaysAgo * 1000)));
+  fresh.recordLiveEnded("Weekdaytagged", "jkt48_weekdaytagged", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
+
+  const interaction = fakeInteraction({ customId: "recap_date_select", values: [`${targetDate}#${weekdayIdx}`] });
+  await fresh.handleRecapDateSelect(interaction);
+
+  // Label/isi tabelnya harus make sense (tag-nya kelucutin, BUKAN nyoba
+  // bikin Date dari "2026-09-14#1T00:00:00+07:00" yang bakal Invalid Date).
+  assert.match(interaction.updates[0].content, /Weekdaytagged/);
+  assert.doesNotMatch(interaction.updates[0].content, /Invalid Date/);
+
+  // Dropdown yang nempel HARUS placeholder-nya masih "Pilih tanggal hari
+  // <X>" (buildWeekdayDateSelectRow), BUKAN "Pilih tanggal buat rekap"
+  // (buildRecapDateSelectRow, dropdown semua tanggal) - ini persis bug-nya.
+  const dateRow = interaction.updates[0].components[0];
+  assert.equal(dateRow.components[0].data.custom_id, "recap_date_select");
+  assert.match(dateRow.components[0].data.placeholder, /^Pilih tanggal hari /);
+  const optionValues = dateRow.components[0].options.map((o) => o.data.value);
+  assert.ok(
+    optionValues.every((v) => v.endsWith(`#${weekdayIdx}`)),
+    "semua opsi di dropdown harus tetep ke-tag weekday yang sama, bukan tanggal bebas",
+  );
+});
+
+test("handleRecapDateSelect - tanggal WEEKDAY yang kosong (gak ada sesi) -> dropdown fallback-nya TETEP yang di-filter weekday, bukan dropdown semua tanggal", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const idx = todayWeekdayIndex();
+  const interaction = fakeInteraction({ customId: "recap_date_select", values: [`2000-01-01#${idx}`] });
+  await fresh.handleRecapDateSelect(interaction);
+
+  assert.match(interaction.updates[0].content, /Cok, belum ada live yang kecatet tanggal/);
+  const dateRow = interaction.updates[0].components[0];
+  assert.match(dateRow.components[0].data.placeholder, /^Pilih tanggal hari /);
 });
 
 test("handleRecapDateSelect - milih tanggal LAIN nge-clear pendingRecapPage tanggal SEBELUMNYA (ganti-ganti tanggal gak nyisain state basi)", async () => {
