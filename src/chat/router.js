@@ -394,9 +394,22 @@ function wireDiscordEvents(client) {
         channelId: message.channel.id,
         authorId: message.author.id,
       });
-      if (reply) await message.reply(safeReplyOptions(reply));
+      if (reply) {
+        // Instrumentasi SEMENTARA (lagi nyari kenapa "cok bandingin" cuma
+        // muncul teksnya doang tanpa embed foto+statistik di produksi,
+        // padahal replyCompareMembers kebukti balikin embeds-nya pas dites
+        // lokal) - dibuang lagi begitu ketauan akar masalahnya.
+        if (reply.embeds) {
+          console.log(`[debug embeds] ngirim ${reply.embeds.length} embed buat balesan chat ini`);
+        }
+        await message.reply(safeReplyOptions(reply));
+      }
     } catch (error) {
-      console.error("Gagal balas chat:", error.message);
+      // Sebelumnya cuma nyetak error.message - kalau ini beneran gagal
+      // gara-gara Discord API nolak (mis. kurang permission), error.code
+      // (angka error Discord, mis. 50013) sama error.stack jauh lebih
+      // kebaca ketimbang cuma pesan generik "Missing Permissions".
+      console.error("Gagal balas chat:", error.message, "| code:", error.code, "\n", error.stack);
     }
   });
 
