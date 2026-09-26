@@ -1082,8 +1082,10 @@ test("handleRecapNavButton - action 'delrecap' beneran hapus pesan rekap ASLI by
 
   assert.deepEqual(interaction.deletedMessageIds, ["original-recap-message-id"]);
   assert.equal(interaction.calls.length, 0, "gak boleh kirim pesan baru");
-  assert.equal(interaction.updates[0].content, "hasil cari xxx", "konten balesan pencarian tetep sama, cuma tombolnya yang ilang");
-  assert.deepEqual(interaction.updates[0].components, []);
+  assert.equal(interaction.updates[0].content, "hasil cari xxx", "konten balesan pencarian tetep sama, cuma tombol Ya/Enggak-nya yang ilang");
+  // Regresi (dilaporin owner): dulu components: [] -> balesan pencarian gak bisa ditutup lagi
+  const customIds = interaction.updates[0].components.flatMap((row) => row.components.map((b) => b.data.custom_id));
+  assert.deepEqual(customIds, ["recap_nav:closesearch"]);
 });
 
 test("handleRecapNavButton - action 'delrecap' juga nge-clear pendingRecapPage (rekap aslinya udah dihapus, jawaban 'y' abis itu gak boleh nyasar)", async () => {
@@ -1126,7 +1128,52 @@ test("handleRecapNavButton - action 'keeprecap' GAK ngehapus pesan apapun, cuma 
   assert.deepEqual(interaction.deletedMessageIds, [], "keeprecap gak boleh ngehapus pesan apapun");
   assert.equal(interaction.calls.length, 0);
   assert.equal(interaction.updates[0].content, "hasil cari xxx");
-  assert.deepEqual(interaction.updates[0].components, []);
+  // Regresi (dilaporin owner): abis "Ya, biarin" dulu gak ada tombol apapun lagi
+  const customIds = interaction.updates[0].components.flatMap((row) => row.components.map((b) => b.data.custom_id));
+  assert.deepEqual(customIds, ["recap_nav:closesearch"]);
+  assert.equal(interaction.updates[0].components[0].components[0].data.label, "Tutup");
+});
+
+// Tombol "Tutup" di balesan pencarian - logika tutup yang sama kayak semua
+// tombol tutup lain (deferUpdate + hapus pesannya sendiri, bukan update/reply).
+test("handleRecapNavButton - action 'closesearch' hapus balesan pencarian itu sendiri (deferUpdate + message.delete), BUKAN update/reply", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:closesearch", message: { id: "search-result-msg" } });
+  await handleRecapNavButton(interaction);
+
+  assert.equal(interaction.deferUpdateCalls.length, 1);
+  assert.deepEqual(interaction.deletedMessageIds, ["search-result-msg"]);
+  assert.equal(interaction.calls.length, 0);
+  assert.equal(interaction.updates.length, 0);
+});
+
+test("handleRecapNavButton - action 'closesearch' GAK ngerusak pendingRecapPage (rekap asli bisa aja masih dipertahanin, navigasi 'y' buat dia harus tetep jalan)", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    replyRecapRange: freshReplyRecapRange,
+    tryHandleRecapPageShortcut: freshTryHandleRecapPageShortcut,
+    handleRecapNavButton: freshHandleRecapNavButton,
+  } = freshRepliesForRecapRange();
+
+  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Cs${i}`,
+      `jkt48_closesearchtest${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-closesearch";
+  const authorId = "u-closesearch";
+  await freshReplyRecapRange(7, "minggu ini", channelId, authorId); // nge-set pendingRecapPage
+
+  const closeInteraction = fakeInteraction({ customId: "recap_nav:closesearch", channelId, authorId, message: { id: "search-msg" } });
+  await freshHandleRecapNavButton(closeInteraction);
+
+  const next = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.notEqual(next, null, "pendingRecapPage harus TETEP hidup abis nutup balesan pencarian");
 });
 
 test("handleRecapSearchModalSubmit - nama ketemu -> tabel hasil filter cuma nunjukkin sesi member itu, TANPA tombol kalau interaction.message gak keisi", async () => {
@@ -1140,13 +1187,19 @@ test("handleRecapSearchModalSubmit - nama ketemu -> tabel hasil filter cuma nunj
   assert.match(interaction.calls[0].content, /Hasil cari "searchtarget"/);
   assert.match(interaction.calls[0].content, /Searchtarget/);
   assert.doesNotMatch(interaction.calls[0].content, /Searchother/);
-  assert.equal(interaction.calls[0].components, undefined, "gak ada messageId buat dihapus/dipertahanin -> gak ada tombol");
+  // gak ada messageId buat dihapus/dipertahanin -> gak ada pertanyaan Ya/Enggak,
+  // tapi tombol Tutup TETEP ada (dulu gak ada tombol apapun)
+  const customIds = interaction.calls[0].components.flatMap((row) => row.components.map((b) => b.data.custom_id));
+  assert.deepEqual(customIds, ["recap_nav:closesearch"]);
+  assert.doesNotMatch(interaction.calls[0].content, /masih mau ditampilin/);
 });
 
 test("handleRecapSearchModalSubmit - nama gak ketemu -> pesan gak ketemu, bukan tabel kosong", async () => {
   const interaction = fakeInteraction({ customId: "recap_search_modal:7", fieldValue: "member-yang-beneran-gak-ada-di-rekap" });
   await handleRecapSearchModalSubmit(interaction);
   assert.match(interaction.calls[0].content, /gak nemu member "member-yang-beneran-gak-ada-di-rekap"/);
+  const customIds = interaction.calls[0].components.flatMap((row) => row.components.map((b) => b.data.custom_id));
+  assert.deepEqual(customIds, ["recap_nav:closesearch"]);
 });
 
 // Fitur yang diminta owner: "kenapa rekap aslinya tetep muncul abis cari
@@ -1167,7 +1220,12 @@ test("handleRecapSearchModalSubmit - interaction.message keisi -> nanya 'masih m
   await handleRecapSearchModalSubmit(interaction);
   assert.match(interaction.calls[0].content, /Rekap sebelumnya masih mau ditampilin\?/);
   const customIds = interaction.calls[0].components[0].components.map((b) => b.data.custom_id);
-  assert.deepEqual(customIds, ["recap_nav:keeprecap:original-recap-message-id", "recap_nav:delrecap:original-recap-message-id"]);
+  assert.deepEqual(customIds, [
+    "recap_nav:keeprecap:original-recap-message-id",
+    "recap_nav:delrecap:original-recap-message-id",
+    "recap_nav:closesearch",
+  ]);
+  assert.equal(interaction.calls[0].components[0].components[2].data.label, "Tutup");
 });
 
 test("handleRecapSearchModalSubmit - interaction.message keisi TAPI gak ketemu member -> tetep nanya 'masih mau ditampilin?'", async () => {
@@ -1178,7 +1236,9 @@ test("handleRecapSearchModalSubmit - interaction.message keisi TAPI gak ketemu m
   });
   await handleRecapSearchModalSubmit(interaction);
   assert.match(interaction.calls[0].content, /gak nemu member.*Rekap sebelumnya masih mau ditampilin\?/s);
-  assert.ok(interaction.calls[0].components, "tombol Ya/Enggak tetep muncul walau hasil pencarian kosong");
+  const customIds = interaction.calls[0].components[0].components.map((b) => b.data.custom_id);
+  assert.equal(customIds.length, 3, "tombol Ya/Enggak + Tutup tetep muncul walau hasil pencarian kosong");
+  assert.equal(customIds[2], "recap_nav:closesearch");
 });
 
 // rangeDays "today" (rekap harian) beda encoding dari angka (mingguan/

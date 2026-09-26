@@ -878,6 +878,11 @@ async function handleRecapNavButton(interaction) {
   // ngedit BALESAN PENCARIAN ini sendiri (interaction.update, bukan pesan
   // baru) buat ngilangin tombol Ya/Enggak-nya abis dijawab - konsisten sama
   // pola "close" di atas.
+  if (action === "closesearch") {
+    await deleteInteractionMessage(interaction);
+    return;
+  }
+
   if (action === "keeprecap" || action === "delrecap") {
     if (action === "delrecap") {
       const originalMessageId = parts[2];
@@ -886,7 +891,9 @@ async function handleRecapNavButton(interaction) {
         await interaction.channel.messages.delete(originalMessageId).catch(() => {});
       }
     }
-    await interaction.update(safeReplyOptions({ content: interaction.message.content, components: [] }));
+    // Pertanyaan Ya/Enggak-nya ilang, tapi tombol "Tutup" TETEP nempel biar
+    // balesan pencarian ini sendiri masih bisa ditutup abis dibaca.
+    await interaction.update(safeReplyOptions({ content: interaction.message.content, components: [buildSearchResultCloseRow()] }));
     return;
   }
 
@@ -1083,11 +1090,33 @@ async function handleRecapMonthSelect(interaction) {
 // kita, "🔍 Cari member" nempel di tabel rekap) - null kalau entah gimana
 // gak keisi (defensif), jadi baris tombolnya dilewatin aja (gak ada apa-apa
 // buat dihapus/dipertahanin kalau ID pesannya sendiri gak ke-ketahuan).
+//
+// BUG SEBELUMNYA (dilaporin owner): balesan pencarian ini gak punya tombol
+// "Tutup" sama sekali - baris Ya/Enggak-nya ILANG total abis dijawab
+// (handleRecapNavButton's keeprecap/delrecap ngedit jadi components: []), dan
+// kalau originalMessageId gak keisi malah gak pernah ada tombol apapun. Jadi
+// hasil pencarian yang udah selesai dibaca gak bisa ditutup. Sekarang tombol
+// "Tutup" (customId "recap_nav:closesearch" - logika tutup yang SAMA kayak
+// semua tombol tutup lain, deleteInteractionMessage, ngehapus BALESAN
+// PENCARIAN-nya sendiri) SELALU nempel: satu baris bareng Ya/Enggak selama
+// pertanyaannya masih ada, dan sendirian abis pertanyaannya dijawab. Beda
+// dari "recap_nav:close" (Tutup rekap) yang juga nge-clear pendingRecapPage -
+// nutup hasil pencarian gak boleh diem-diem mematikan navigasi "y"/"mundur"
+// buat tabel rekap ASLI yang mungkin masih dipertahanin ("Ya, biarin").
+function buildSearchResultCloseButton() {
+  return new ButtonBuilder().setCustomId("recap_nav:closesearch").setLabel("Tutup").setStyle(ButtonStyle.Danger);
+}
+
+function buildSearchResultCloseRow() {
+  return new ActionRowBuilder().addComponents(buildSearchResultCloseButton());
+}
+
 function buildKeepOrDeleteRecapComponents(originalMessageId) {
-  if (!originalMessageId) return null;
+  if (!originalMessageId) return [buildSearchResultCloseRow()];
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`recap_nav:keeprecap:${originalMessageId}`).setLabel("Ya, biarin").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`recap_nav:delrecap:${originalMessageId}`).setLabel("Enggak, hapus aja").setStyle(ButtonStyle.Danger),
+    buildSearchResultCloseButton(),
   );
   return [row];
 }
@@ -1112,20 +1141,16 @@ async function handleRecapSearchModalSubmit(interaction) {
   const matched = sessions.filter((s) => s.name && matchesNameFragment(needle, s.name.split(/[\s|]+/)[0].toLowerCase()));
 
   const components = buildKeepOrDeleteRecapComponents(interaction.message?.id);
-  const askText = components ? "\n\nRekap sebelumnya masih mau ditampilin?" : "";
+  const askText = interaction.message?.id ? "\n\nRekap sebelumnya masih mau ditampilin?" : "";
 
   if (matched.length === 0) {
-    const reply = { content: `Cok, gak nemu member "${query}" di rekap ini.${askText}` };
-    if (components) reply.components = components;
-    await interaction.reply(safeReplyOptions(reply));
+    await interaction.reply(safeReplyOptions({ content: `Cok, gak nemu member "${query}" di rekap ini.${askText}`, components }));
     return;
   }
 
   const { text, hasMore } = buildRecapTablePage(matched, 0);
   const moreNote = hasMore ? `\n_(cuma nunjukkin 20 sesi pertama dari ${matched.length})_` : "";
-  const reply = { content: `🔍 Hasil cari "${query}":\n${text}${moreNote}${askText}` };
-  if (components) reply.components = components;
-  await interaction.reply(safeReplyOptions(reply));
+  await interaction.reply(safeReplyOptions({ content: `🔍 Hasil cari "${query}":\n${text}${moreNote}${askText}`, components }));
 }
 
 // "awal"/"pertama" dan "akhir"/"terakhir" (Indonesia) DAN "first"/"last"
