@@ -66,4 +66,41 @@ async function fetchAllLivestreams() {
   return allLives;
 }
 
-module.exports = { isJkt48Member, fetchAllLivestreams };
+// Profil publik SATU member by username - dipake buat narik foto profilnya
+// (`avatar`, field ini beneran ada di skema IDN, dicek langsung lewat
+// introspeksi manual soalnya gak didokumentasiin di mana pun) buat fitur
+// "cok bandingin <member> vs <member>" (chat/replies.js's replyCompareMembers,
+// §10's forty-second item) - beda dari fetchAllLivestreams yang narik
+// SEMUA yang lagi live, ini query `getPublicProfileByUsername` yang IDN
+// sediain buat SATU akun spesifik, jalan independen dari status live-nya
+// sekarang (member yang lagi nggak live tetep bisa dicari profilnya).
+async function fetchPublicProfileByUsername(username) {
+  const query = `
+    query GetPublicProfile($username: String!) {
+      getPublicProfileByUsername(username: $username) {
+        username
+        name
+        avatar
+      }
+    }
+  `;
+
+  const response = await fetch(IDN_API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables: { username } }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`IDN API balikin status ${response.status}`);
+  }
+
+  const result = await response.json();
+  if (result.errors) {
+    throw new Error(`GraphQL error: ${JSON.stringify(result.errors)}`);
+  }
+
+  return result?.data?.getPublicProfileByUsername || null;
+}
+
+module.exports = { isJkt48Member, fetchAllLivestreams, fetchPublicProfileByUsername };

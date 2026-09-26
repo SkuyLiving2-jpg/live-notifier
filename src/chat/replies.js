@@ -19,12 +19,13 @@ const {
   getEarliestSessionDate,
   fetchExternalTodayLiveHistory,
 } = require("../storage/dailyLog");
-const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
+const { findDurationHistoryByNameFragment, loadDurationHistory, getAverageDuration, getPreviousMaxDuration } = require("../storage/durationHistory");
 const { findLiveCountByNameFragment, getLiveCountLeaderboard } = require("../storage/liveCount");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
-const { PRIORITY_PING_USER_ID } = require("../config");
+const { fetchPublicProfileByUsername } = require("../idnApi");
+const { PRIORITY_PING_USER_ID, DAILY_RECAP_COLOR } = require("../config");
 const {
   formatDuration,
   formatRelativeTime,
@@ -255,6 +256,7 @@ function replyHelp() {
     '- "cok siapa yang paling sering live" - leaderboard total live count semua member',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
+    '- "cok bandingin <nama member> vs <nama member>" - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
     '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
@@ -1442,6 +1444,75 @@ function replyLiveCountLeaderboard() {
   return `📊 Paling sering live semenjak bot ini jalan:\n${lines.join("\n")}`;
 }
 
+// Fitur "Q2" ke-4, owner minta ("cok bandingin <A> vs <B>") - resolusi
+// member LEWAT findLiveCountByNameFragment (bukan findMemberByNameFragment's
+// activeLives, yang cuma kena buat yang LAGI live sekarang) soalnya
+// live-count.json satu-satunya sumber yang selalu punya entry buat member
+// manapun yang PERNAH ke-track live-nya, live atau enggak sekarang - dan
+// itu juga sumber yang punya `count` (total live), yang jadi angka utama
+// perbandingan ini.
+async function fetchAvatarSafely(username) {
+  try {
+    const profile = await fetchPublicProfileByUsername(username);
+    return profile?.avatar || null;
+  } catch (error) {
+    // Foto profil FITUR TAMBAHAN doang buat perbandingan ini (owner minta
+    // "biar kelihatan lebih hidup"), bukan data inti - gagal ambil (network/
+    // IDN API lagi bermasalah) TETEP ngasih hasil perbandingan teksnya,
+    // cuma tanpa foto, sama filosofinya kayak replyTodayRecapSoFar's arsip
+    // eksternal (fetchExternalTodayLiveHistory) yang juga "fitur tambahan,
+    // gagal gak boleh bikin seluruh balesan gagal".
+    console.error(`Gagal ambil foto profil ${username} (bukan fatal, perbandingan tetep jalan tanpa foto):`, error.message);
+    return null;
+  }
+}
+
+// Satu embed per member (bukan 1 embed gabungan) - Discord cuma ngasih SATU
+// slot gambar (`thumbnail`/`image`) per embed, tapi SATU PESAN boleh bawa
+// beberapa embed sekaligus (dirender numpuk ke bawah, bukan sebelahan, tapi
+// tetep dua-duanya keliatan foto profilnya masing-masing di pesan yang
+// sama) - itu cara paling simpel buat nunjukkin foto KEDUA member tanpa
+// perlu compositing gambar manual.
+function buildCompareMemberEmbed(entry, avatarUrl, avgDurationMs, maxDurationMs, isCountWinner) {
+  return {
+    title: isCountWinner ? `🏆 ${entry.name}` : entry.name,
+    color: DAILY_RECAP_COLOR,
+    thumbnail: avatarUrl ? { url: avatarUrl } : undefined,
+    fields: [
+      { name: "Total live", value: `${entry.count}x`, inline: true },
+      { name: "Rata-rata durasi", value: avgDurationMs != null ? formatDuration(avgDurationMs) : "-", inline: true },
+      { name: "Rekor terlama", value: maxDurationMs != null ? formatDuration(maxDurationMs) : "-", inline: true },
+      { name: "Live pertama", value: formatRelativeTime(new Date(entry.firstLiveAt)), inline: true },
+      { name: "Live terakhir", value: formatRelativeTime(new Date(entry.lastLiveAt)), inline: true },
+    ],
+  };
+}
+
+async function replyCompareMembers(fragmentA, fragmentB) {
+  const a = findLiveCountByNameFragment(fragmentA);
+  if (!a) return `Cok, belum ada catatan live buat "${fragmentA.trim()}" semenjak bot ini jalan.`;
+  const b = findLiveCountByNameFragment(fragmentB);
+  if (!b) return `Cok, belum ada catatan live buat "${fragmentB.trim()}" semenjak bot ini jalan.`;
+  if (a.username === b.username)
+    return `Cok, "${fragmentA.trim()}" sama "${fragmentB.trim()}" itu member yang sama, gak bisa dibandingin sama diri sendiri.`;
+
+  const durationHistory = loadDurationHistory();
+  const avgA = getAverageDuration(durationHistory, a.username);
+  const avgB = getAverageDuration(durationHistory, b.username);
+  const maxA = getPreviousMaxDuration(durationHistory, a.username);
+  const maxB = getPreviousMaxDuration(durationHistory, b.username);
+
+  const [avatarA, avatarB] = await Promise.all([fetchAvatarSafely(a.username), fetchAvatarSafely(b.username)]);
+
+  const countWinnerIsA = a.count !== b.count && a.count > b.count;
+  const countWinnerIsB = a.count !== b.count && b.count > a.count;
+
+  return {
+    content: `⚔️ **${a.name}** vs **${b.name}**`,
+    embeds: [buildCompareMemberEmbed(a, avatarA, avgA, maxA, countWinnerIsA), buildCompareMemberEmbed(b, avatarB, avgB, maxB, countWinnerIsB)],
+  };
+}
+
 // PENTING: IDN nggak nyediain jadwal live resmi sama sekali (udah dicek
 // langsung ke API-nya). Jadi ini PURE statistik dari histori kita SENDIRI
 // (live-duration-history.json, maks 10 entry terakhir per orang) - bukan
@@ -1593,6 +1664,7 @@ module.exports = {
   resolveStatRangeFromText,
   replyExportRecap,
   buildExportCsv,
+  replyCompareMembers,
   replyBotStatus,
   replySpecificMember,
   replyMemberNotFound,

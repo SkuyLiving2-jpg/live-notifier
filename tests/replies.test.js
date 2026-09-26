@@ -23,6 +23,7 @@ const {
   replyMemberStats,
   replyLiveCount,
   replyLiveCountLeaderboard,
+  replyCompareMembers,
   replySchedulePattern,
   replyPriorityList,
   replySpecificMember,
@@ -327,6 +328,70 @@ test("replyLiveCountLeaderboard - diurutin dari yang paling sering live, format 
   assert.ok(posA < posB, "yang count-nya lebih banyak (5x) harus muncul LEBIH DULU dari yang lebih sedikit (3x)");
   assert.match(reply, /LeaderboardTestA\*\* - 5x live/);
   assert.match(reply, /LeaderboardTestB\*\* - 3x live/);
+});
+
+// ==== §10's forty-second item: "cok bandingin <A> vs <B>" ====
+
+test("replyCompareMembers - dua member ketemu -> content 'vs', 2 embed (masing-masing thumbnail foto), pemenang total-live dikasih 🏆", async () => {
+  recordLiveCompleted("jkt48_comparea", "CompareA");
+  recordLiveCompleted("jkt48_comparea", "CompareA");
+  recordLiveCompleted("jkt48_comparea", "CompareA");
+  recordLiveCompleted("jkt48_compareb", "CompareB");
+  saveDurationHistory({
+    jkt48_comparea: [{ name: "CompareA", durationMs: 60 * 60_000, at: new Date().toISOString() }],
+    jkt48_compareb: [{ name: "CompareB", durationMs: 30 * 60_000, at: new Date().toISOString() }],
+  });
+
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    const { variables } = JSON.parse(options.body);
+    const avatar = `https://cdn.example/${variables.username}.webp`;
+    return { ok: true, json: async () => ({ data: { getPublicProfileByUsername: { username: variables.username, avatar } } }) };
+  };
+  try {
+    const reply = await replyCompareMembers("comparea", "compareb");
+    assert.equal(reply.content, "⚔️ **CompareA** vs **CompareB**");
+    assert.equal(reply.embeds.length, 2);
+    assert.equal(reply.embeds[0].title, "🏆 CompareA"); // 3x > 1x live
+    assert.equal(reply.embeds[1].title, "CompareB");
+    assert.equal(reply.embeds[0].thumbnail.url, "https://cdn.example/jkt48_comparea.webp");
+    assert.equal(reply.embeds[1].thumbnail.url, "https://cdn.example/jkt48_compareb.webp");
+    const fieldA = Object.fromEntries(reply.embeds[0].fields.map((f) => [f.name, f.value]));
+    assert.equal(fieldA["Total live"], "3x");
+    assert.equal(fieldA["Rata-rata durasi"], "1j 0m");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembers - gagal ambil foto profil (network/IDN API error) -> perbandingan TETEP jalan, cuma tanpa thumbnail", async () => {
+  recordLiveCompleted("jkt48_comparec", "CompareC");
+  recordLiveCompleted("jkt48_compared", "CompareD");
+
+  const original = global.fetch;
+  global.fetch = async () => {
+    throw new Error("network down (simulasi)");
+  };
+  try {
+    const reply = await replyCompareMembers("comparec", "compared");
+    assert.equal(reply.embeds.length, 2);
+    assert.equal(reply.embeds[0].thumbnail, undefined);
+    assert.equal(reply.embeds[1].thumbnail, undefined);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembers - salah satu member gak ketemu -> pesan 'belum ada catatan', nyebut nama fragment yang gak ketemu", async () => {
+  recordLiveCompleted("jkt48_comparee", "CompareE");
+  const reply = await replyCompareMembers("comparee", "member-yang-gak-pernah-ada");
+  assert.match(reply, /belum ada catatan live buat "member-yang-gak-pernah-ada"/);
+});
+
+test("replyCompareMembers - dibandingin sama diri sendiri -> ditolak dengan pesan jelas, gak nyoba compare beneran", async () => {
+  recordLiveCompleted("jkt48_comparef", "CompareF");
+  const reply = await replyCompareMembers("comparef", "comparef");
+  assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
 });
 
 test("replySpecificMember - liveAt normal nyantumin jam mulai & elapsed time", () => {

@@ -15,6 +15,7 @@ const {
   replyTopViewersForRange,
   resolveStatRangeFromText,
   replyExportRecap,
+  replyCompareMembers,
   replyBotStatus,
   replySpecificMember,
   replyHelp,
@@ -161,6 +162,16 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const gifterMatch = text.match(/gifter\s+(.+)/);
   if (gifterMatch) {
     return replyGifterSnapshot(gifterMatch[1]);
+  }
+
+  // §10's forty-second item: "cok bandingin <A> vs <B>" (juga nerima
+  // "lawan"/"sama"/"dan"/"dengan" sebagai pemisah, biar natural apapun cara
+  // orangnya nulis) - dua nama fragment-nya diselesaiin lewat
+  // findLiveCountByNameFragment yang sama dipake replyLiveCount, jadi
+  // konsisten sama cara "cok berapa kali <nama> live" ngenalin member.
+  const compareMatch = text.match(/bandingin\s+(.+?)\s+(?:vs\.?|lawan|sama|dan|dengan)\s+(.+)/);
+  if (compareMatch) {
+    return await replyCompareMembers(compareMatch[1], compareMatch[2]);
   }
 
   // Dua cara natural buat nanya pola jadwal: "cok jadwal nala" (pola

@@ -162,6 +162,16 @@ test("export rekap - dispatch ke replyExportRecap (balesan bawa file CSV), BUKAN
   }
 });
 
+// §10's forty-second item: "cok bandingin <A> vs <B>" - dua-duanya fragment
+// yang sengaja gak pernah ada di live-count.json, jadi resolve-nya berhenti
+// di "belum ada catatan" SEBELUM sempet nyoba fetchPublicProfileByUsername
+// (network beneran ke IDN) - aman dites langsung tanpa mock fetch, sama
+// filosofinya kayak tes lain di file ini yang ngindarin panggilan network.
+test("bandingin <A> vs <B> - dispatch ke replyCompareMembers", async () => {
+  const reply = await buildChatReply("cok bandingin membertidakada1 vs membertidakada2");
+  assert.match(reply, /belum ada catatan live buat "membertidakada1"/);
+});
+
 // Dicek SEBELUM check "live" + "siapa" polos (replyListLive) di router.js -
 // kalimatnya juga ngandung "live" + "siapa", jadi harus ketangkep duluan
 // sama check leaderboard yang lebih spesifik. "cok siapa yang live" (tanpa
