@@ -192,6 +192,40 @@ test("handleWatchConfirmButton - member udah kelar live pas diklik -> dikasih ta
   assert.match(interaction.updates[0].content, /Yah, \*\*Wcbtn4\*\* kayaknya baru aja selesai live/);
 });
 
+// BUG SEBELUMNYA: pendingWatchConfirm di-key per channel+author DOANG (bukan
+// per pesan/member) - kalau user nanya "4 <member A>" (pesan A) terus,
+// SEBELUM ngejawab, nanya lagi "4 <member B>" (pesan B, channel+author yang
+// SAMA), pending-nya ke-TIMPA jadi punya B. Kalau A keburu selesai live
+// duluan dan user balik ke pesan A (yang LAMA) buat mencet tombolnya,
+// fallback nama-nya dulu polos `pending?.name` - ngasih nama B, padahal yang
+// diklik jelas-jelas tombol punya A. Sekarang pending cuma dipercaya sebagai
+// fallback nama kalau `pending.username`-nya masih cocok sama username yang
+// dibawa tombol yang beneran diklik - kalau enggak (kasus ini), jatuh ke
+// "member ini" generik, bukan nama member LAIN yang salah.
+test("handleWatchConfirmButton - pendingWatchConfirm ke-timpa sama query MEMBER LAIN (channel+author sama) -> fallback nama TIDAK ngasih nama member lain yang salah", async () => {
+  activeLives.set("jkt48_wcbtnA", { name: "WcbtnA", username: "jkt48_wcbtnA", slug: "s", liveAt: new Date().toISOString() });
+  activeLives.set("jkt48_wcbtnB", { name: "WcbtnB", username: "jkt48_wcbtnB", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    // "4 A" duluan (pesan A), terus "4 B" (pesan B) SEBELUM pesan A dijawab -
+    // pendingWatchConfirm buat channel+author ini sekarang punya B.
+    startWatchConfirmForEntry(activeLives.get("jkt48_wcbtnA"), "c-wccross", "u-wccross");
+    startWatchConfirmForEntry(activeLives.get("jkt48_wcbtnB"), "c-wccross", "u-wccross");
+
+    activeLives.delete("jkt48_wcbtnA"); // A keburu selesai live duluan
+
+    // User balik ke pesan A (YANG LAMA) dan mencet tombolnya - customId-nya
+    // masih bawa username A, walau pending-nya sekarang punya B.
+    const interaction = fakeInteraction({ customId: "watch_confirm:yes:jkt48_wcbtnA", channelId: "c-wccross", authorId: "u-wccross" });
+    await handleWatchConfirmButton(interaction);
+
+    assert.match(interaction.updates[0].content, /Yah, \*\*member ini\*\* kayaknya baru aja selesai live/);
+    assert.doesNotMatch(interaction.updates[0].content, /WcbtnB/, "gak boleh salah ngasih nama member LAIN (B)");
+  } finally {
+    activeLives.delete("jkt48_wcbtnA");
+    activeLives.delete("jkt48_wcbtnB");
+  }
+});
+
 // Abis dijawab lewat tombol, jawaban TEKS "y"/"n" yang nyasar berikutnya
 // (misal orangnya lupa udah klik tombol) gak boleh diem-diem nyangkut ke
 // pending state teks yang sama.

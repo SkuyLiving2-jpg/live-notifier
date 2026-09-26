@@ -252,8 +252,21 @@ async function handleWatchConfirmButton(interaction) {
   // udah nggak ada fallback ke nama yang sempet kesimpen di pendingWatchConfirm
   // (bisa aja kosong kalau udah lewat TTL-nya/gak ada - fallback terakhir
   // "member ini" biar tetep ada balesan, bukan "undefined").
+  //
+  // BUG SEBELUMNYA: fallback-nya dulu `pending?.name` polos, TANPA ngecek
+  // pending itu beneran soal MEMBER YANG SAMA kayak tombol yang diklik.
+  // pendingWatchConfirm di-key per channel+author doang (bukan per pesan) -
+  // jadi kalau user nanya "4 nala" (pesan A, tombol carry "jkt48_nala") terus
+  // SEBELUM dijawab nanya lagi "4 levi" (pesan B), pending-nya ke-TIMPA jadi
+  // punya Levi. Kalau nala keburu selesai live duluan terus user BALIK ke
+  // pesan A (yang lama) dan mencet tombolnya, `entry` bakal null (nala
+  // beneran udah nggak live) dan fallback-nya salah ngasih nama "Levi" -
+  // padahal yang diklik jelas-jelas tombol punya Nala. Sekarang pending cuma
+  // dipercaya sebagai fallback nama kalau `pending.username` masih COCOK sama
+  // username yang dibawa customId tombol yang beneran diklik.
   const entry = activeLives.get(username);
-  const name = entry?.name || pending?.name || "member ini";
+  const pendingName = pending?.username === username ? pending.name : null;
+  const name = entry?.name || pendingName || "member ini";
 
   if (!entry) {
     await interaction.update(safeReplyOptions({ content: `Yah, **${name}** kayaknya baru aja selesai live.`, components: [] }));
