@@ -12,7 +12,7 @@ const {
 const { activeLives, saveActiveLives } = require("../storage/activeLives");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts");
-const { getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert } = require("../storage/streaks");
+const { getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert, loadStreakAlerts } = require("../storage/streaks");
 const { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
 const { computeCurrentStreak, STREAK_MILESTONES } = require("../streakMath");
 const { DAILY_RECAP_HOUR, SCHEDULE_DIGEST_HOUR, DAILY_RECAP_COLOR } = require("../config");
@@ -385,10 +385,14 @@ async function maybeAnnounceStreakMilestone(username, memberName) {
   const dates = getDistinctSessionDatesForMember(username);
   const streak = computeCurrentStreak(dates, getTodayWIB());
 
+  // CATATAN: `streak === 0` di titik INI (tepat setelah monitor.js manggil
+  // recordLiveEnded buat sesi yang barusan selesai) SECARA PRAKTIK gak akan
+  // pernah kejadian - hari ini udah pasti masuk `dates` barusan, jadi
+  // `computeCurrentStreak` gak mungkin balikin 0 di sini. Baris di bawah
+  // dibiarin sebagai jaring pengaman (bukan diandelin sebagai SATU-SATUNYA
+  // jalan clearStreakAlert - lihat maybeCleanupBrokenStreaks di bawah buat
+  // jalan yang beneran nangkep streak yang putus).
   if (streak === 0) {
-    // Keputus - bersihin penanda "udah pernah diumumin" biar streak BARU
-    // yang mulai dari 0 lagi bisa ngelewatin milestone yang SAMA dan tetep
-    // dirayain lagi (lihat komen lengkapnya di storage/streaks.js).
     clearStreakAlert(username);
     return;
   }
@@ -406,6 +410,40 @@ async function maybeAnnounceStreakMilestone(username, memberName) {
   await sendStreakMilestoneAlert(memberName, streak);
 }
 
+// BUG YANG DITEMUKAN (debug pass, dilaporin owner minta dicek ulang fitur
+// streak): maybeAnnounceStreakMilestone di atas SATU-SATUNYA jalan yang
+// manggil clearStreakAlert, dan dia CUMA dipanggil monitor.js pas member itu
+// BARUSAN SELESAI live (lihat komennya di atas: `dates` udah pasti kesisipin
+// tanggal HARI INI persis sebelum fungsi ini jalan). Akibatnya cabang
+// `streak === 0`-nya gak akan pernah kena kalau member itu VAKUM (gak live
+// SAMA SEKALI, jadi monitor.js gak pernah manggil fungsi ini buat dia) -
+// artinya streak yang keputus gara-gara vakum gak pernah ke-deteksi/
+// ke-bersihin. Konsekuensinya: lastAlertedStreak NYANGKUT di milestone
+// TERTINGGI yang pernah dicapai streak LAMA selama-lamanya - begitu member
+// itu mulai streak BARU dan nyampe lagi ke milestone yang SAMA/lebih rendah
+// dari yang lama, alert-nya DIEM AJA (lastAlerted duluan udah lebih tinggi),
+// padahal ini streak yang beda sama sekali dan pantas dirayain lagi.
+//
+// Fix: pengecekan TERPISAH, jalan tiap siklus polling (dipanggil monitor.js
+// bareng maybeSendScheduleDigest dkk) - nyisir SEMUA username yang PUNYA
+// entry di streak-alerts.json (bukan cuma yang barusan selesai live), dan
+// begitu computeCurrentStreak (fungsi murni yang SAMA dipake replyStreak/
+// maybeAnnounceStreakMilestone) bilang streak-nya 0, entry-nya dibersihin.
+// Member yang LAGI live sekarang dilewatin (activeLives.has) - streak-nya
+// gak mungkin 0 selama masih live (computeCurrentStreak's isLiveNow bakal
+// selalu bikin hasToday true), jadi dilewatin murni buat ngirit satu
+// panggilan getDistinctSessionDatesForMember yang udah pasti sia-sia.
+async function maybeCleanupBrokenStreaks() {
+  const alerts = loadStreakAlerts();
+  const today = getTodayWIB();
+  for (const username of Object.keys(alerts)) {
+    if (activeLives.has(username)) continue;
+    const dates = getDistinctSessionDatesForMember(username);
+    const streak = computeCurrentStreak(dates, today);
+    if (streak === 0) clearStreakAlert(username);
+  }
+}
+
 module.exports = {
   maybeAlertViewerMilestone,
   maybeAnnounceNewRecord,
@@ -415,6 +453,7 @@ module.exports = {
   maybeSendScheduleDigest,
   maybeSendPublicHeadsUpAlerts,
   maybeAnnounceStreakMilestone,
+  maybeCleanupBrokenStreaks,
   buildDailyRecapPayload,
   buildWeeklyRecapPayload,
   buildMonthlyRecapPayload,

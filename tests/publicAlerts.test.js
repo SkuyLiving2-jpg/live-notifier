@@ -542,6 +542,88 @@ test("maybeAnnounceStreakMilestone - streak SEKARANG putus (gak ada aktivitas ha
   }
 });
 
+// ==== BUG YANG DITEMUKAN (debug pass): maybeAnnounceStreakMilestone SATU-
+// SATUNYA jalan yang manggil clearStreakAlert, tapi cuma dipanggil monitor.js
+// pas member itu BARUSAN SELESAI live - kalau streak-nya putus gara-gara
+// member VAKUM (gak live sama sekali), gak ada apapun yang manggil fungsi itu
+// buat dia, jadi lastAlertedStreak nyangkut permanen dan milestone yang sama
+// di streak BARU ke-skip diem-diem. maybeCleanupBrokenStreaks (dipanggil
+// monitor.js tiap siklus, terpisah dari maybeAnnounceStreakMilestone) adalah
+// fix-nya - lihat komen lengkapnya di src/notify/publicAlerts.js. ====
+test("maybeCleanupBrokenStreaks - member VAKUM (streak putus TANPA baru aja selesai live) -> penanda lama ke-reset, milestone yang sama bisa dirayain lagi", async () => {
+  freshPublicAlerts();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { maybeCleanupBrokenStreaks, maybeAnnounceStreakMilestone } = require("../src/notify/publicAlerts");
+  const { setLastAlertedStreak, getLastAlertedStreak } = require("../src/storage/streaks");
+
+  // Streak LAMA (5 hari berturut-turut, berakhir 10 hari lalu) udah sempet
+  // ngelewatin milestone 3 DAN 5 - lastAlertedStreak jadi 5. Terus member
+  // ini VAKUM 10 hari (gak ada satupun sesi baru) - TIDAK PERNAH ada
+  // panggilan maybeAnnounceStreakMilestone buat dia selama vakum itu (beda
+  // dari test "streak SEKARANG putus" di atas yang manggil fungsi itu
+  // LANGSUNG - di sini kita simulasiin "gak pernah dipanggil sama sekali").
+  recordConsecutiveDays(recordLiveEnded, "Streakvakum", "jkt48_streakvakum", [14, 13, 12, 11, 10]);
+  setLastAlertedStreak("jkt48_streakvakum", 5);
+
+  await maybeCleanupBrokenStreaks();
+  assert.equal(getLastAlertedStreak("jkt48_streakvakum"), 0, "streak yang beneran udah putus (vakum) harus ke-reset ke 0 oleh cleanup");
+
+  // Streak BARU mulai dari sekarang, nyampe milestone 3 lagi - TANPA fix ini,
+  // lastAlertedStreak yang nyangkut di 5 bakal bikin alert ini DIEM
+  // (lastAlerted(5) < milestone(3) => false).
+  recordConsecutiveDays(recordLiveEnded, "Streakvakum", "jkt48_streakvakum", [0, 1, 2]);
+
+  let sendCount = 0;
+  let capturedBody = null;
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    sendCount++;
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeAnnounceStreakMilestone("jkt48_streakvakum", "Streakvakum");
+    assert.equal(sendCount, 1, "milestone 3 di streak BARU harus dirayain lagi, bukan ke-skip gara-gara penanda lama");
+    assert.match(capturedBody.content, /\*\*3 hari berturut-turut\*\*/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeCleanupBrokenStreaks - streak yang MASIH JALAN (belum putus) -> penanda dibiarin apa adanya", async () => {
+  freshPublicAlerts();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { maybeCleanupBrokenStreaks } = require("../src/notify/publicAlerts");
+  const { setLastAlertedStreak, getLastAlertedStreak } = require("../src/storage/streaks");
+
+  recordConsecutiveDays(recordLiveEnded, "Streakjalan", "jkt48_streakjalan", [0, 1, 2]); // streak masih 3, masih "hidup" (hari ini keisi)
+  setLastAlertedStreak("jkt48_streakjalan", 3);
+
+  await maybeCleanupBrokenStreaks();
+  assert.equal(getLastAlertedStreak("jkt48_streakjalan"), 3, "streak yang belum putus gak boleh ke-reset");
+});
+
+test("maybeCleanupBrokenStreaks - member LAGI LIVE sekarang (belum ada sesi selesai hari ini) -> dilewatin, penanda dibiarin apa adanya", async () => {
+  freshPublicAlerts();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { maybeCleanupBrokenStreaks } = require("../src/notify/publicAlerts");
+  const { setLastAlertedStreak, getLastAlertedStreak } = require("../src/storage/streaks");
+
+  // Streak lama 3 hari, berakhir KEMARIN (jadi hari ini belum ada sesi
+  // SELESAI yang kecatet) - tapi membernya lagi LIVE sekarang, jadi streak-nya
+  // SEBENARNYA masih "hidup" (isLiveNow ikut ke-hitung, computeCurrentStreak).
+  recordConsecutiveDays(recordLiveEnded, "Streaklive", "jkt48_streaklive", [1, 2, 3]);
+  setLastAlertedStreak("jkt48_streaklive", 3);
+  activeLives.set("jkt48_streaklive", { name: "Streaklive", username: "jkt48_streaklive", slug: "s", liveAt: new Date().toISOString() });
+
+  try {
+    await maybeCleanupBrokenStreaks();
+    assert.equal(getLastAlertedStreak("jkt48_streaklive"), 3, "member yang lagi live gak boleh ke-anggep putus streak-nya");
+  } finally {
+    activeLives.delete("jkt48_streaklive");
+  }
+});
+
 // ==== Saran fitur ke-6 (§10's kelimapuluh+item): "prediksi jadwal hari ini" ====
 // 2026-09-27 (WIB) = Minggu (dipakai juga sama A_SUNDAY di atas) - entries di
 // bawah SEMUANYA jatuh di hari Minggu (interval 7 hari, weekday konsisten)

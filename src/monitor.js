@@ -16,6 +16,7 @@ const {
   maybeSendScheduleDigest,
   maybeSendPublicHeadsUpAlerts,
   maybeAnnounceStreakMilestone,
+  maybeCleanupBrokenStreaks,
 } = require("./notify/publicAlerts");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
@@ -175,6 +176,14 @@ async function checkLiveMembers() {
     await maybeSendScheduleDigest();
     await maybeSendHeadsUpAlerts();
     await maybeSendPublicHeadsUpAlerts();
+    // BUG YANG DITEMUKAN (debug pass §10, live streak) - lihat komen lengkapnya
+    // di notify/publicAlerts.js's maybeCleanupBrokenStreaks: tanpa panggilan
+    // rutin terpisah ini, streak yang putus gara-gara member VAKUM (gak live
+    // sama sekali, bukan gara-gara baru selesai live) gak pernah ke-deteksi,
+    // dan lastAlertedStreak-nya nyangkut permanen - milestone yang sama di
+    // streak BARU jadi ke-skip diem-diem. Dipanggil tiap siklus (murah - cuma
+    // nyisir entry streak-alerts.json yang jumlahnya kecil, gak ada network).
+    await maybeCleanupBrokenStreaks();
     // Dashboard live (§10's kelimapuluh+item, saran fitur ke-7) - dipanggil
     // PALING TERAKHIR, setelah dua loop di atas (member baru mulai live/udah
     // selesai) beres semua buat siklus ini, biar roster yang direnderin
