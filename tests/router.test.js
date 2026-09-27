@@ -264,6 +264,47 @@ test(
   }),
 );
 
+// Saran fitur ke-3: "cok bandingin A, B, dan C" - 3+ member sekaligus. Koma
+// jadi sinyal pemicu (compareListFullMatch di router.js), dicek SEBELUM
+// compareMatch 2-way di atas.
+recordLiveCompleted("jkt48_qixolawp", "Qixolawp JKT48");
+
+test(
+  "bandingin A, B, dan C (koma) - dispatch ke replyCompareMembersMulti, BUKAN kesalah-parse jadi 2-way",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok bandingin zorrawx, yelvaqp, dan qixolawp");
+    assert.equal(reply.content, "⚔️ **Zorrawx JKT48**, **Yelvaqp JKT48**, dan **Qixolawp JKT48**");
+    assert.equal(reply.embeds.length, 3);
+    assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
+  }),
+);
+
+test(
+  "bandingin A, B, C (koma polos tanpa 'dan' sama sekali) juga jalan ke replyCompareMembersMulti",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok bandingin zorrawx, yelvaqp, qixolawp");
+    assert.equal(reply.embeds.length, 3);
+  }),
+);
+
+test(
+  "bandingin A, B (koma, cuma 2) - TETAP lewat replyCompareMembers (2-member) yang sama, bukan versi multi",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok bandingin zorrawx, yelvaqp");
+    assert.equal(reply.content, "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**");
+    assert.equal(reply.embeds.length, 2);
+  }),
+);
+
+test(
+  "bandingin A dan B (TANPA koma) - dispatch lama (2-way) SAMA SEKALI gak kesentuh sama gerbang koma yang baru",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok bandingin zorrawx dan yelvaqp");
+    assert.equal(reply.content, "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**");
+    assert.equal(reply.embeds.length, 2);
+  }),
+);
+
 test(
   "'<A> dan <B>' TANPA kata kunci (di belakang 'cok') langsung jadi perbandingan",
   withFakeIdn(async () => {

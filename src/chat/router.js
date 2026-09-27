@@ -18,6 +18,7 @@ const {
   resolveStatRangeFromText,
   replyExportRecap,
   replyCompareMembers,
+  replyCompareMembersMulti,
   replyBotStatus,
   replySpecificMember,
   replyHelp,
@@ -193,6 +194,30 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const gifterMatch = text.match(/gifter\s+(.+)/);
   if (gifterMatch) {
     return replyGifterSnapshot(gifterMatch[1]);
+  }
+
+  // Saran fitur ke-3: "cok bandingin A, B, dan C" (koma - Oxford comma
+  // ATAUPUN "dan" polos di akhir - dan variasinya "A, B, C"/"A, B & C")
+  // - lebih dari 2 member sekaligus. Dicek SEBELUM compareMatch (2-way) di
+  // bawah - KOMA jadi sinyal pemicu ("ini daftar, bukan bentuk 2-way biasa")
+  // soalnya bentuk 2-way yang UDAH ADA gak pernah pakai koma sama sekali,
+  // jadi ini gak bisa nabrak balik ke situ: kalimat tanpa koma SELALU jatuh
+  // ke compareMatch seperti biasa, perilaku 2-member lama gak kesentuh sama
+  // sekali. Bentuk "A dan B dan C" TANPA koma sama sekali SENGAJA gak
+  // didukung - susah dibedain dari kalimat biasa yang kebetulan nyebut "dan"
+  // berkali-kali, beda dari koma yang gak ambigu.
+  const compareListFullMatch = text.match(/\bbanding(?:in|kan)?\s+(.+)/);
+  if (compareListFullMatch && compareListFullMatch[1].includes(",")) {
+    const rawParts = compareListFullMatch[1].split(/\s*,\s*(?:dan\s+)?|\s+dan\s+|\s*&\s*/);
+    const parts = rawParts.map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      const lastIndex = parts.length - 1;
+      parts[lastIndex] = parts[lastIndex].replace(/[?!.\s]+$/, "");
+      return parts.length === 2 ? await replyCompareMembers(parts[0], parts[1]) : await replyCompareMembersMulti(parts);
+    }
+    // Koma ada tapi ujung-ujungnya cuma nyisa 1 potongan (mis. koma nyantol
+    // di ujung kalimat doang, "bandingin nala,") - biarin jatuh ke
+    // compareMatch/bare-form/replyStartComparePick di bawah seperti biasa.
   }
 
   // §10's forty-second item: "cok bandingin <A> dan <B>" - pemisahnya SENGAJA

@@ -265,6 +265,7 @@ function replyHelp() {
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok bandingin <nama member> dan/& <nama member>" (atau cukup "cok <nama> dan <nama>" / "cok <nama> & <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat dicariin lewat dropdown',
+    `- "cok bandingin A, B, dan C" - bisa lebih dari 2 member sekaligus (pakai koma, maks ${MAX_COMPARE_MEMBERS} orang), mis. "cok bandingin nala, levi, dan lily"`,
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
     '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',
@@ -1886,6 +1887,84 @@ async function replyCompareMembersByUsername(usernameA, usernameB) {
   return buildCompareReply(a, b);
 }
 
+// Saran fitur ke-3, 3+ member sekaligus (§10's kelimapuluh+item). Discord
+// ngizinin sampe 10 embed per pesan, tapi dibatesin lebih ketat di sini -
+// bukan cuma soal limit teknis, embed numpuk ke BAWAH (bukan sebelahan,
+// lihat komen buildCompareMemberEmbed) jadi kebanyakan tetep bikin hasilnya
+// kepanjangan buat dibaca nyaman.
+const MAX_COMPARE_MEMBERS = 5;
+
+// Gabungan nama jadi kalimat Indonesia yang natural: 2 nama -> "A dan B", 3+
+// -> "A, B, dan C" (koma di antara yang tengah, "dan" cuma sebelum yang
+// terakhir) - dipake buat baris judul hasil perbandingan multi-member.
+function joinNaturalList(items) {
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} dan ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, dan ${items[items.length - 1]}`;
+}
+
+// Versi N-member (>=2) dari buildCompareReply di atas - SENGAJA fungsi
+// terpisah (bukan generalisasi buildCompareReply yang udah ada), biar jalur
+// 2-member yang udah lama stabil + lengkap ke-tes itu SAMA SEKALI gak
+// kesentuh/keresiko-in sama perubahan ini.
+async function buildCompareReplyMulti(entries) {
+  const durationHistory = loadDurationHistory();
+  const avatars = await Promise.all(entries.map((entry) => fetchAvatarSafely(entry.username)));
+
+  // Pemenang total-live (🏆) - aturannya SAMA kayak versi 2-member: cuma
+  // ditandain kalau count TERTINGGI-nya gak seri (2+ member share count
+  // tertinggi -> gak ada yang ditandain sama sekali, daripada nandain
+  // beberapa 🏆 sekaligus yang malah bingungin).
+  const maxCount = Math.max(...entries.map((e) => e.count));
+  const winnerCountAtMax = entries.filter((e) => e.count === maxCount).length;
+
+  const embeds = entries.map((entry, i) => {
+    const avg = getAverageDuration(durationHistory, entry.username);
+    const max = getPreviousMaxDuration(durationHistory, entry.username);
+    const isWinner = winnerCountAtMax === 1 && entry.count === maxCount;
+    return buildCompareMemberEmbed(entry, avatars[i], avg, max, isWinner);
+  });
+
+  return {
+    content: `⚔️ ${joinNaturalList(entries.map((e) => `**${e.name}**`))}`,
+    embeds,
+    components: [buildCompareCloseRow()],
+  };
+}
+
+// "cok bandingin A, B, dan C" (dan variasinya - lihat komen router.js's
+// compareListFullMatch buat daftar bentuk yang diterima). Aturan-aturannya
+// SAMA persis kayak replyCompareMembers (2-member), cuma digeneralisir ke N:
+// nama yang sama-sama-persis ditolak, member yang gak ketemu dijelasin
+// SEMUA sekaligus (bukan satu-satu tiap user coba ulang), dan dua ketikan
+// BEDA yang kebetulan resolve ke username IDN yang SAMA juga ditolak.
+async function replyCompareMembersMulti(fragments) {
+  if (fragments.length > MAX_COMPARE_MEMBERS) {
+    return `Cok, maksimal ${MAX_COMPARE_MEMBERS} member sekaligus ya buat dibandingin (kamu ngasih ${fragments.length}).`;
+  }
+
+  const normalized = fragments.map(normalizeMemberFragment);
+  for (let i = 0; i < normalized.length; i++) {
+    for (let j = i + 1; j < normalized.length; j++) {
+      if (normalized[i] === normalized[j]) return sameMemberMessage(fragments[i], fragments[j]);
+    }
+  }
+
+  const resolved = fragments.map(findLiveCountByNameFragment);
+  const missingIndexes = resolved.map((r, i) => (r ? -1 : i)).filter((i) => i !== -1);
+  if (missingIndexes.length > 0) {
+    return (await Promise.all(missingIndexes.map((i) => describeMissingMember(fragments[i])))).join("\n");
+  }
+
+  for (let i = 0; i < resolved.length; i++) {
+    for (let j = i + 1; j < resolved.length; j++) {
+      if (resolved[i].username === resolved[j].username) return sameMemberMessage(fragments[i], fragments[j]);
+    }
+  }
+
+  return buildCompareReplyMulti(resolved);
+}
+
 // PENTING: IDN nggak nyediain jadwal live resmi sama sekali (udah dicek
 // langsung ke API-nya). Jadi ini PURE statistik dari histori kita SENDIRI
 // (live-duration-history.json, maks 10 entry terakhir per orang) - bukan
@@ -2076,6 +2155,7 @@ module.exports = {
   buildExportCsv,
   replyCompareMembers,
   replyCompareMembersByUsername,
+  replyCompareMembersMulti,
   describeMissingMember,
   normalizeMemberFragment,
   sameMemberMessage,

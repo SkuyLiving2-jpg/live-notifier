@@ -27,6 +27,7 @@ const {
   replyLongestNotLiveLeaderboard,
   replyCompareMembers,
   replyCompareMembersByUsername,
+  replyCompareMembersMulti,
   describeMissingMember,
   normalizeMemberFragment,
   replySchedulePattern,
@@ -590,6 +591,88 @@ test("replyCompareMembersByUsername - langsung dari username (bukan fragment) ->
     assert.equal(reply.embeds.length, 2);
     assert.equal(reply.embeds[0].title, "🏆 CompareG"); // 2x > 1x live
     assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+// ==== Saran fitur ke-3: "cok bandingin A, B, dan C" (3+ member sekaligus) ====
+
+test("replyCompareMembersMulti - 3 member ketemu semua -> content 'A, B, dan C', 3 embed, cuma yang count TERTINGGI (gak seri) dikasih 🏆", async () => {
+  recordLiveCompleted("jkt48_multia", "MultiA");
+  recordLiveCompleted("jkt48_multia", "MultiA");
+  recordLiveCompleted("jkt48_multia", "MultiA");
+  recordLiveCompleted("jkt48_multib", "MultiB");
+  recordLiveCompleted("jkt48_multic", "MultiC");
+  recordLiveCompleted("jkt48_multic", "MultiC");
+
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({});
+  try {
+    const reply = await replyCompareMembersMulti(["multia", "multib", "multic"]);
+    assert.equal(reply.content, "⚔️ **MultiA**, **MultiB**, dan **MultiC**");
+    assert.equal(reply.embeds.length, 3);
+    assert.equal(reply.embeds[0].title, "🏆 MultiA"); // 3x, count tertinggi gak seri
+    assert.equal(reply.embeds[1].title, "MultiB");
+    assert.equal(reply.embeds[2].title, "MultiC");
+    assert.equal(reply.components[0].components[0].data.custom_id, "compare_pick:close");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembersMulti - count tertinggi SERI (2 member sama-sama paling banyak) -> gak ada satupun yang dikasih 🏆", async () => {
+  recordLiveCompleted("jkt48_seriwina", "Seriwina");
+  recordLiveCompleted("jkt48_seriwina", "Seriwina");
+  recordLiveCompleted("jkt48_seriwinb", "Seriwinb");
+  recordLiveCompleted("jkt48_seriwinb", "Seriwinb");
+  recordLiveCompleted("jkt48_serikalah", "Serikalah");
+
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({});
+  try {
+    const reply = await replyCompareMembersMulti(["seriwina", "seriwinb", "serikalah"]);
+    assert.equal(reply.embeds[0].title, "Seriwina");
+    assert.equal(reply.embeds[1].title, "Seriwinb");
+    assert.equal(reply.embeds[2].title, "Serikalah");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembersMulti - lebih dari MAX_COMPARE_MEMBERS (5) -> ditolak dengan pesan jelas, gak nyentuh storage/network sama sekali", async () => {
+  const reply = await replyCompareMembersMulti(["m1", "m2", "m3", "m4", "m5", "m6"]);
+  assert.match(reply, /maksimal 5 member sekaligus/);
+});
+
+test("replyCompareMembersMulti - dua nama yang PERSIS SAMA (setelah dinormalisasi) di antara 3+ ditolak, SEBELUM nyentuh storage/network", async () => {
+  const reply = await replyCompareMembersMulti(["multidup", "Multidup JKT48", "multilain"]);
+  assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
+});
+
+test("replyCompareMembersMulti - dua fragment BEDA yang resolve ke username IDN yang SAMA tetep ditolak", async () => {
+  recordLiveCompleted("jkt48_multisameuser", "Multisameuser");
+  recordLiveCompleted("jkt48_multiother", "Multiother");
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({});
+  try {
+    // "multisameu" dan "multisameuser" dua-duanya nge-fuzzy-match ke username
+    // yang SAMA (jkt48_multisameuser) walau ketikannya beda.
+    const reply = await replyCompareMembersMulti(["multisameu", "multisameuser", "multiother"]);
+    assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("replyCompareMembersMulti - ada yang gak ketemu di antara 3+ -> SEMUA yang gak ketemu dijelasin sekaligus", async () => {
+  recordLiveCompleted("jkt48_multiketemu", "Multiketemu");
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({ jkt48_xblumlivetest: { name: "Xblumlivetest JKT48" } });
+  try {
+    const reply = await replyCompareMembersMulti(["multiketemu", "xblumlivetest", "multigakadasamsek"]);
+    assert.match(reply, /Xblumlivetest JKT48\*\* belum pernah live/);
+    assert.match(reply, /gak nemu member JKT48 bernama "multigakadasamsek"/);
   } finally {
     global.fetch = original;
   }
