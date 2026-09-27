@@ -173,6 +173,14 @@ const PRIORITY_COLOR_PALETTE = [0x9b59b6, 0x2ecc71, 0xe91e63, 0xe67e22, 0xf1c40f
 
 const DAILY_RECAP_HOUR = envInt("DAILY_RECAP_HOUR", 23); // jam WIB
 
+// Saran fitur ke-6 (§10's kelimapuluh+item): jam WIB pengiriman "prediksi
+// jadwal hari ini" otomatis (notify/publicAlerts.js's maybeSendScheduleDigest)
+// - default jam 7 pagi, biar orang yang buka Discord pagi-pagi langsung liat
+// perkiraan siapa aja yang kemungkinan live hari itu, BUKAN jam 23:00 kayak
+// DAILY_RECAP_HOUR (itu ngerangkum yang UDAH SELESAI, ini nebak yang BELUM
+// terjadi - dua kebutuhan yang beda, pantesnya beda jam juga).
+const SCHEDULE_DIGEST_HOUR = envInt("SCHEDULE_DIGEST_HOUR", 7);
+
 // Warna embed rekap harian/mingguan/bulanan OTOMATIS (notify/publicAlerts.js's
 // maybeSendDailyRecap/maybeSendWeeklyRecap/maybeSendMonthlyRecap) - Discord
 // "blurple", netral/gak nyerempet warna member prioritas manapun (teal Nala
@@ -201,6 +209,7 @@ module.exports = {
   PRIORITY_PING_USER_ID,
   PRIORITY_COLOR_PALETTE,
   DAILY_RECAP_HOUR,
+  SCHEDULE_DIGEST_HOUR,
   DAILY_RECAP_COLOR,
   PORT,
 };

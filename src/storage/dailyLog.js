@@ -99,6 +99,13 @@ function loadDailyLog() {
     recapSentDate: raw.recapSentDate || null,
     recapSentWeek: raw.recapSentWeek || null,
     recapSentMonth: raw.recapSentMonth || null,
+    // Penanda "hari apa (WIB) prediksi jadwal harian OTOMATIS terakhir
+    // kekirim" (§10's kelimapuluh+item, saran fitur ke-6,
+    // notify/publicAlerts.js's maybeSendScheduleDigest) - dipisah dari
+    // recapSentDate (itu buat rekap yang UDAH SELESAI, ini prediksi yang
+    // BELUM terjadi, jam kirimnya juga beda), sama pola dedup-nya kayak
+    // recapSentWeek/recapSentMonth di atas.
+    digestSentDate: raw.digestSentDate || null,
   };
 }
 

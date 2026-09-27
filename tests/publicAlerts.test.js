@@ -541,3 +541,117 @@ test("maybeAnnounceStreakMilestone - streak SEKARANG putus (gak ada aktivitas ha
     global.fetch = original;
   }
 });
+
+// ==== Saran fitur ke-6 (§10's kelimapuluh+item): "prediksi jadwal hari ini" ====
+// 2026-09-27 (WIB) = Minggu (dipakai juga sama A_SUNDAY di atas) - entries di
+// bawah SEMUANYA jatuh di hari Minggu (interval 7 hari, weekday konsisten)
+// jam 13:00 (mulai jam 12:00, bucket "siang"), biar topWeekdayName/topBucketName
+// dua-duanya dominan penuh (5/5).
+function sundayEntries(name) {
+  return ["2026-08-30", "2026-09-06", "2026-09-13", "2026-09-20", "2026-09-27"].map((date) => ({
+    name,
+    durationMs: 60 * 60_000,
+    at: `${date}T13:00:00+07:00`,
+  }));
+}
+const DIGEST_ON_SUNDAY_MORNING = new Date("2026-09-27T08:00:00+07:00"); // jam 8 WIB, lewat gerbang SCHEDULE_DIGEST_HOUR (default 7)
+const DIGEST_ON_SUNDAY_TOO_EARLY = new Date("2026-09-27T05:00:00+07:00"); // jam 5 WIB, belum lewat gerbang
+
+test("maybeSendScheduleDigest - member pola KUAT (jam+hari) match hari ini -> kirim embed, dedup harian", async () => {
+  freshPublicAlerts();
+  saveDurationHistory({ jkt48_digesta: sundayEntries("Digesta") });
+  const { maybeSendScheduleDigest } = require("../src/notify/publicAlerts");
+
+  let sendCount = 0;
+  let capturedBody = null;
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    sendCount++;
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendScheduleDigest(DIGEST_ON_SUNDAY_MORNING);
+    assert.equal(sendCount, 1);
+    assert.match(capturedBody.embeds[0].title, /Prediksi jadwal hari Minggu/);
+    assert.match(capturedBody.embeds[0].description, /\*\*Digesta\*\* sekitar jam 12-12 WIB/);
+
+    await maybeSendScheduleDigest(new Date("2026-09-27T20:00:00+07:00")); // masih hari Minggu yang sama
+    assert.equal(sendCount, 1, "gak boleh kekirim dobel hari yang sama");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendScheduleDigest - jam WIB belum lewat SCHEDULE_DIGEST_HOUR -> gerbang ketutup, gak ngirim apa-apa", async () => {
+  freshPublicAlerts();
+  saveDurationHistory({ jkt48_digestb: sundayEntries("Digestb") });
+  const { maybeSendScheduleDigest } = require("../src/notify/publicAlerts");
+  const { loadDailyLog } = require("../src/storage/dailyLog");
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendScheduleDigest(DIGEST_ON_SUNDAY_TOO_EARLY);
+    assert.equal(sent, false);
+    assert.equal(loadDailyLog().digestSentDate, null, "gerbang ketutup - dedup-nya juga gak boleh ke-set");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendScheduleDigest - pola harinya BEDA dari hari ini -> member itu gak ikut ke-daftar, gak ngirim (gak ada kandidat sama sekali)", async () => {
+  freshPublicAlerts();
+  // Sama persis kekuatan pola-nya kayak sundayEntries, tapi jatuh di hari
+  // SABTU (mundur 1 hari dari tiap tanggal di atas), bukan Minggu.
+  const saturdayEntries = ["2026-08-29", "2026-09-05", "2026-09-12", "2026-09-19", "2026-09-26"].map((date) => ({
+    name: "Digestc",
+    durationMs: 60 * 60_000,
+    at: `${date}T13:00:00+07:00`,
+  }));
+  saveDurationHistory({ jkt48_digestc: saturdayEntries });
+  const { maybeSendScheduleDigest } = require("../src/notify/publicAlerts");
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendScheduleDigest(DIGEST_ON_SUNDAY_MORNING); // dicek hari MINGGU, historinya Sabtu semua
+    assert.equal(sent, false);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendScheduleDigest - member LAGI LIVE SEKARANG dikecualiin dari daftar (walau pola-nya kuat match hari ini)", async () => {
+  freshPublicAlerts();
+  saveDurationHistory({ jkt48_digestd: sundayEntries("Digestd") });
+  activeLives.set("jkt48_digestd", { name: "Digestd", username: "jkt48_digestd", slug: "s", liveAt: new Date().toISOString() });
+  const { maybeSendScheduleDigest } = require("../src/notify/publicAlerts");
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendScheduleDigest(DIGEST_ON_SUNDAY_MORNING);
+    assert.equal(sent, false);
+  } finally {
+    global.fetch = original;
+    activeLives.delete("jkt48_digestd");
+  }
+});
+
+test("buildScheduleDigestPayload - array kandidat kosong -> null (bukan embed kosong)", () => {
+  const { buildScheduleDigestPayload } = require("../src/notify/publicAlerts");
+  assert.equal(buildScheduleDigestPayload([], "Minggu"), null);
+});

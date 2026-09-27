@@ -1,6 +1,6 @@
 const { postToWebhook } = require("./webhook");
 const { formatDuration, formatMonthLabel, getHourWIBOf, getTodayWIB, getDateWIB, WEEKDAY_FORMATTER_WIB } = require("../utils");
-const { getPreviousMaxDuration, findDurationHistoryByNameFragment } = require("../storage/durationHistory");
+const { getPreviousMaxDuration, findDurationHistoryByNameFragment, loadDurationHistory } = require("../storage/durationHistory");
 const {
   loadDailyLog,
   saveDailyLog,
@@ -15,7 +15,7 @@ const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts"
 const { getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert } = require("../storage/streaks");
 const { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
 const { computeCurrentStreak, STREAK_MILESTONES } = require("../streakMath");
-const { DAILY_RECAP_HOUR, DAILY_RECAP_COLOR } = require("../config");
+const { DAILY_RECAP_HOUR, SCHEDULE_DIGEST_HOUR, DAILY_RECAP_COLOR } = require("../config");
 
 // Ambang jumlah penonton buat alert "tembus milestone" - sekali per ambang
 // per sesi live (dicatet di entry.alertedMilestones), berlaku buat SEMUA
@@ -213,6 +213,82 @@ async function maybeSendMonthlyRecap(now = new Date()) {
   saveDailyLog(log);
 }
 
+// Saran fitur ke-6 (§10's kelimapuluh+item): "prediksi jadwal hari ini",
+// dikirim SEKALI tiap pagi (default jam 7 WIB, lihat config.js's
+// SCHEDULE_DIGEST_HOUR) - pelengkap alami dari rekap harian/mingguan/bulanan
+// otomatis di atas (yang ngerangkum yang UDAH SELESAI), ini nebak yang BELUM
+// terjadi. Beda dari "cok jadwal <nama>" (satu member, on-demand, jawab APA
+// ADANYA walau pola-nya lemah - USER yang nanya) DAN heads-up DM/publik di
+// atas (JAM SPESIFIK, per-member, real-time) - ini SEMUA member sekaligus,
+// SEKALI SEHARI, dan cuma nyebut yang pola HARI-nya (bukan cuma jamnya) kuat
+// buat HARI INI spesifik, biar daftarnya gak kepanjangan nyebutin semua
+// member yang punya RIWAYAT tapi gak ada indikasi bakal live HARI INI.
+function buildScheduleDigestPayload(candidates, todayWeekdayName) {
+  if (candidates.length === 0) return null;
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const lines = candidates.map((c) => `- **${c.displayName}** sekitar jam ${pad2(c.pattern.rangeMin)}-${pad2(c.pattern.rangeMax)} WIB`);
+
+  return {
+    embeds: [
+      {
+        title: `📅 Prediksi jadwal hari ${todayWeekdayName}`,
+        description: [
+          `Member yang histori live-nya nunjukkin pola KUAT di hari ${todayWeekdayName}, sekitar jam segini:`,
+          lines.join("\n"),
+          "",
+          "_(Perkiraan dari pola histori kita sendiri, BUKAN jadwal resmi - IDN gak nyediain jadwal sama sekali, bisa aja meleset. Member lain masih bisa aja live juga, cuma pola histori mereka belum cukup kuat buat diprediksi.)_",
+        ].join("\n"),
+        color: DAILY_RECAP_COLOR,
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
+// `now` opsional, sama alasannya kayak maybeSendWeeklyRecap/maybeSendMonthlyRecap
+// di atas (§10's thirty-ninth item) - biar gerbang jam/dedup-nya bisa dites
+// deterministik.
+async function maybeSendScheduleDigest(now = new Date()) {
+  if (getHourWIBOf(now) < SCHEDULE_DIGEST_HOUR) return;
+
+  const todayKey = getDateWIB(now);
+  const log = loadDailyLog();
+  if (log.digestSentDate === todayKey) return; // udah kekirim hari ini
+
+  const todayWeekdayName = WEEKDAY_FORMATTER_WIB.format(now);
+  const history = loadDurationHistory();
+  const candidates = [];
+  for (const [username, entries] of Object.entries(history)) {
+    if (entries.length === 0 || activeLives.has(username)) continue; // lagi live sekarang - gak perlu "diprediksi" lagi, udah kejadian
+
+    const pattern = computeSchedulePattern(entries);
+    if (!pattern || pattern.total < HEADS_UP_MIN_ENTRIES) continue;
+    // Dua ambang dominansi dicek TERPISAH - jam (topBucketCount, sama kayak
+    // heads-up) DAN hari (topWeekdayCount, KHUSUS di sini) - member yang jam
+    // live-nya konsisten tapi HARI-nya tersebar acak ke seluruh minggu tetep
+    // HARUS gak nyantol ke SATU hari spesifik manapun, walau jamnya kuat.
+    if (pattern.topBucketCount / pattern.total < HEADS_UP_MIN_DOMINANCE) continue;
+    if (pattern.topWeekdayName !== todayWeekdayName) continue;
+    if (pattern.topWeekdayCount / pattern.total < HEADS_UP_MIN_DOMINANCE) continue;
+
+    candidates.push({ username, displayName: entries[entries.length - 1].name || username, pattern });
+  }
+  candidates.sort((a, b) => a.pattern.rangeMin - b.pattern.rangeMin); // yang diperkirakan PALING PAGI duluan
+
+  const payload = buildScheduleDigestPayload(candidates, todayWeekdayName);
+  if (payload) {
+    if (await postToWebhook(payload, "Gagal ngirim prediksi jadwal harian:")) {
+      console.log(`Prediksi jadwal harian terkirim (${candidates.length} member)`);
+    }
+  }
+  // Ditandai SELESAI hari ini walau `payload` null (gak ada kandidat sama
+  // sekali) - sama pola-nya kayak maybeSendDailyRecap, biar gak dicoba
+  // ngitung ulang tiap siklus polling sepanjang sisa hari itu.
+  log.digestSentDate = todayKey;
+  saveDailyLog(log);
+}
+
 // Saran fitur ke-4 (§10's kelimapuluh+item): heads-up jadwal PUBLIK - beda
 // dari notify/priorityDm.js's maybeSendHeadsUpAlerts (DM ke owner doang,
 // cuma buat member prioritas), ini buat member MANAPUN yang punya subscriber
@@ -336,11 +412,13 @@ module.exports = {
   maybeSendDailyRecap,
   maybeSendWeeklyRecap,
   maybeSendMonthlyRecap,
+  maybeSendScheduleDigest,
   maybeSendPublicHeadsUpAlerts,
   maybeAnnounceStreakMilestone,
   buildDailyRecapPayload,
   buildWeeklyRecapPayload,
   buildMonthlyRecapPayload,
+  buildScheduleDigestPayload,
   isSundayWIB,
   isLastDayOfMonthWIB,
 };

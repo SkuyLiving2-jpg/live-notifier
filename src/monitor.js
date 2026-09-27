@@ -12,6 +12,7 @@ const {
   maybeSendDailyRecap,
   maybeSendWeeklyRecap,
   maybeSendMonthlyRecap,
+  maybeSendScheduleDigest,
   maybeSendPublicHeadsUpAlerts,
   maybeAnnounceStreakMilestone,
 } = require("./notify/publicAlerts");
@@ -170,6 +171,7 @@ async function checkLiveMembers() {
     await maybeSendDailyRecap();
     await maybeSendWeeklyRecap();
     await maybeSendMonthlyRecap();
+    await maybeSendScheduleDigest();
     await maybeSendHeadsUpAlerts();
     await maybeSendPublicHeadsUpAlerts();
   } catch (error) {
