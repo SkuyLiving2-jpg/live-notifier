@@ -191,6 +191,19 @@ const SCHEDULE_DIGEST_HOUR = envInt("SCHEDULE_DIGEST_HOUR", 7);
 // otomatis" apapun periodenya, tanpa perlu baca title-nya dulu.
 const DAILY_RECAP_COLOR = 0x5865f2;
 
+// Saran fitur ke-7 (§10's kelimapuluh+item, paling susah dari batch saran
+// fitur ini): dashboard "lagi live sekarang" yang NEMPEL satu pesan aja
+// (notify/dashboard.js). Opsional dan MATI by default (string kosong) - beda
+// dari fitur lain di file ini yang begitu ke-set langsung otomatis nyala,
+// ini SENGAJA butuh langkah eksplisit (bikin webhook lagi, beda dari
+// DISCORD_WEBHOOK_URL) sebelum aktif, biar channel notif yang UDAH ADA gak
+// tiba-tiba kedapetan 1 pesan nempel baru yang gak pernah diminta cuma
+// gara-gara upgrade kode. Boleh SAMA persis kayak DISCORD_WEBHOOK_URL (kalau
+// mau dashboard-nya nempel di channel notif yang sama) atau webhook LAIN
+// (kalau mau channel khusus status) - keduanya pilihan owner, kode ini gak
+// maksa salah satu.
+const DASHBOARD_WEBHOOK_URL = process.env.DASHBOARD_WEBHOOK_URL || "";
+
 const PORT = process.env.PORT || 3000;
 
 module.exports = {
@@ -211,5 +224,6 @@ module.exports = {
   DAILY_RECAP_HOUR,
   SCHEDULE_DIGEST_HOUR,
   DAILY_RECAP_COLOR,
+  DASHBOARD_WEBHOOK_URL,
   PORT,
 };

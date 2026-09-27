@@ -64,23 +64,25 @@ async function getRetryAfterMs(response) {
 // yang sama buat kegagalan jenis itu cuma bakal gagal lagi dengan cara yang
 // sama (kalau payloadnya emang salah) atau nambah beban ke layanan yang
 // emang lagi bermasalah, bukan nolong apa-apa.
-// webhookUrl (opsional, default DISCORD_WEBHOOK_URL/channel gabungan) - buat
-// fitur channel khusus per-member (lihat storage/channelRouting.js), yang
-// butuh kirim payload yang SAMA ke webhook LAIN (channel spesifik member
-// itu). Sengaja jadi parameter tambahan doang (bukan ubah signature yang
-// udah ada) - semua pemanggil lama tetep jalan identik tanpa perlu diubah.
-async function postToWebhook(payload, errorLabel = "Gagal ngirim notif ke Discord:", webhookUrl = DISCORD_WEBHOOK_URL) {
-  const body = JSON.stringify(withDefaultMentionGuard(payload));
-
+//
+// Diekstrak dari postToWebhook (§10's kelimapuluh+item, saran fitur ke-7,
+// dashboard live) biar retry/backoff 429-nya bisa dipakai bareng sama
+// createWebhookMessage/editWebhookMessage di bawah, TANPA nyalin-ulang loop
+// yang sama - balikin Response APA ADANYA (baik ok maupun enggak, KECUALI
+// exception/network error yang balikin null), biar pemanggil yang mutusin
+// sendiri gimana nanganin status non-2xx SPESIFIK (mis. editWebhookMessage
+// perlu tau beda 404 dari kegagalan lain, postToWebhook sendiri gak peduli
+// beda itu sama sekali).
+async function sendWebhookRequest(method, url, body, errorLabel) {
   for (let attempt = 1; attempt <= MAX_RATE_LIMIT_RETRIES + 1; attempt++) {
     try {
-      const response = await fetch(webhookUrl, {
-        method: "POST",
+      const response = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body,
       });
 
-      if (response.ok) return true;
+      if (response.ok) return response;
 
       if (response.status === 429 && attempt <= MAX_RATE_LIMIT_RETRIES) {
         const waitMs = await getRetryAfterMs(response);
@@ -91,19 +93,92 @@ async function postToWebhook(payload, errorLabel = "Gagal ngirim notif ke Discor
         continue;
       }
 
-      console.error(errorLabel, `Discord webhook balikin status ${response.status}`);
-      return false;
+      return response;
     } catch (error) {
       console.error(errorLabel, error.message);
-      return false;
+      return null;
     }
   }
 
   // Gak akan kesampe beneran - loop di atas selalu return sebelum abis
-  // (percobaan terakhir yang masih 429 jatuh ke return false di dalam
+  // (percobaan terakhir yang masih 429 jatuh ke return response di dalam
   // loop). Dibiarin di sini murni jaga-jaga/menuhin "function harus balikin
   // sesuatu", bukan jalur yang dianggap bisa kejalanin.
+  return null;
+}
+
+// webhookUrl (opsional, default DISCORD_WEBHOOK_URL/channel gabungan) - buat
+// fitur channel khusus per-member (lihat storage/channelRouting.js), yang
+// butuh kirim payload yang SAMA ke webhook LAIN (channel spesifik member
+// itu). Sengaja jadi parameter tambahan doang (bukan ubah signature yang
+// udah ada) - semua pemanggil lama tetep jalan identik tanpa perlu diubah.
+async function postToWebhook(payload, errorLabel = "Gagal ngirim notif ke Discord:", webhookUrl = DISCORD_WEBHOOK_URL) {
+  const body = JSON.stringify(withDefaultMentionGuard(payload));
+  const response = await sendWebhookRequest("POST", webhookUrl, body, errorLabel);
+  if (!response) return false; // exception/network error - sendWebhookRequest udah nyetak errorLabel-nya sendiri
+  if (response.ok) return true;
+
+  console.error(errorLabel, `Discord webhook balikin status ${response.status}`);
   return false;
 }
 
-module.exports = { postToWebhook, withDefaultMentionGuard, MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_WAIT_MS };
+// Bikin pesan BARU lewat webhook DAN balikin ID-nya (beda dari postToWebhook
+// biasa, yang gak pernah butuh tau ID pesan yang ke-post - cuma peduli
+// sukses/gagal doang). Query `?wait=true` (didokumentasiin resmi sama
+// Discord) bikin webhook POST balikin JSON pesan yang beneran ke-post
+// (termasuk `.id`), bukan cuma 204 No Content polos. Dipake
+// notify/dashboard.js pas belum ada dashboard sama sekali (messageId null)
+// ATAU abis dashboard lama ilang (dihapus manual, lihat editWebhookMessage's
+// "gone" case) - balikin null kalau gagal (exception, kena status gagal, ATAU
+// body sukses tapi somehow bukan JSON/gak punya field `id`).
+async function createWebhookMessage(payload, errorLabel, webhookUrl = DISCORD_WEBHOOK_URL) {
+  const body = JSON.stringify(withDefaultMentionGuard(payload));
+  const response = await sendWebhookRequest("POST", `${webhookUrl}?wait=true`, body, errorLabel);
+  if (!response) return null;
+  if (!response.ok) {
+    console.error(errorLabel, `Discord webhook balikin status ${response.status}`);
+    return null;
+  }
+
+  try {
+    const data = await response.json();
+    return data.id || null;
+  } catch (error) {
+    console.error(`${errorLabel} respons sukses tapi body-nya bukan JSON yang kebaca:`, error.message);
+    return null;
+  }
+}
+
+// Edit pesan yang UDAH ADA (dashboard live, notify/dashboard.js). Balikin
+// salah satu dari tiga kemungkinan, BUKAN boolean polos - pemanggil butuh
+// nanganin ketiganya beda-beda:
+// - "ok"     - berhasil diedit.
+// - "gone"   - Discord balikin 404 (pesannya udah gak ada lagi, mis. dihapus
+//              manual dari Discord-nya langsung) - pemanggil harus bikin
+//              pesan BARU (createWebhookMessage), nyoba edit ID yang udah
+//              gak ada lagi bakal 404 selamanya.
+// - "failed" - kegagalan LAIN (network, status gagal selain 404, dll) -
+//              biarin pesan lama apa adanya, coba lagi siklus polling
+//              berikutnya - BUKAN dianggap "gone" (asumsi keliru "gone"
+//              buat kegagalan sesaat bakal bikin dashboard baru dibikin
+//              TERUS-TERUSAN tiap kali kena gangguan jaringan sesaat,
+//              ninggalin banyak pesan lama yang gak pernah kehapus).
+async function editWebhookMessage(messageId, payload, errorLabel, webhookUrl = DISCORD_WEBHOOK_URL) {
+  const body = JSON.stringify(withDefaultMentionGuard(payload));
+  const response = await sendWebhookRequest("PATCH", `${webhookUrl}/messages/${messageId}`, body, errorLabel);
+  if (!response) return "failed";
+  if (response.ok) return "ok";
+  if (response.status === 404) return "gone";
+
+  console.error(errorLabel, `Discord webhook balikin status ${response.status}`);
+  return "failed";
+}
+
+module.exports = {
+  postToWebhook,
+  createWebhookMessage,
+  editWebhookMessage,
+  withDefaultMentionGuard,
+  MAX_RATE_LIMIT_RETRIES,
+  MAX_RATE_LIMIT_WAIT_MS,
+};

@@ -2,7 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { postToWebhook, withDefaultMentionGuard, MAX_RATE_LIMIT_RETRIES } = require("../src/notify/webhook");
+const { postToWebhook, createWebhookMessage, editWebhookMessage, withDefaultMentionGuard, MAX_RATE_LIMIT_RETRIES } = require("../src/notify/webhook");
 
 test("withDefaultMentionGuard - default matiin SEMUA mention implisit kalau payload gak nyetel sendiri", () => {
   const guarded = withDefaultMentionGuard({ content: "halo @everyone" });
@@ -173,5 +173,136 @@ test("postToWebhook - 429 dengan body respons YANG RUSAK (bukan JSON valid) tete
   } finally {
     global.fetch = originalFetch;
     global.setTimeout = originalSetTimeout;
+  }
+});
+
+// ==== Saran fitur ke-7 (§10's kelimapuluh+item): dashboard live - butuh
+// createWebhookMessage (bikin + balikin ID) dan editWebhookMessage (edit
+// pesan yang udah ada, bedain "gone" 404 dari kegagalan lain) ====
+
+test("createWebhookMessage - sukses -> balikin ID pesan dari body respons, dan manggil dengan '?wait=true'", async () => {
+  const original = global.fetch;
+  let calledUrl = null;
+  global.fetch = async (url) => {
+    calledUrl = url;
+    return { ok: true, json: async () => ({ id: "msg-123" }) };
+  };
+  try {
+    const id = await createWebhookMessage({ content: "x" }, "label", "https://discord.com/api/webhooks/1/tok");
+    assert.equal(id, "msg-123");
+    assert.equal(calledUrl, "https://discord.com/api/webhooks/1/tok?wait=true");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("createWebhookMessage - status gagal (bukan 429) -> null, gak nyoba parse body", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) });
+  try {
+    const id = await createWebhookMessage({ content: "x" }, "label");
+    assert.equal(id, null);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("createWebhookMessage - respons sukses tapi body BUKAN JSON valid -> null, gak throw", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => {
+      throw new Error("bukan JSON");
+    },
+  });
+  try {
+    const id = await createWebhookMessage({ content: "x" }, "label");
+    assert.equal(id, null);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("createWebhookMessage - respons sukses tapi body gak punya field 'id' -> null", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({}) });
+  try {
+    const id = await createWebhookMessage({ content: "x" }, "label");
+    assert.equal(id, null);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("editWebhookMessage - sukses -> 'ok', PATCH ke URL .../messages/<id>", async () => {
+  const original = global.fetch;
+  let calledUrl = null;
+  let calledMethod = null;
+  global.fetch = async (url, options) => {
+    calledUrl = url;
+    calledMethod = options.method;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const result = await editWebhookMessage("msg-999", { content: "x" }, "label", "https://discord.com/api/webhooks/1/tok");
+    assert.equal(result, "ok");
+    assert.equal(calledMethod, "PATCH");
+    assert.equal(calledUrl, "https://discord.com/api/webhooks/1/tok/messages/msg-999");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("editWebhookMessage - 404 -> 'gone' (pesannya udah gak ada), BUKAN dianggap 'failed' biasa", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: false, status: 404, json: async () => ({}) });
+  try {
+    const result = await editWebhookMessage("msg-udah-ilang", { content: "x" }, "label");
+    assert.equal(result, "gone");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("editWebhookMessage - status gagal LAIN (bukan 404/429) -> 'failed'", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) });
+  try {
+    const result = await editWebhookMessage("msg-1", { content: "x" }, "label");
+    assert.equal(result, "failed");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("editWebhookMessage - network error (fetch throw) -> 'failed', gak nge-crash", async () => {
+  const original = global.fetch;
+  global.fetch = async () => {
+    throw new Error("network down (simulasi)");
+  };
+  try {
+    const result = await editWebhookMessage("msg-1", { content: "x" }, "label");
+    assert.equal(result, "failed");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("editWebhookMessage - kena 429 sekali lalu sukses -> retry otomatis, akhirnya 'ok'", async () => {
+  const original = global.fetch;
+  let callCount = 0;
+  global.fetch = async () => {
+    callCount++;
+    if (callCount === 1) {
+      return { ok: false, status: 429, json: async () => ({ retry_after: 0.01 }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const result = await editWebhookMessage("msg-1", { content: "x" }, "label");
+    assert.equal(result, "ok");
+    assert.equal(callCount, 2);
+  } finally {
+    global.fetch = original;
   }
 });

@@ -6,6 +6,7 @@ const { recordLiveCompleted } = require("./storage/liveCount");
 const { getPriorityConfig } = require("./priority");
 const { sendDiscordNotif } = require("./notify/liveNotify");
 const { maybePartyModeAlert, maybeAlertEndingSoon, maybeSendHeadsUpAlerts } = require("./notify/priorityDm");
+const { maybeUpdateDashboard } = require("./notify/dashboard");
 const {
   maybeAlertViewerMilestone,
   maybeAnnounceNewRecord,
@@ -174,6 +175,11 @@ async function checkLiveMembers() {
     await maybeSendScheduleDigest();
     await maybeSendHeadsUpAlerts();
     await maybeSendPublicHeadsUpAlerts();
+    // Dashboard live (§10's kelimapuluh+item, saran fitur ke-7) - dipanggil
+    // PALING TERAKHIR, setelah dua loop di atas (member baru mulai live/udah
+    // selesai) beres semua buat siklus ini, biar roster yang direnderin
+    // reflect state FINAL siklus ini, bukan state di tengah-tengah proses.
+    await maybeUpdateDashboard();
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);
   }
