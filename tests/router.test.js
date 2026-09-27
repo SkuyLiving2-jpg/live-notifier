@@ -280,6 +280,28 @@ test("siapa yang live (tanpa 'paling sering') - TETAP dispatch ke replyListLive 
   assert.match(reply, /ini yang lagi live \(urut dari paling lama\)|Cok, lagi nggak ada member JKT48 yang live nih/);
 });
 
+// Saran fitur ke-2 (§10's kelimapuluh item): "siapa yang paling lama gak
+// live" - kebalikan leaderboard di atas. Dicek DULUAN sebelum check "paling
+// lama live" (replyLongestLive) - dua-duanya sama-sama ngandung frasa
+// "paling lama", jadi harus dipastiin yang lebih spesifik ini menang, BUKAN
+// malah nyasar ke durasi live TERPANJANG.
+test("siapa yang paling lama gak live - dispatch ke replyLongestNotLiveLeaderboard, BUKAN replyLongestLive (durasi live terpanjang)", async () => {
+  for (const text of ["cok siapa yang paling lama gak live", "cok siapa yang paling jarang live"]) {
+    const reply = await buildChatReply(text);
+    assert.match(reply, /Paling lama gak live|belum ada catatan live sama sekali/, text);
+    assert.doesNotMatch(reply, /^Paling lama live /, text);
+  }
+});
+
+// Regresi yang DIJAGA lewat gerbang "siapa" wajib: kalimat wajar yang nanya
+// SATU member spesifik ("nala kok lama gak live") kebetulan juga ngandung
+// "live"+"gak"+"lama" - TANPA gerbang "siapa" ini bakal kebajak jadi
+// leaderboard, padahal maksudnya nanya member itu doang.
+test("'<nama member> kok lama gak live' (tanpa 'siapa') TETAP dijawab soal member itu, BUKAN kebajak jadi leaderboard", async () => {
+  const reply = await buildChatReply("cok nala kok lama gak live");
+  assert.doesNotMatch(textOf(reply), /Paling lama gak live/);
+});
+
 // Beda dari "cok rekap" polos (replyTodayRecapSoFar) - replyRecapRange gak
 // nyentuh network (gak ada lookup arsip eksternal), jadi aman dites
 // langsung, dan penting buat mastiin urutan regex-nya bener: "rekap minggu

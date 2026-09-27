@@ -21,7 +21,13 @@ const {
   SESSION_RETENTION_DAYS,
 } = require("../storage/dailyLog");
 const { findDurationHistoryByNameFragment, loadDurationHistory, getAverageDuration, getPreviousMaxDuration } = require("../storage/durationHistory");
-const { loadLiveCount, findLiveCountByNameFragment, searchLiveCountByNameFragment, getLiveCountLeaderboard } = require("../storage/liveCount");
+const {
+  loadLiveCount,
+  findLiveCountByNameFragment,
+  searchLiveCountByNameFragment,
+  getLiveCountLeaderboard,
+  getLongestNotLiveLeaderboard,
+} = require("../storage/liveCount");
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
@@ -254,6 +260,7 @@ function replyHelp() {
     '- "cok stats <nama member>" - statistik durasi live-nya',
     '- "cok berapa kali <nama member> live" - total berapa kali dia udah live semenjak bot ini jalan',
     '- "cok siapa yang paling sering live" - leaderboard total live count semua member',
+    '- "cok siapa yang paling lama gak live" / "cok siapa yang paling jarang live" - kebalikannya, member yang UDAH LAMA gak keliatan (yang lagi live sekarang dikecualiin)',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok bandingin <nama member> dan/& <nama member>" (atau cukup "cok <nama> dan <nama>" / "cok <nama> & <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat dicariin lewat dropdown',
@@ -1669,6 +1676,23 @@ function replyLiveCountLeaderboard() {
   return `📊 Paling sering live semenjak bot ini jalan:\n${lines.join("\n")}`;
 }
 
+// Kebalikan dari replyLiveCountLeaderboard - "siapa yang paling LAMA GAK
+// live" (saran fitur ke-2, §10's kelimapuluh item). Member yang LAGI live
+// SEKARANG sengaja dikeluarin dari daftar ini (dicek lewat activeLives,
+// bukan storage/liveCount.js's getLongestNotLiveLeaderboard - modul storage
+// gak saling require, lihat komennya di sana) - aneh kalau ada yang lagi
+// live detik ini tapi disebut "udah lama gak live" cuma gara-gara gap
+// historisnya kebetulan lebar. Dibatesin 10 kayak leaderboard yang sebelahnya.
+function replyLongestNotLiveLeaderboard() {
+  const ranked = getLongestNotLiveLeaderboard()
+    .filter((entry) => !activeLives.has(entry.username))
+    .slice(0, 10);
+  if (ranked.length === 0) return "Cok, belum ada catatan live sama sekali semenjak bot ini jalan.";
+
+  const lines = ranked.map((entry, i) => `${i + 1}. **${entry.name}** - terakhir live ${formatRelativeTime(new Date(entry.lastLiveAt))}`);
+  return `😴 Paling lama gak live (dari yang lagi enggak live sekarang):\n${lines.join("\n")}`;
+}
+
 // Fitur "Q2" ke-4, owner minta ("cok bandingin <A> vs <B>") - resolusi
 // member LEWAT findLiveCountByNameFragment (bukan findMemberByNameFragment's
 // activeLives, yang cuma kena buat yang LAGI live sekarang) soalnya
@@ -1964,6 +1988,7 @@ module.exports = {
   replyMemberStats,
   replyLiveCount,
   replyLiveCountLeaderboard,
+  replyLongestNotLiveLeaderboard,
   replySchedulePattern,
   formatGifterSnapshotReply,
   replyGifterSnapshot,

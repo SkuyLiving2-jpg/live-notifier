@@ -14,7 +14,7 @@ const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
 const { saveDurationHistory } = require("../src/storage/durationHistory");
-const { recordLiveCompleted } = require("../src/storage/liveCount");
+const { recordLiveCompleted, loadLiveCount, saveLiveCount } = require("../src/storage/liveCount");
 const {
   buildRecapTablePage,
   buildRecapPageBlock,
@@ -23,6 +23,7 @@ const {
   replyMemberStats,
   replyLiveCount,
   replyLiveCountLeaderboard,
+  replyLongestNotLiveLeaderboard,
   replyCompareMembers,
   replyCompareMembersByUsername,
   describeMissingMember,
@@ -336,6 +337,34 @@ test("replyLiveCountLeaderboard - diurutin dari yang paling sering live, format 
   assert.ok(posA < posB, "yang count-nya lebih banyak (5x) harus muncul LEBIH DULU dari yang lebih sedikit (3x)");
   assert.match(reply, /LeaderboardTestA\*\* - 5x live/);
   assert.match(reply, /LeaderboardTestB\*\* - 3x live/);
+});
+
+// Saran fitur ke-2 (§10's kelimapuluh item): kebalikan leaderboard di atas -
+// "siapa yang paling lama gak live". lastLiveAt di-set manual lewat
+// saveLiveCount (bukan recordLiveCompleted, yang pakai Date.now() beneran -
+// dua panggilan balik-balikan bisa aja kebetulan sama persis ke milidetik)
+// biar urutannya deterministik buat dites.
+test("replyLongestNotLiveLeaderboard - diurutin dari yang PALING LAMA gak live, dan yang lagi live SEKARANG dikecualiin", () => {
+  const data = loadLiveCount();
+  data.jkt48_lamabgt = { name: "Lamabgt", count: 4, firstLiveAt: "2026-01-01T00:00:00.000Z", lastLiveAt: "2026-01-01T00:00:00.000Z" };
+  data.jkt48_barubgt = { name: "Barubgt", count: 2, firstLiveAt: "2026-01-01T00:00:00.000Z", lastLiveAt: "2026-09-26T00:00:00.000Z" };
+  // Lagi LIVE SEKARANG (activeLives) walau lastLiveAt-nya paling lama di
+  // catatan - HARUS gak ikut disebut "paling lama gak live" (dia jelas lagi
+  // live detik ini).
+  data.jkt48_tapilagilive = { name: "Tapilagilive", count: 1, firstLiveAt: "2020-01-01T00:00:00.000Z", lastLiveAt: "2020-01-01T00:00:00.000Z" };
+  saveLiveCount(data);
+  activeLives.set("jkt48_tapilagilive", { name: "Tapilagilive", username: "jkt48_tapilagilive", slug: "s", liveAt: new Date().toISOString() });
+
+  try {
+    const reply = replyLongestNotLiveLeaderboard();
+    const posLama = reply.indexOf("Lamabgt");
+    const posBaru = reply.indexOf("Barubgt");
+    assert.ok(posLama !== -1 && posBaru !== -1);
+    assert.ok(posLama < posBaru, "yang lastLiveAt-nya paling lama (Januari) harus muncul LEBIH DULU dari yang lebih baru (September)");
+    assert.doesNotMatch(reply, /Tapilagilive/, "member yang lagi LIVE SEKARANG gak boleh disebut 'paling lama gak live'");
+  } finally {
+    activeLives.delete("jkt48_tapilagilive");
+  }
 });
 
 // ==== §10's forty-second/forty-sixth item: "cok bandingin <A> dan <B>" ====

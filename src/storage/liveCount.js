@@ -114,6 +114,22 @@ function searchLiveCountByNameFragment(fragment) {
   return results.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Kebalikan dari getLiveCountLeaderboard - bukan "paling SERING", tapi
+// "paling LAMA GAK live" (fitur ke-2 dari daftar saran, §10's kelimapuluh
+// item), diurutin `lastLiveAt` NAIK (paling lama duluan). Balikin SEMUA
+// entry (gak dibatesin `limit` di sini) - filter "yang lagi live sekarang
+// dikeluarin dulu" itu butuh activeLives.js, dan storage/ modules sengaja
+// gak saling require satu sama lain (lihat komen di schedulePattern.js soal
+// alasan yang sama) - jadi filter + pembatesan jumlah itu tanggung jawab
+// pemanggil (chat/replies.js's replyLongestNotLiveLeaderboard), sama pola
+// pembagian tanggung jawabnya kayak getSessionsForRange yang gabungin
+// beberapa sumber storage di layer chat, bukan di layer storage.
+function getLongestNotLiveLeaderboard() {
+  return Object.entries(loadLiveCount())
+    .map(([username, entry]) => ({ username, name: entry.name, count: entry.count, lastLiveAt: entry.lastLiveAt }))
+    .sort((a, b) => new Date(a.lastLiveAt).getTime() - new Date(b.lastLiveAt).getTime());
+}
+
 module.exports = {
   loadLiveCount,
   saveLiveCount,
@@ -122,4 +138,5 @@ module.exports = {
   findLiveCountByNameFragment,
   searchLiveCountByNameFragment,
   getLiveCountLeaderboard,
+  getLongestNotLiveLeaderboard,
 };

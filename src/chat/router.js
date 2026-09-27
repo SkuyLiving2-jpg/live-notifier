@@ -28,6 +28,7 @@ const {
   replyMemberStats,
   replyLiveCount,
   replyLiveCountLeaderboard,
+  replyLongestNotLiveLeaderboard,
   replySchedulePattern,
   replyGifterSnapshot,
   replyTodayRecapSoFar,
@@ -346,6 +347,27 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   if (asksTopViewers) {
     const range = resolveStatRangeFromText(text);
     return range ? replyTopViewersForRange(range.rangeDays, range.label) : replyTopViewers();
+  }
+
+  // Saran fitur ke-2 (§10's kelimapuluh item): "siapa yang paling lama gak
+  // live" - kebalikan dari leaderboard "paling sering live" di bawah. Dicek
+  // DULUAN, SEBELUM check "paling lama live" tepat di bawah ini - keduanya
+  // sama-sama ngandung frasa "paling lama" ("paling lama gak live" vs
+  // "paling lama live"), jadi yang lebih spesifik (butuh "siapa" + kata
+  // negasi eksplisit) harus menang duluan, kalau nggak "siapa yang paling
+  // lama gak live" bakal kesasar ke replyLongestLive (durasi SATU sesi live
+  // terpanjang, bukan leaderboard "udah berapa lama gak pernah live").
+  // "siapa" WAJIB ada di sini (beda dari check-check leaderboard/durasi lain
+  // yang gak mensyaratkan itu) - tanpa gerbang ini, kalimat wajar kayak
+  // "cok nala kok lama gak live" (nanya SATU member spesifik, bukan minta
+  // leaderboard) bakal ikut kebajak juga.
+  const notLiveNegationWords = ["gak", "nggak", "enggak", "tidak", "belum"];
+  const asksLongestNotLive =
+    containsWholeWord(text, "siapa") &&
+    containsWholeWord(text, "live") &&
+    (containsWholeWord(text, "jarang") || (containsWholeWord(text, "lama") && notLiveNegationWords.some((w) => containsWholeWord(text, w))));
+  if (asksLongestNotLive) {
+    return replyLongestNotLiveLeaderboard();
   }
 
   if (containsWholeWord(text, "live") && (containsWholeWord(text, "paling lama") || containsWholeWord(text, "udah lama"))) {

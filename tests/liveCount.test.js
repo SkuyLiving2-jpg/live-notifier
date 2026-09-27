@@ -148,3 +148,27 @@ test("searchLiveCountByNameFragment - fragment kosong/gak ketemu -> array kosong
   assert.deepEqual(searchLiveCountByNameFragment(""), []);
   assert.deepEqual(searchLiveCountByNameFragment("member-yang-gak-ada"), []);
 });
+
+// Saran fitur ke-2 (§10's kelimapuluh item): "siapa yang paling lama gak
+// live" - kebalikan getLiveCountLeaderboard. saveLiveCount dipake langsung
+// (bukan recordLiveCompleted) biar lastLiveAt-nya BENERAN kekontrol manual -
+// recordLiveCompleted pake Date.now() beneran, dua panggilan balik-balikan
+// bisa aja kebetulan sama persis ke milidetik kalau mesinnya kenceng, bikin
+// urutan hasil sortir jadi gak deterministik buat dites.
+test("getLongestNotLiveLeaderboard - diurutin lastLiveAt NAIK (paling lama duluan), kosong kalau belum ada data", () => {
+  const { saveLiveCount, getLongestNotLiveLeaderboard } = freshLiveCount();
+
+  assert.deepEqual(getLongestNotLiveLeaderboard(), []);
+
+  saveLiveCount({
+    jkt48_nala: { name: "Nala", count: 5, firstLiveAt: "2026-01-01T00:00:00.000Z", lastLiveAt: "2026-09-20T00:00:00.000Z" },
+    jkt48_levi: { name: "Levi", count: 3, firstLiveAt: "2026-01-01T00:00:00.000Z", lastLiveAt: "2026-08-01T00:00:00.000Z" },
+    jkt48_lily: { name: "Lily", count: 2, firstLiveAt: "2026-01-01T00:00:00.000Z", lastLiveAt: "2026-09-25T00:00:00.000Z" },
+  });
+
+  const ranked = getLongestNotLiveLeaderboard();
+  assert.deepEqual(
+    ranked.map((e) => e.username),
+    ["jkt48_levi", "jkt48_nala", "jkt48_lily"], // Levi paling lama gak live (Agustus), Lily paling baru (25 Sept)
+  );
+});
