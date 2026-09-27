@@ -114,7 +114,14 @@ async function resolveBareMenuChoice(choice, channelId, authorId) {
     case "7":
       return replyMySubscriptions(authorId);
     case "8":
-      return await replyTodayRecapSoFar(channelId, authorId);
+      // BUG YANG DILAPORIN OWNER: tabel yang keluar dari opsi ini gak punya
+      // jalan balik ke menu 9-opsi ini sendiri - "fallback" (dibaca
+      // replies.js's buildRecapNavComponents/buildBackRow) nempelin tombol
+      // "🔙 Kembali ke menu" yang balik ke replyFallbackMenu() persis di
+      // sini. Berlaku baik diklik lewat tombol MAUPUN diketik lewat shortcut
+      // angka "8" abis menu ini ditampilin (chat/pendingState.js) - dua-duanya
+      // manggil resolveBareMenuChoice yang sama ini.
+      return await replyTodayRecapSoFar(channelId, authorId, "fallback");
     default:
       return null;
   }

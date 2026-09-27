@@ -545,9 +545,15 @@ function wireDiscordEvents(client) {
         await handleRecapJumpModalSubmit(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("recap_menu:")) {
         await handleRecapMenuButton(interaction);
-      } else if (interaction.isStringSelectMenu() && interaction.customId === "recap_date_select") {
+      } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("recap_date_select")) {
+        // startsWith (bukan === persis) - BUG YANG DILAPORIN OWNER (tombol
+        // "🔙 Kembali", lihat komen di replies.js's buildBackRow/withOrigin):
+        // customId dropdown ini sekarang bisa bawa origin tambahan
+        // ("recap_date_select:recapmenu"), bukan cuma "recap_date_select"
+        // polos - persis pola yang customId "recap_nav:"/"fallback_menu:"
+        // dkk di atas udah pakai dari dulu.
         await handleRecapDateSelect(interaction);
-      } else if (interaction.isStringSelectMenu() && interaction.customId === "recap_month_select") {
+      } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("recap_month_select")) {
         await handleRecapMonthSelect(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("watch_confirm:")) {
         await handleWatchConfirmButton(interaction);

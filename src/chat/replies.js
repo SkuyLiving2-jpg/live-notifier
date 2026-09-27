@@ -663,7 +663,7 @@ const RECAP_DATE_OPTIONS_COUNT = 25;
 // ini" yang nempel sama sekali - jadi hari ini beneran gak bisa dipilih dari
 // dropdown ini lewat jalur itu, cuma "ilang" tanpa penjelasan. Sekarang
 // mulai dari i=0 (HARI INI ikut jadi salah satu opsi).
-function buildRecapDateSelectRow(selectedDate = null) {
+function buildRecapDateSelectRow(selectedDate = null, origin = "") {
   const todayStartMs = new Date(`${getTodayWIB()}T00:00:00+07:00`).getTime();
   const earliestDate = getEarliestSessionDate(); // null kalau arsipnya masih kosong sama sekali - gak ada batas tambahan buat kasus itu
   const options = [];
@@ -673,7 +673,10 @@ function buildRecapDateSelectRow(selectedDate = null) {
     if (earliestDate && value < earliestDate) break; // mundur lebih jauh dari sesi paling tua yang ada - stop, gak ada gunanya nawarin tanggal yang pasti kosong
     options.push({ label: formatLongDateWIB(d), value, default: value === selectedDate });
   }
-  const selectMenu = new StringSelectMenuBuilder().setCustomId("recap_date_select").setPlaceholder("Pilih tanggal buat rekap").addOptions(options);
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(withOrigin("recap_date_select", origin))
+    .setPlaceholder("Pilih tanggal buat rekap")
+    .addOptions(options);
   return new ActionRowBuilder().addComponents(selectMenu);
 }
 
@@ -731,13 +734,13 @@ function parseDateRangeValue(rangeValue) {
   return { date: rangeValue.slice(0, hashIndex), weekdayIndex: Number(rangeValue.slice(hashIndex + 1)) };
 }
 
-function buildWeekdayDateSelectRow(weekdayIndex, selectedRangeValue = null) {
+function buildWeekdayDateSelectRow(weekdayIndex, selectedRangeValue = null, origin = "") {
   const options = findRecentDatesForWeekday(weekdayIndex).map((d) => {
     const value = encodeWeekdayTaggedDate(getDateWIB(d), weekdayIndex);
     return { label: formatLongDateWIB(d), value, default: value === selectedRangeValue };
   });
   const selectMenu = new StringSelectMenuBuilder()
-    .setCustomId("recap_date_select")
+    .setCustomId(withOrigin("recap_date_select", origin))
     .setPlaceholder(`Pilih tanggal hari ${WEEKDAY_NAMES_ID[weekdayIndex]}`)
     .addOptions(options);
   return new ActionRowBuilder().addComponents(selectMenu);
@@ -747,15 +750,63 @@ function buildWeekdayDateSelectRow(weekdayIndex, selectedRangeValue = null) {
 // baris navigasi tabel rekap PER BULAN (buildRecapNavComponents, biar bisa
 // ganti bulan tanpa nutup dulu, sama pola-nya kayak buildRecapDateSelectRow
 // buat tanggal).
-function buildRecapMonthSelectRow(months, selectedMonth = null) {
+function buildRecapMonthSelectRow(months, selectedMonth = null, origin = "") {
   const options = months.map((m) => ({ label: formatMonthLabel(m), value: m, default: m === selectedMonth }));
-  const selectMenu = new StringSelectMenuBuilder().setCustomId("recap_month_select").setPlaceholder("Pilih bulan buat rekap").addOptions(options);
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(withOrigin("recap_month_select", origin))
+    .setPlaceholder("Pilih bulan buat rekap")
+    .addOptions(options);
   return new ActionRowBuilder().addComponents(selectMenu);
 }
 
 function buildCloseOnlyRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger),
+  );
+}
+
+// BUG YANG DILAPORIN OWNER: tabel rekap yang dibuka dari menu 9-opsi
+// fallback-nya "Rekap hari ini" (opsi 8), ATAU dari salah satu tombol menu
+// 5-opsi rekap (replyRecapMenu), gak punya jalan balik ke menu asalnya sama
+// sekali - cuma Maju/Mundur/Tutup/Cari member/Lompat halaman, jadi user
+// kepaksa nutup dulu terus manggil ulang "cok bantuan"/"cok rekap" dari nol
+// kalau mau pilih opsi LAIN. `origin` (di bawah dan di seluruh
+// buildRecapNavComponents/buildRecapPageBlock dst) nandain DARI MANA sebuah
+// tabel/dropdown rekap dibuka:
+//   - ""          (default/kosong) - ngetik langsung ("cok rekap ..."),
+//                 TIDAK dikasih tombol balik (gak ada menu buat dibalikin
+//                 ke situ) - SAMA PERSIS perilaku sebelum fitur ini ada,
+//                 biar semua test/kebiasaan lama gak kesentuh sedikit pun.
+//   - "fallback"  - dibuka dari menu 9-opsi (menu.js's replyFallbackMenu).
+//   - "recapmenu" - dibuka dari menu 5-opsi rekap (replyRecapMenu di bawah).
+// Origin ini HARUS ikut "nempel" di customId tombol Maju/Mundur/Lompat
+// halaman dan customId dropdown tanggal/bulan (persis kayak `rangeDays`/
+// `page` yang udah lebih dulu nempel di situ - lihat komen di
+// buildRecapNavComponents) - kalau enggak, tombol "🔙 Kembali" bakal ilang
+// lagi begitu user maju/mundur halaman atau ganti tanggal/bulan sekali aja.
+function withOrigin(base, origin) {
+  return origin ? `${base}:${origin}` : base;
+}
+
+// Kebalikan dari withOrigin - buat customId FIXED (bukan yang udah bawa
+// range/page sendiri kayak "recap_nav:..."), origin-nya nempel PERSIS di
+// index tetap (mis. "recap_date_select:recapmenu" -> index 1). Dropdown
+// yang gak dikasih origin balik "" (bukan undefined) - `if (origin)`/
+// `withOrigin` di pemanggil nanganin string kosong itu sebagai "gak ada
+// tombol kembali", identik kayak sebelum fitur ini ada.
+function originFromCustomId(customId, index) {
+  return customId.split(":")[index] || "";
+}
+
+// Baris tombol "🔙 Kembali ke ..." - CUMA muncul kalau origin-nya keisi
+// (tabel/dropdown ini beneran dibuka dari salah satu menu tombol). "backto"
+// (dibaca handleRecapNavButton) sengaja gak butuh bawa rangeDays/halaman
+// sama sekali di customId-nya - balik ke menu itu gak butuh tau lagi tabel
+// yang lagi ditampilin isinya apa.
+function buildBackRow(origin) {
+  const label = origin === "fallback" ? "🔙 Kembali ke menu" : "🔙 Kembali ke menu rekap";
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`recap_nav:backto:${origin}`).setLabel(label).setStyle(ButtonStyle.Secondary),
   );
 }
 
@@ -787,16 +838,26 @@ function buildCloseOnlyRow() {
 // biasanya jauh lebih pendek (1 hari doang), jarang butuh lompat jauh.
 // Dibatesin ke totalPages > 1 doang (nggak ada gunanya nawarin "lompat
 // halaman" kalau cuma ada 1 halaman buat dilompatin).
-function buildRecapNavComponents(page, totalPages, rangeDays) {
+function buildRecapNavComponents(page, totalPages, rangeDays, origin = "") {
   const range = encodeRecapRange(rangeDays);
   const memberRange = isMemberRange(rangeDays);
   const isMonthRange = typeof rangeDays === "string" && !memberRange && rangeDays.length === 7;
   const buttons = [];
   if (page < totalPages - 1) {
-    buttons.push(new ButtonBuilder().setCustomId(`recap_nav:next:${range}:${page}`).setLabel("Maju ▶").setStyle(ButtonStyle.Primary));
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(withOrigin(`recap_nav:next:${range}:${page}`, origin))
+        .setLabel("Maju ▶")
+        .setStyle(ButtonStyle.Primary),
+    );
   }
   if (page > 0) {
-    buttons.push(new ButtonBuilder().setCustomId(`recap_nav:prev:${range}:${page}`).setLabel("◀ Mundur").setStyle(ButtonStyle.Secondary));
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(withOrigin(`recap_nav:prev:${range}:${page}`, origin))
+        .setLabel("◀ Mundur")
+        .setStyle(ButtonStyle.Secondary),
+    );
   }
   buttons.push(new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger));
   // Rekap PER MEMBER (§10's forty-eighth item) cuma isinya satu orang, jadi
@@ -805,13 +866,18 @@ function buildRecapNavComponents(page, totalPages, rangeDays) {
     buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
   }
   if ((typeof rangeDays === "number" || isMonthRange || memberRange) && totalPages > 1) {
-    buttons.push(new ButtonBuilder().setCustomId(`recap_nav:jump:${range}:${page}`).setLabel("🔢 Lompat halaman").setStyle(ButtonStyle.Secondary));
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(withOrigin(`recap_nav:jump:${range}:${page}`, origin))
+        .setLabel("🔢 Lompat halaman")
+        .setStyle(ButtonStyle.Secondary),
+    );
   }
 
   const rows = [];
   if (typeof rangeDays === "string" && !memberRange) {
     if (isMonthRange) {
-      rows.push(buildRecapMonthSelectRow(getAvailableRecapMonths(), rangeDays));
+      rows.push(buildRecapMonthSelectRow(getAvailableRecapMonths(), rangeDays, origin));
     } else {
       // Tanggal yang di-TAG weekday-nya (dipilih lewat dropdown "cok rekap
       // senin" dkk, lihat komen di buildWeekdayDateSelectRow) harus TETEP
@@ -820,22 +886,33 @@ function buildRecapNavComponents(page, totalPages, rangeDays) {
       // dropdown-nya nunjukkin semua hari lagi begitu tabelnya nge-render,
       // padahal user udah eksplisit milih dari dropdown yang di-filter.
       const { date, weekdayIndex } = parseDateRangeValue(rangeDays);
-      rows.push(weekdayIndex !== null ? buildWeekdayDateSelectRow(weekdayIndex, rangeDays) : buildRecapDateSelectRow(date));
+      rows.push(weekdayIndex !== null ? buildWeekdayDateSelectRow(weekdayIndex, rangeDays, origin) : buildRecapDateSelectRow(date, origin));
     }
   }
   rows.push(new ActionRowBuilder().addComponents(buttons));
+  // BUG YANG DILAPORIN OWNER (lihat komen panjang di buildBackRow) - baris
+  // "🔙 Kembali" TERPISAH (bukan numpang di baris tombol Maju/Mundur/dst di
+  // atas) soalnya baris itu udah bisa nyampe 5 tombol (limit Discord per
+  // baris) dengan sendirinya (Maju+Mundur+Tutup+Cari member+Lompat halaman).
+  if (origin) rows.push(buildBackRow(origin));
   return rows;
 }
 
-function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = null) {
+function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = null, origin = "") {
   const result = buildRecapTablePage(sessions, page);
   const footer = `_(Halaman ${result.page + 1}/${result.totalPages})_`;
 
   if (result.totalPages > 1 && channelId && authorId) {
-    pendingRecapPage.set(`${channelId}:${authorId}`, { currentPage: result.page, totalPages: result.totalPages, at: Date.now(), rangeDays });
+    pendingRecapPage.set(`${channelId}:${authorId}`, {
+      currentPage: result.page,
+      totalPages: result.totalPages,
+      at: Date.now(),
+      rangeDays,
+      origin,
+    });
   }
 
-  return { content: `${result.text}\n${footer}`, components: buildRecapNavComponents(result.page, result.totalPages, rangeDays) };
+  return { content: `${result.text}\n${footer}`, components: buildRecapNavComponents(result.page, result.totalPages, rangeDays, origin) };
 }
 
 // Dicek di awal chat/router.js's buildChatReply (sama pola kayak
@@ -875,7 +952,7 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
 
   const targetPage = isNext ? pending.currentPage + 1 : pending.currentPage - 1;
   const sessions = getSessionsForRange(pending.rangeDays);
-  return buildRecapPageBlock(sessions, targetPage, channelId, authorId, pending.rangeDays);
+  return buildRecapPageBlock(sessions, targetPage, channelId, authorId, pending.rangeDays, pending.origin);
 }
 
 // Diklik dari salah satu tombol buildRecapNavComponents() bikin (customId
@@ -938,6 +1015,30 @@ async function handleRecapNavButton(interaction) {
     return;
   }
 
+  // Tombol "🔙 Kembali ke ..." (buildBackRow) - BUG YANG DILAPORIN OWNER,
+  // lihat komen panjangnya di buildBackRow/withOrigin. customId-nya
+  // "recap_nav:backto:<origin>" - `parts[2]` di sini LANGSUNG origin-nya
+  // sendiri (bukan encoded range kayak action lain), soalnya balik ke menu
+  // asalnya gak butuh tau lagi tabel yang lagi ditampilin isinya apa.
+  // Nge-clear pendingRecapPage juga (sama kayak "close") - abis balik ke
+  // menu, jawaban "y"/"mundur" yang nyasar gak boleh diem-diem nerusin ke
+  // tabel rekap yang udah ditinggalin.
+  if (action === "backto") {
+    const origin = parts[2];
+    pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+    if (origin === "fallback") {
+      // require lazy (bukan di atas file) - chat/menu.js require dari sini
+      // (chat/replies.js) buat reply builder-nya, jadi require balik di sini
+      // di ATAS file bakal circular. Sama pola-nya kayak menu.js's lazy
+      // require("./pendingState") di handleFallbackMenuButton.
+      const { replyFallbackMenu } = require("./menu");
+      await interaction.update(safeReplyOptions(replyFallbackMenu()));
+      return;
+    }
+    await interaction.update(safeReplyOptions(replyRecapMenu()));
+    return;
+  }
+
   const rangeDays = decodeRecapRange(parts[2]);
 
   if (action === "search") {
@@ -960,11 +1061,14 @@ async function handleRecapNavButton(interaction) {
 
   // "🔢 Lompat halaman" (§10's thirty-third item) - customId-nya bawa
   // halaman SEKARANG (parts[3]) buat modal-nya, dipake sebagai fallback kalau
-  // input yang diketik ternyata gak keparse (lihat handleRecapJumpModalSubmit)
-  // biar gagal parse gak numpuk pesan baru ATAU nge-reset ke halaman 1.
+  // input yang diketik ternyata gak keparse (lihat handleRecapJumpModalSubmit).
+  // `origin` (parts[4], opsional - lihat withOrigin) ikut ditempelin ke
+  // customId modal-nya juga, biar tombol "🔙 Kembali" tetep nempel di tabel
+  // hasil lompat halaman, bukan ilang abis dipake sekali.
   if (action === "jump") {
+    const origin = parts[4] || "";
     const modal = new ModalBuilder()
-      .setCustomId(`recap_jump_modal:${parts[2]}:${parts[3]}`)
+      .setCustomId(withOrigin(`recap_jump_modal:${parts[2]}:${parts[3]}`, origin))
       .setTitle("Lompat ke halaman")
       .addComponents(
         new ActionRowBuilder().addComponents(
@@ -985,10 +1089,13 @@ async function handleRecapNavButton(interaction) {
   // sendiri udah nge-clamp target page ke totalPages TERKINI, jadi aman
   // walau datanya berubah (mis. ada live yang baru aja selesai) sejak
   // tombol ini pertama kali ditampilin.
+  const origin = parts[4] || "";
   const sessions = getSessionsForRange(rangeDays);
   const currentPage = Number(parts[3]);
   const targetPage = action === "next" ? currentPage + 1 : currentPage - 1;
-  await interaction.update(safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays)));
+  await interaction.update(
+    safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays, origin)),
+  );
 }
 
 // Balesan buat "cok rekap tanggal" DAN buat tombol "Rekap per tanggal"
@@ -997,8 +1104,10 @@ async function handleRecapNavButton(interaction) {
 // gak didobelin. Belum ada tabel apa-apa di sini (belum ada tanggal
 // kepilih) - cuma dropdown + tombol tutup, tabelnya baru muncul abis milih
 // lewat handleRecapDateSelect.
-function buildRecapDatePickerBlock() {
-  return { content: "Rekap tanggal berapa nih, cok?", components: [buildRecapDateSelectRow(), buildCloseOnlyRow()] };
+function buildRecapDatePickerBlock(origin = "") {
+  const rows = [buildRecapDateSelectRow(null, origin), buildCloseOnlyRow()];
+  if (origin) rows.push(buildBackRow(origin));
+  return { content: "Rekap tanggal berapa nih, cok?", components: rows };
 }
 
 function replyRecapDatePicker() {
@@ -1047,24 +1156,47 @@ async function handleRecapMenuButton(interaction) {
   pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
 
   if (choice === "date") {
-    await interaction.update(safeReplyOptions(buildRecapDatePickerBlock()));
+    // "recapmenu" (bukan gak dikasih origin sama sekali) - BUG YANG
+    // DILAPORIN OWNER, lihat komen panjangnya di buildBackRow/withOrigin:
+    // tabel yang KELUAR abis milih tanggal dari dropdown ini butuh tetep
+    // "inget" dibuka dari menu 5-opsi, biar tombol "🔙 Kembali ke menu
+    // rekap" nempel di situ juga, bukan cuma di tabel today/week/month.
+    await interaction.update(safeReplyOptions(buildRecapDatePickerBlock("recapmenu")));
     return;
   }
 
   // "Rekap member" butuh nama member dulu - modal (input teks), bukan langsung
   // balesan. Submit-nya ditangani handleRecapMemberModalSubmit (ngedit pesan
-  // menu ini jadi tabel rekap member, sama pola in-place-edit tombol lain).
+  // menu ini jadi tabel rekap member, sama pola in-place-edit tombol lain) -
+  // origin-nya (§10's ini, "recapmenu") di-hardcode DI SITU, bukan di sini,
+  // soalnya modal ini SATU-SATUNYA jalan buat munculin tabel rekap member
+  // (gak ada jalur ngetik langsung yang lewat modal ini juga).
   if (choice === "member") {
     await interaction.showModal(buildRecapMemberModal());
     return;
   }
 
+  // BUG YANG DILAPORIN OWNER: tombol menu 5-opsi rekap ("Rekap hari ini"/
+  // "minggu ini"/"bulan ini") nembak tabel yang SEBELUM INI cuma punya
+  // Maju/Mundur/Tutup/Cari member/Lompat halaman - gak ada jalan balik ke
+  // menu 5-opsi ini sendiri. `origin: "recapmenu"` di bawah nandain itu,
+  // lihat buildBackRow/withOrigin buat detail lengkapnya.
   let reply;
-  if (choice === "today") reply = await replyTodayRecapSoFar(interaction.channelId, interaction.user.id);
-  else if (choice === "week") reply = await replyRecapRange(7, "minggu ini", interaction.channelId, interaction.user.id);
-  else if (choice === "month") reply = await replyRecapMonth(getTodayWIB().slice(0, 7), interaction.channelId, interaction.user.id);
+  if (choice === "today") reply = await replyTodayRecapSoFar(interaction.channelId, interaction.user.id, "recapmenu");
+  else if (choice === "week") reply = await replyRecapRange(7, "minggu ini", interaction.channelId, interaction.user.id, "recapmenu");
+  else if (choice === "month") reply = await replyRecapMonth(getTodayWIB().slice(0, 7), interaction.channelId, interaction.user.id, "recapmenu");
   else return;
 
+  // Balesan "belum ada live yang kecatet ..." (0 sesi) balik STRING polos
+  // (gak ada tombol apapun, termasuk balik ke menu) - withRecapMenu nempelin
+  // menu 5-opsi ini lagi di bawahnya, SAMA pola yang chat/menu.js's
+  // handleFallbackMenuButton udah pakai buat kasus serupa (reply string dari
+  // resolveBareMenuChoice), biar user tetep bisa lanjut milih opsi lain
+  // tanpa harus ngetik ulang "cok rekap" dari nol.
+  if (typeof reply === "string") {
+    await interaction.update(safeReplyOptions(withRecapMenu(reply)));
+    return;
+  }
   await interaction.update(safeReplyOptions(reply));
 }
 
@@ -1093,6 +1225,14 @@ async function handleRecapMenuButton(interaction) {
 // nge-parse "2026-09-14#1T00:00:00+07:00" bakal jadi Invalid Date dan bikin
 // Intl.DateTimeFormat.format() THROW).
 async function handleRecapDateSelect(interaction) {
+  // Origin (§10's ini - lihat komen panjang di buildBackRow/withOrigin)
+  // dibawa lewat customId dropdown-nya sendiri ("recap_date_select" polos,
+  // atau "recap_date_select:<origin>") - dropdown yang SAMA ini nempel baik
+  // di picker berdiri sendiri (buildRecapDatePickerBlock) MAUPUN di tabel
+  // yang lagi ditampilin (buildRecapNavComponents), jadi origin-nya harus
+  // dibaca DARI SINI, bukan dari pendingRecapPage (dropdown ini valid
+  // diklik kapan aja, gak bergantung state per-orang yang ada TTL-nya).
+  const origin = originFromCustomId(interaction.customId, 1);
   const selectedRange = interaction.values[0];
   const { date, weekdayIndex } = parseDateRangeValue(selectedRange);
   pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
@@ -1110,17 +1250,19 @@ async function handleRecapDateSelect(interaction) {
     // dipilih datang dari dropdown weekday - begitu tabelnya "kosong",
     // filter weekday-nya ilang. Sekarang nempelin balik dropdown yang SAMA
     // (di-filter ke weekday itu lagi) kalau memang asalnya dari situ.
-    const dateRow = weekdayIndex !== null ? buildWeekdayDateSelectRow(weekdayIndex, selectedRange) : buildRecapDateSelectRow(date);
+    const dateRow = weekdayIndex !== null ? buildWeekdayDateSelectRow(weekdayIndex, selectedRange, origin) : buildRecapDateSelectRow(date, origin);
+    const rows = [dateRow, buildCloseOnlyRow()];
+    if (origin) rows.push(buildBackRow(origin));
     await interaction.update(
       safeReplyOptions({
         content: `Cok, belum ada live yang kecatet tanggal ${label}.`,
-        components: [dateRow, buildCloseOnlyRow()],
+        components: rows,
       }),
     );
     return;
   }
 
-  const block = buildRecapPageBlock(sessions, 0, interaction.channelId, interaction.user.id, selectedRange);
+  const block = buildRecapPageBlock(sessions, 0, interaction.channelId, interaction.user.id, selectedRange, origin);
   await interaction.update(safeReplyOptions({ content: `📋 **Rekap tanggal ${label}**\n${block.content}`, components: block.components }));
 }
 
@@ -1130,9 +1272,10 @@ async function handleRecapDateSelect(interaction) {
 // buildRecapNavComponents) - §10's thirty-sixth item. Sama pola in-place-edit-nya
 // kayak handleRecapDateSelect di atas, cuma granularitasnya bulan.
 async function handleRecapMonthSelect(interaction) {
+  const origin = originFromCustomId(interaction.customId, 1);
   const selectedMonth = interaction.values[0];
   pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
-  const reply = await replyRecapMonth(selectedMonth, interaction.channelId, interaction.user.id);
+  const reply = await replyRecapMonth(selectedMonth, interaction.channelId, interaction.user.id, origin);
   await interaction.update(safeReplyOptions(reply));
 }
 
@@ -1334,7 +1477,7 @@ function withRecapMenu(message) {
 // nama yang gak dikenal bot dicek ke IDN (describeMissingMember) - jadi
 // "belum pernah live" vs "gak ada member itu" dibedain, sama kayak
 // "bandingin". Hasil gagal SELALU balik bawa menu rekap biar bisa coba lagi.
-async function replyRecapMember(fragment, channelId, authorId) {
+async function replyRecapMember(fragment, channelId, authorId, origin = "") {
   pendingRecapPage.delete(`${channelId}:${authorId}`);
   const shown = (fragment || "").trim();
 
@@ -1371,7 +1514,7 @@ async function replyRecapMember(fragment, channelId, authorId) {
   }
   summaryLines.push(`_(Rekap cuma nyimpen sesi ${SESSION_RETENTION_DAYS} hari terakhir.)_`);
 
-  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, rangeDays);
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, rangeDays, origin);
   return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
 }
 
@@ -1408,7 +1551,12 @@ async function replyStreak(fragment) {
 // pesan baru), atau jadi pesan gagal + menu lagi biar bisa coba nama lain.
 async function handleRecapMemberModalSubmit(interaction) {
   const fragment = interaction.fields.getTextInputValue("member_name");
-  const reply = await replyRecapMember(fragment, interaction.channelId, interaction.user.id);
+  // "recapmenu" di-hardcode (bukan dibaca dari customId modalnya) - modal ini
+  // SATU-SATUNYA jalan buat munculin tabel rekap member (gak ada jalur
+  // "ngetik langsung" yang lewat modal ini juga), jadi origin-nya selalu
+  // sama, gak perlu ditempelin ke customId (lihat komen di buildBackRow's
+  // withOrigin buat kenapa origin biasanya HARUS nempel di customId).
+  const reply = await replyRecapMember(fragment, interaction.channelId, interaction.user.id, "recapmenu");
   await interaction.update(safeReplyOptions(reply));
 }
 
@@ -1435,6 +1583,7 @@ async function handleRecapJumpModalSubmit(interaction) {
   const parts = interaction.customId.split(":");
   const rangeDays = decodeRecapRange(parts[1]);
   const currentPage = Number(parts[2]);
+  const origin = parts[3] || "";
   const raw = interaction.fields.getTextInputValue("page_number").trim().toLowerCase();
 
   const sessions = getSessionsForRange(rangeDays);
@@ -1455,7 +1604,7 @@ async function handleRecapJumpModalSubmit(interaction) {
     }
   }
 
-  const block = buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays);
+  const block = buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays, origin);
   await interaction.update(safeReplyOptions({ content: `${block.content}${note}`, components: block.components }));
 }
 
@@ -1465,7 +1614,7 @@ async function handleRecapJumpModalSubmit(interaction) {
 // Async karena nyoba lengkapin data lokal pakai arsip eksternal. Kalau
 // arsipnya gak keambil (network error/dll), fungsi ini tetep balikin rekap
 // versi lokal doang - gak pernah gagal total gara-gara sumber tambahan ini.
-async function replyTodayRecapSoFar(channelId, authorId) {
+async function replyTodayRecapSoFar(channelId, authorId, origin = "") {
   const sessions = getTodaySessionsForRecap();
   const completed = sessions.filter((s) => s.endedAtUnix !== null);
   const ongoingCount = sessions.length - completed.length;
@@ -1505,7 +1654,7 @@ async function replyTodayRecapSoFar(channelId, authorId) {
     );
   }
 
-  const block = buildRecapPageBlock(sessions, 0, channelId, authorId);
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, null, origin);
   return { content: [summaryLines.join("\n"), block.content].join("\n") + missedNote, components: block.components };
 }
 
@@ -1528,7 +1677,7 @@ async function replyTodayRecapSoFar(channelId, authorId) {
 // doang (`completed`, bukan `sessions`) - sesi yang masih jalan durasinya
 // belum final, sama pola-nya kayak replyTodayRecapSoFar yang udah lebih
 // dulu misahin `completed`/`sessions` buat alasan yang sama.
-async function replyRecapRange(daysBack, label, channelId, authorId) {
+async function replyRecapRange(daysBack, label, channelId, authorId, origin = "") {
   const completed = getCompletedSessionsSince(daysBack);
   const ongoing = getOngoingSessionsForRecap();
   const sessions = [...completed, ...ongoing];
@@ -1562,7 +1711,7 @@ async function replyRecapRange(daysBack, label, channelId, authorId) {
     );
   }
 
-  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, daysBack);
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, daysBack, origin);
   return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
 }
 
@@ -1579,7 +1728,7 @@ async function replyRecapRange(daysBack, label, channelId, authorId) {
 // membantu daripada nyuruh user nebak-nebak lagi) - kalau cuma bulan ini
 // doang yang ada (kasus paling umum sekarang, arsipnya masih baru), gak ada
 // gunanya nawarin dropdown isi 1 opsi, jadi jatuh ke menu 4-opsi biasa.
-async function replyRecapMonth(monthWIB, channelId, authorId) {
+async function replyRecapMonth(monthWIB, channelId, authorId, origin = "") {
   pendingRecapPage.delete(`${channelId}:${authorId}`);
   const label = formatMonthLabel(monthWIB);
   const sessions = getSessionsForRange(monthWIB);
@@ -1587,9 +1736,11 @@ async function replyRecapMonth(monthWIB, channelId, authorId) {
   if (sessions.length === 0) {
     const months = getAvailableRecapMonths();
     if (months.length > 1) {
+      const rows = [buildRecapMonthSelectRow(months, monthWIB, origin), buildCloseOnlyRow()];
+      if (origin) rows.push(buildBackRow(origin));
       return {
         content: `Cok, belum ada live yang kecatet buat bulan ${label}. Coba bulan lain, cok:`,
-        components: [buildRecapMonthSelectRow(months, monthWIB), buildCloseOnlyRow()],
+        components: rows,
       };
     }
     const menu = replyRecapMenu();
@@ -1612,7 +1763,7 @@ async function replyRecapMonth(monthWIB, channelId, authorId) {
     );
   }
 
-  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, monthWIB);
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, monthWIB, origin);
   return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
 }
 

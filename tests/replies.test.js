@@ -1876,7 +1876,14 @@ test("handleRecapMenuButton - pilihan 'date' EDIT pesan jadi dropdown tanggal (b
   await handleRecapMenuButton(interaction);
   assert.equal(interaction.calls.length, 0);
   assert.equal(interaction.updates[0].content, "Rekap tanggal berapa nih, cok?");
-  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select");
+  // customId dropdown-nya bawa origin "recapmenu" (bukan "recap_date_select"
+  // polos) - dibuka dari menu 5-opsi rekap, jadi butuh "inget" itu biar
+  // tombol "🔙 Kembali ke menu rekap" (baris terakhir di bawah) tetep nempel
+  // begitu user milih tanggal (lihat komen buildBackRow/withOrigin).
+  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select:recapmenu");
+  const lastRow = interaction.updates[0].components.at(-1);
+  assert.equal(lastRow.components[0].data.custom_id, "recap_nav:backto:recapmenu");
+  assert.equal(lastRow.components[0].data.label, "🔙 Kembali ke menu rekap");
 });
 
 test("handleRecapMenuButton - nge-clear pendingRecapPage SEBELUM render, biar rekap laen yang lagi di-page-in sebelumnya gak nyangkut basi", async () => {
@@ -1911,6 +1918,220 @@ test("handleRecapMenuButton - nge-clear pendingRecapPage SEBELUM render, biar re
 
   const afterChoice = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
   assert.equal(afterChoice, null, "pendingRecapPage harus udah kehapus, bukan nerusin halaman rekap minggu ini yang lama");
+});
+
+// ==== BUG YANG DILAPORIN OWNER: tabel rekap yang dibuka dari menu 9-opsi
+// fallback-nya "Rekap hari ini" (opsi 8), ATAU dari salah satu tombol menu
+// 5-opsi rekap (replyRecapMenu), gak punya jalan balik ke menu asalnya -
+// cuma Maju/Mundur/Tutup/Cari member/Lompat halaman. Lihat komen panjang di
+// src/chat/replies.js's buildBackRow/withOrigin buat desain lengkapnya. ====
+test("buildRecapPageBlock - origin kosong (default, ngetik langsung) -> TETEP GAK ADA tombol 'Kembali' sama sekali (perilaku lama gak kesentuh)", () => {
+  const sessions = [{ name: "Norigin", username: "jkt48_norigin", startedAtUnix: 1000, endedAtUnix: 1060, durationMs: 60_000, peakViewCount: null }];
+  const block = buildRecapPageBlock(sessions, 0, "c-norigin", "u-norigin");
+  assert.deepEqual(
+    allCustomIds(block).filter((id) => id.startsWith("recap_nav:backto")),
+    [],
+  );
+});
+
+test("buildRecapPageBlock - origin 'fallback' -> baris terakhir tombol '🔙 Kembali ke menu' (customId recap_nav:backto:fallback)", () => {
+  const sessions = [
+    { name: "Nfallback", username: "jkt48_nfallback", startedAtUnix: 1000, endedAtUnix: 1060, durationMs: 60_000, peakViewCount: null },
+  ];
+  const block = buildRecapPageBlock(sessions, 0, "c-nfb", "u-nfb", null, "fallback");
+  const lastRow = block.components.at(-1);
+  assert.equal(lastRow.components.length, 1);
+  assert.equal(lastRow.components[0].data.custom_id, "recap_nav:backto:fallback");
+  assert.equal(lastRow.components[0].data.label, "🔙 Kembali ke menu");
+});
+
+test("buildRecapPageBlock - origin 'recapmenu' -> baris terakhir tombol '🔙 Kembali ke menu rekap' (customId recap_nav:backto:recapmenu)", () => {
+  const sessions = [
+    { name: "Nrecapmenu", username: "jkt48_nrecapmenu", startedAtUnix: 1000, endedAtUnix: 1060, durationMs: 60_000, peakViewCount: null },
+  ];
+  const block = buildRecapPageBlock(sessions, 0, "c-nrm", "u-nrm", null, "recapmenu");
+  const lastRow = block.components.at(-1);
+  assert.equal(lastRow.components[0].data.custom_id, "recap_nav:backto:recapmenu");
+  assert.equal(lastRow.components[0].data.label, "🔙 Kembali ke menu rekap");
+});
+
+test("handleRecapNavButton - action 'backto:fallback' EDIT pesan balik jadi menu 9-opsi (replyFallbackMenu), dan nge-clear pendingRecapPage", async () => {
+  const { replyFallbackMenu } = require("../src/chat/menu");
+  const channelId = "c-backto-fb";
+  const authorId = "u-backto-fb";
+  const interaction = fakeInteraction({ customId: "recap_nav:backto:fallback", channelId, authorId });
+
+  await handleRecapNavButton(interaction);
+
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() (pesan baru)");
+  assert.equal(interaction.updates.length, 1);
+  assert.equal(interaction.updates[0].content, replyFallbackMenu().content);
+  assert.deepEqual(
+    allCustomIds(interaction.updates[0]).slice(0, 9),
+    allCustomIds(replyFallbackMenu()).slice(0, 9),
+    "balik ke menu 9-opsi yang sama persis",
+  );
+
+  const stillPending = await tryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.equal(stillPending, null, "pendingRecapPage harus kehapus - abis balik ke menu, 'y' gak boleh nyasar ke tabel yang udah ditinggalin");
+});
+
+test("handleRecapNavButton - action 'backto:recapmenu' EDIT pesan balik jadi menu 5-opsi rekap (replyRecapMenu)", async () => {
+  const interaction = fakeInteraction({ customId: "recap_nav:backto:recapmenu" });
+  await handleRecapNavButton(interaction);
+  assert.equal(interaction.calls.length, 0);
+  assert.equal(interaction.updates[0].content, replyRecapMenu().content);
+  assert.deepEqual(allCustomIds(interaction.updates[0]), allCustomIds(replyRecapMenu()));
+});
+
+test("handleRecapMenuButton - pilihan 'week' (dari menu 5-opsi rekap) -> tabelnya bawa tombol '🔙 Kembali ke menu rekap'", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, handleRecapMenuButton: freshHandleRecapMenuButton } = freshRepliesForRecapRange();
+  freshRecordLiveEnded("Backtoweek", "jkt48_backtoweek", new Date(Date.now() - 60_000), new Date(), 5);
+
+  const interaction = fakeInteraction({ customId: "recap_menu:week" });
+  await freshHandleRecapMenuButton(interaction);
+
+  assert.ok(
+    allCustomIds(interaction.updates[0]).includes("recap_nav:backto:recapmenu"),
+    "tabel 'rekap minggu ini' yang dibuka dari menu 5-opsi harus bawa tombol kembali",
+  );
+});
+
+test("Maju/Mundur/Lompat halaman NGIKUTIN origin tabel asalnya - tombol '🔙 Kembali' gak ilang abis pindah halaman", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    handleRecapMenuButton: freshHandleRecapMenuButton,
+    handleRecapNavButton: freshHandleRecapNavButton,
+    handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit,
+  } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Navorigin${i}`,
+      `jkt48_navorigin${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-navorigin";
+  const authorId = "u-navorigin";
+  const first = fakeInteraction({ customId: "recap_menu:week", channelId, authorId });
+  await freshHandleRecapMenuButton(first);
+  const firstIds = allCustomIds(first.updates[0]);
+  assert.ok(firstIds.includes("recap_nav:backto:recapmenu"), "halaman pertama harus bawa tombol kembali");
+
+  const nextButtonId = firstIds.find((id) => id.startsWith("recap_nav:next:"));
+  assert.ok(nextButtonId, "harus ada tombol Maju (25 sesi > 1 halaman)");
+  assert.match(nextButtonId, /:recapmenu$/, "customId tombol Maju harus bawa origin di ujungnya");
+
+  const nextClick = fakeInteraction({ customId: nextButtonId, channelId, authorId });
+  await freshHandleRecapNavButton(nextClick);
+  const secondIds = allCustomIds(nextClick.updates[0]);
+  assert.ok(secondIds.includes("recap_nav:backto:recapmenu"), "abis Maju, tombol kembali HARUS tetep ada, bukan ilang");
+
+  const jumpButtonId = secondIds.find((id) => id.startsWith("recap_nav:jump:"));
+  assert.ok(jumpButtonId, "harus ada tombol Lompat halaman (multi-halaman)");
+  const jumpClick = fakeInteraction({ customId: jumpButtonId, channelId, authorId });
+  await freshHandleRecapNavButton(jumpClick);
+  assert.match(jumpClick.modals[0].data.custom_id, /:recapmenu$/, "customId modal Lompat halaman harus ikut bawa origin");
+
+  const jumpSubmit = fakeInteraction({ customId: jumpClick.modals[0].data.custom_id, channelId, authorId, fieldValue: "1" });
+  await freshHandleRecapJumpModalSubmit(jumpSubmit);
+  assert.ok(
+    allCustomIds(jumpSubmit.updates[0]).includes("recap_nav:backto:recapmenu"),
+    "abis submit modal Lompat halaman, tombol kembali HARUS tetep ada",
+  );
+});
+
+test("'y' via teks (tryHandleRecapPageShortcut) JUGA nge-preserve origin - tombol kembali tetep ada abis maju lewat teks, bukan cuma lewat tombol", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    replyRecapRange: freshReplyRecapRange,
+    tryHandleRecapPageShortcut: freshTryHandleRecapPageShortcut,
+  } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  for (let i = 0; i < 25; i++) {
+    freshRecordLiveEnded(
+      `Textorigin${i}`,
+      `jkt48_textorigin${i}`,
+      new Date((threeDaysAgo + i * 60) * 1000),
+      new Date((threeDaysAgo + i * 60 + 30) * 1000),
+      5,
+    );
+  }
+
+  const channelId = "c-textorigin";
+  const authorId = "u-textorigin";
+  const first = await freshReplyRecapRange(7, "minggu ini", channelId, authorId, "recapmenu");
+  assert.ok(allCustomIds(first).includes("recap_nav:backto:recapmenu"));
+
+  const second = await freshTryHandleRecapPageShortcut("y", channelId, authorId);
+  assert.ok(
+    allCustomIds(second).includes("recap_nav:backto:recapmenu"),
+    "navigasi 'y' via teks juga harus mempertahankan tombol kembali, konsisten sama tombol Maju",
+  );
+});
+
+test("handleRecapDateSelect - dropdown yang dibuka dari menu 5-opsi rekap (origin 'recapmenu') NGIKUTIN origin itu di tabel hasilnya", async () => {
+  const { recordLiveEnded: freshRecordLiveEnded, handleRecapDateSelect: freshHandleRecapDateSelect } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
+  freshRecordLiveEnded("Dateorigin", "jkt48_dateorigin", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 1800) * 1000), 5);
+
+  const interaction = fakeInteraction({ customId: "recap_date_select:recapmenu", values: [targetDate] });
+  await freshHandleRecapDateSelect(interaction);
+
+  assert.ok(
+    allCustomIds(interaction.updates[0]).includes("recap_nav:backto:recapmenu"),
+    "tabel tanggal yang dipilih dari dropdown ber-origin 'recapmenu' harus tetep bawa tombol kembali",
+  );
+  // dropdown yang nempel balik di tabelnya sendiri juga harus tetep bawa
+  // origin yang sama (biar bisa ganti-ganti tanggal berkali-kali tanpa
+  // kehilangan tombol kembali).
+  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select:recapmenu");
+});
+
+test("handleRecapDateSelect - tanggal KOSONG dari dropdown ber-origin -> dropdown fallback-nya TETEP bawa origin + tombol kembali", async () => {
+  const { handleRecapDateSelect: freshHandleRecapDateSelect } = freshRepliesForRecapRange();
+  const interaction = fakeInteraction({ customId: "recap_date_select:recapmenu", values: ["2000-01-01"] });
+  await freshHandleRecapDateSelect(interaction);
+
+  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "recap_date_select:recapmenu");
+  assert.ok(allCustomIds(interaction.updates[0]).includes("recap_nav:backto:recapmenu"));
+});
+
+test("handleRecapMenuButton - pilihan 'date' lalu handleRecapDateSelect - origin 'recapmenu' ngalir dari awal (buildRecapDatePickerBlock) sampai tabel akhir", async () => {
+  const {
+    recordLiveEnded: freshRecordLiveEnded,
+    handleRecapMenuButton: freshHandleRecapMenuButton,
+    handleRecapDateSelect: freshHandleRecapDateSelect,
+  } = freshRepliesForRecapRange();
+
+  const now = Date.now();
+  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
+  freshRecordLiveEnded("Datepickerorigin", "jkt48_datepickerorigin", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 1800) * 1000), 5);
+
+  const picker = fakeInteraction({ customId: "recap_menu:date" });
+  await freshHandleRecapMenuButton(picker);
+  const dropdownId = picker.updates[0].components[0].components[0].data.custom_id;
+  assert.equal(dropdownId, "recap_date_select:recapmenu");
+  assert.ok(
+    allCustomIds(picker.updates[0]).includes("recap_nav:backto:recapmenu"),
+    "picker tanggal-nya sendiri (belum ada tabel) juga bawa tombol kembali",
+  );
+
+  const select = fakeInteraction({ customId: dropdownId, values: [targetDate] });
+  await freshHandleRecapDateSelect(select);
+  assert.ok(allCustomIds(select.updates[0]).includes("recap_nav:backto:recapmenu"), "tabel akhirnya juga masih bawa tombol kembali");
 });
 
 test("handleRecapDateSelect - tanggal yang ada sesinya -> tabel rekap tanggal itu, EDIT pesan (update), bukan pesan baru", async () => {
@@ -2290,7 +2511,11 @@ test("handleRecapMemberModalSubmit - nama valid -> NGE-EDIT pesan menu jadi tabe
   await handleRecapMemberModalSubmit(ok);
   assert.equal(ok.calls.length, 0, "gak boleh bikin pesan baru");
   assert.match(ok.updates[0].content, /Rekap live Mrecmodal JKT48/);
-  assert.deepEqual(allCustomIds(ok.updates[0]), ["recap_nav:close"]);
+  // "recap_nav:backto:recapmenu" (tombol "🔙 Kembali ke menu rekap") ikut
+  // nempel - modal ini SATU-SATUNYA jalan buat tabel rekap member, dibuka
+  // dari menu 5-opsi rekap (origin di-hardcode "recapmenu" di
+  // handleRecapMemberModalSubmit), lihat komen di buildBackRow/withOrigin.
+  assert.deepEqual(allCustomIds(ok.updates[0]), ["recap_nav:close", "recap_nav:backto:recapmenu"]);
 
   const original = global.fetch;
   global.fetch = fakeIdnFetch({});
