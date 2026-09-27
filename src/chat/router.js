@@ -1,6 +1,7 @@
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { findLiveCountByNameFragment } = require("../storage/liveCount");
+const { getAllPriorityMembers } = require("../priority");
 const { getUsernameForChannel } = require("../storage/channelRouting");
 const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
 const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
@@ -67,6 +68,17 @@ const CHAT_WAKE_WORDS = ["cok"];
 // bot" kalau ada tanda tanya atau kata tanya juga di pesannya.
 const TOPIC_WORDS = ["live"];
 const QUESTION_HINTS = ["?", "siapa", "apa", "gimana", "kapan", "berapa"];
+
+// Gerbang "ini beneran nama member?" buat bentuk polos "<nama> dan <nama>" -
+// dulu cuma live-count.json, jadi begitu file itu kosong/ke-reset (mis. data
+// gak ada di Volume Railway) "nala dan levi" gak kedeteksi sama sekali dan
+// jatuh ke jawaban ngawur. Sekarang semua sumber yang tau nama member dicek:
+// live-count, yang lagi live, riwayat durasi, dan daftar prioritas (yang
+// ada di config, jadi gak tergantung data yang tersimpan).
+function isKnownMemberFragment(fragment) {
+  if (findLiveCountByNameFragment(fragment) || findMemberByNameFragment(fragment) || findDurationHistoryByNameFragment(fragment)) return true;
+  return getAllPriorityMembers().some((p) => containsWholeWord(fragment, p.keyword));
+}
 
 async function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
@@ -171,12 +183,12 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   }
 
   // §10's forty-second item: "cok bandingin <A> dan <B>" - pemisahnya SENGAJA
-  // cuma "dan" (owner minta "vs"/"versus" dibuang: "nala dan lily", bukan
-  // "nala vs lily"). Kata kuncinya "bandingin"/"bandingkan"/"banding". Dua
+  // cuma "dan" atau "&" (owner minta "vs"/"versus" dibuang: "nala dan lily"/
+  // "nala & lily", bukan "nala vs lily"). Kata kuncinya "bandingin"/"bandingkan"/"banding". Dua
   // nama fragment-nya diselesaiin lewat findLiveCountByNameFragment yang sama
   // dipake replyLiveCount, jadi konsisten sama cara "cok berapa kali <nama>
   // live" ngenalin member.
-  const compareMatch = text.match(/\bbanding(?:in|kan)?\s+(.+?)\s+dan\s+(.+)/);
+  const compareMatch = text.match(/\bbanding(?:in|kan)?\s+(.+?)(?:\s+dan\s+|\s*&\s*)(.+)/);
   if (compareMatch) {
     return await replyCompareMembers(compareMatch[1].trim(), compareMatch[2].replace(/[?!.\s]+$/, ""));
   }
@@ -193,11 +205,12 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // Tanpa kata kunci sama sekali: "<nama> dan <nama>" doang (owner minta
   // "nala dan lily" langsung jadi perbandingan). Ini pola yang LONGGAR banget
   // ("dan" ada di mana-mana), jadi dijaga ketat: harus persis dua kata
-  // tunggal di kiri-kanan "dan", DAN minimal salah satunya dikenali sebagai
-  // member yang ada di catatan bot - biar kalimat biasa ("cok makan dan
+  // tunggal di kiri-kanan "dan"/"&", DAN minimal salah satunya dikenali sebagai
+  // member (isKnownMemberFragment - BUKAN cuma live-count.json, yang bisa aja
+  // kosong/ke-reset: member prioritas kayak Nala/Levi/Lily tetep selalu dikenali) - biar kalimat biasa ("cok makan dan
   // tidur") gak salah dibajak jadi perbandingan.
-  const bareCompareMatch = commandText.match(/^([a-z0-9]+)\s+dan\s+([a-z0-9]+)[?!.]*$/);
-  if (bareCompareMatch && (findLiveCountByNameFragment(bareCompareMatch[1]) || findLiveCountByNameFragment(bareCompareMatch[2]))) {
+  const bareCompareMatch = commandText.match(/^([a-z0-9]+)(?:\s+dan\s+|\s*&\s*)([a-z0-9]+)[?!.]*$/);
+  if (bareCompareMatch && (isKnownMemberFragment(bareCompareMatch[1]) || isKnownMemberFragment(bareCompareMatch[2]))) {
     return await replyCompareMembers(bareCompareMatch[1], bareCompareMatch[2]);
   }
 

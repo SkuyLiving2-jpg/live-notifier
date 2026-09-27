@@ -256,7 +256,7 @@ function replyHelp() {
     '- "cok siapa yang paling sering live" - leaderboard total live count semua member',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
-    '- "cok bandingin <nama member> dan <nama member>" (atau cukup "cok <nama> dan <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat dicariin lewat dropdown',
+    '- "cok bandingin <nama member> dan/& <nama member>" (atau cukup "cok <nama> dan <nama>" / "cok <nama> & <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat dicariin lewat dropdown',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
     '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',

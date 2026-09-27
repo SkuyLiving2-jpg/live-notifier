@@ -527,3 +527,41 @@ test(
     assert.match(unknown.content, /Mau rekap yang mana, cok\?/);
   }),
 );
+
+// Regresi (dilaporin owner): "nala & levi" gak jadi perbandingan - malah
+// jatuh ke jawaban ngawur ("levi lagi gak live"). "&" itu setara "dan".
+test(
+  "'&' setara 'dan': 'nala & levi' (pakai/tanpa spasi, pakai/tanpa kata kunci, di bot channel) semuanya jadi perbandingan",
+  withFakeIdn(async () => {
+    const expected = "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**";
+    for (const text of ["cok zorrawx & yelvaqp", "cok zorrawx&yelvaqp", "cok bandingin zorrawx & yelvaqp", "cok bandingkan zorrawx&yelvaqp"]) {
+      const reply = await buildChatReply(text, { channelId: "c-amp", authorId: "u-amp" });
+      assert.equal(reply.content, expected, text);
+    }
+    const inBotChannel = await buildChatReply("Zorrawx & Yelvaqp", { isBotChannel: true, channelId: "c-amp", authorId: "u-amp" });
+    assert.equal(inBotChannel.content, expected);
+  }),
+);
+
+test("'&' juga kena aturan member-sama: 'zorrawx & zorrawx' ditolak", async () => {
+  const reply = await buildChatReply("cok zorrawx & zorrawx");
+  assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
+});
+
+// Gerbang bentuk polos dulu cuma ngecek live-count.json - kalau file itu
+// kosong/ke-reset, "nala dan levi" gak kedeteksi. Member prioritas (Nala/
+// Levi/Lily, dari config) harus TETEP dikenali walau gak ada data tersimpan.
+test(
+  "bentuk polos tetep kedeteksi lewat daftar prioritas walau nama itu gak ada di live-count ('lily & <nama ngawur>' -> jawaban perbandingan, BUKAN menu fallback)",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok lily & namangawurbanget", { channelId: "c-amp2", authorId: "u-amp2" });
+    assert.equal(typeof reply, "string");
+    assert.match(reply, /gak nemu member JKT48 bernama "namangawurbanget"/);
+    assert.doesNotMatch(reply, /selamat (pagi|siang|sore|malam)/i);
+  }),
+);
+
+test("bentuk polos '<kata biasa> & <kata biasa>' yang bukan nama member tetep gak dibajak", async () => {
+  const reply = await buildChatReply("cok makan & tidur");
+  assert.doesNotMatch(JSON.stringify(reply), /⚔️|compare_pick|belum pernah live|gak nemu member/);
+});
