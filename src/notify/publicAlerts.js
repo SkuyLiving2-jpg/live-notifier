@@ -1,6 +1,6 @@
 const { postToWebhook } = require("./webhook");
 const { formatDuration, formatMonthLabel, getHourWIBOf, getTodayWIB, getDateWIB, WEEKDAY_FORMATTER_WIB } = require("../utils");
-const { getPreviousMaxDuration } = require("../storage/durationHistory");
+const { getPreviousMaxDuration, findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const {
   loadDailyLog,
   saveDailyLog,
@@ -8,7 +8,10 @@ const {
   getCompletedSessionsSince,
   getCompletedSessionsForMonth,
 } = require("../storage/dailyLog");
-const { saveActiveLives } = require("../storage/activeLives");
+const { activeLives, saveActiveLives } = require("../storage/activeLives");
+const { loadSubscriptions } = require("../storage/subscriptions");
+const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts");
+const { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
 const { DAILY_RECAP_HOUR, DAILY_RECAP_COLOR } = require("../config");
 
 // Ambang jumlah penonton buat alert "tembus milestone" - sekali per ambang
@@ -207,12 +210,89 @@ async function maybeSendMonthlyRecap(now = new Date()) {
   saveDailyLog(log);
 }
 
+// Saran fitur ke-4 (§10's kelimapuluh+item): heads-up jadwal PUBLIK - beda
+// dari notify/priorityDm.js's maybeSendHeadsUpAlerts (DM ke owner doang,
+// cuma buat member prioritas), ini buat member MANAPUN yang punya subscriber
+// ("cok ingetin <nama>"), dikirim ke CHANNEL bersama (nge-tag subscriber-nya
+// lewat mention, bukan DM) - subscriber udah opt-in secara terbuka lewat
+// "cok ingetin", beda dari daftar prioritas yang preferensi PRIBADI owner,
+// jadi wajar kalau alertnya nongol di channel bersama, bukan didiemin di DM.
+//
+// Kriteria "cukup yakin buat ngasih heads-up" (HEADS_UP_MIN_ENTRIES/
+// HEADS_UP_MIN_DOMINANCE/computeSchedulePattern/isHourInRange) SAMA PERSIS
+// kayak versi DM - satu-satunya beda TUJUAN pengirimannya (channel+mention
+// vs DM owner), bukan KRITERIA "kapan pantes ngasih tau"-nya.
+//
+// Dedup per-hari-per-username PISAH dari versi DM (key di-prefix "sub:" -
+// storage/headsUpAlerts.js gak peduli bentuk key-nya, cuma nyimpen string
+// apa adanya) - biar member yang KEBETULAN prioritas JUGA punya subscriber
+// (mis. ada yang "cok ingetin nala" padahal Nala udah prioritas) gak salah
+// nge-suppress salah satu jalur gara-gara ngirain udah "kepake" hari itu,
+// padahal yang kepake jalur yang laen.
+function sendPublicHeadsUpAlert(displayName, pattern, subscriberIds) {
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const windowText = `${pad2(pattern.rangeMin)}-${pad2(pattern.rangeMax)} WIB`;
+  const mentions = subscriberIds.map((id) => `<@${id}>`).join(" ");
+
+  const payload = {
+    content: `👀 **${displayName}** biasanya live sekitar jam segini (${windowText}, ${pattern.topBucketCount}/${pattern.total}x riwayat terakhir) - kemungkinan bentar lagi live!\n${mentions} kamu subscribe notif buat member ini. _(Perkiraan dari pola histori, BUKAN jadwal resmi - bisa aja meleset.)_`,
+    // Mention yang BENERAN dimaksud cuma subscriber-nya doang (sama pola
+    // scoped-nya kayak liveNotify.js's getSubscribersFor) - biar CUMA
+    // mereka yang ke-ping walau displayName kebetulan ngandung teks aneh.
+    allowed_mentions: { users: subscriberIds },
+  };
+
+  return postToWebhook(payload, `Gagal ngirim heads-up jadwal publik buat ${displayName}:`).then((ok) => {
+    if (ok) console.log(`Heads-up jadwal publik terkirim buat ${displayName} (${subscriberIds.length} subscriber)`);
+  });
+}
+
+// `now` opsional, sama alasannya kayak maybeSendWeeklyRecap/maybeSendMonthlyRecap
+// di atas (§10's thirty-ninth item) - biar gerbang jam/dedup-nya bisa dites
+// deterministik pakai tanggal palsu.
+async function maybeSendPublicHeadsUpAlerts(now = new Date()) {
+  const today = getDateWIB(now);
+  const currentHour = getHourWIBOf(now);
+  const subs = loadSubscriptions();
+
+  // Beberapa keyword subscription BEDA bisa nunjuk ke MEMBER YANG SAMA (mis.
+  // ada yang subscribe pakai "nala", ada yang pakai "nala jkt48") - digabung
+  // DULU jadi satu per USERNAME (union subscriber ID-nya) sebelum ngirim,
+  // biar gak ada subscriber yang kelewat cuma gara-gara dia subscribe pakai
+  // ejaan keyword yang beda dari yang diproses duluan.
+  const byUsername = new Map(); // username -> { found, subscriberIds: Set }
+  for (const [keyword, subscriberIds] of Object.entries(subs)) {
+    if (subscriberIds.length === 0) continue;
+    const found = findDurationHistoryByNameFragment(keyword);
+    if (!found) continue;
+    const bucket = byUsername.get(found.username) || { found, subscriberIds: new Set() };
+    subscriberIds.forEach((id) => bucket.subscriberIds.add(id));
+    byUsername.set(found.username, bucket);
+  }
+
+  for (const [username, { found, subscriberIds }] of byUsername) {
+    if (activeLives.has(username)) continue; // lagi live sekarang - heads-up buat yang udah kejadian gak ada gunanya
+
+    const dedupKey = `sub:${username}`;
+    if (wasAlertedToday(dedupKey, today)) continue;
+
+    const pattern = computeSchedulePattern(found.entries);
+    if (!pattern || pattern.total < HEADS_UP_MIN_ENTRIES) continue;
+    if (pattern.topBucketCount / pattern.total < HEADS_UP_MIN_DOMINANCE) continue;
+    if (!isHourInRange(currentHour, pattern.rangeMin, pattern.rangeMax)) continue;
+
+    markAlertedToday(dedupKey, today);
+    await sendPublicHeadsUpAlert(found.displayName, pattern, [...subscriberIds]);
+  }
+}
+
 module.exports = {
   maybeAlertViewerMilestone,
   maybeAnnounceNewRecord,
   maybeSendDailyRecap,
   maybeSendWeeklyRecap,
   maybeSendMonthlyRecap,
+  maybeSendPublicHeadsUpAlerts,
   buildDailyRecapPayload,
   buildWeeklyRecapPayload,
   buildMonthlyRecapPayload,

@@ -70,4 +70,22 @@ function isHourInRange(hour, min, max) {
   return min <= max ? hour >= min && hour <= max : hour >= min || hour <= max;
 }
 
-module.exports = { computeSchedulePattern, isHourInRange };
+// Ambang "cukup yakin buat ngasih heads-up PROAKTIF" - dipindah ke sini
+// (§10's kelimapuluh+item, saran fitur ke-4) dari notify/priorityDm.js,
+// yang sebelumnya nyimpen ini sendiri buat heads-up DM member prioritas
+// doang. Sekarang dipake DUA jalur (DM prioritas di priorityDm.js DAN
+// heads-up publik buat subscriber di publicAlerts.js) - naronya di sini
+// (bareng matematika computeSchedulePattern yang emang udah standalone buat
+// alasan yang sama, lihat komen di atas) biar dua jalur itu TETEP make
+// kriteria "seberapa yakin" yang identik, bukan dua angka yang bisa
+// diam-diam melenceng kalau masing-masing nyimpen salinannya sendiri.
+// - minimal 5 live yang ke-track (bukan 3, ambang "cok jadwal <nama>" yang
+//   dijawab APA ADANYA soalnya USER yang nanya duluan) sebelum berani nebak
+//   ada pola beneran buat alert yang NYAMPERIN duluan tanpa diminta.
+// - pola jam yang PALING SERING muncul (topBucketName) harus ngerangkum
+//   MINIMAL SEPARUH (50%) dari riwayat yang ke-track - kalau jamnya beneran
+//   tersebar acak, gak ada pola yang cukup kuat buat dipercaya.
+const HEADS_UP_MIN_ENTRIES = 5;
+const HEADS_UP_MIN_DOMINANCE = 0.5;
+
+module.exports = { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE };

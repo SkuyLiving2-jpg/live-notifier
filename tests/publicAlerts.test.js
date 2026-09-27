@@ -16,8 +16,12 @@ const {
   buildMonthlyRecapPayload,
   isSundayWIB,
   isLastDayOfMonthWIB,
+  maybeSendPublicHeadsUpAlerts,
 } = require("../src/notify/publicAlerts");
 const { DAILY_RECAP_COLOR } = require("../src/config");
+const { saveDurationHistory } = require("../src/storage/durationHistory");
+const { activeLives } = require("../src/storage/activeLives");
+const { addSubscription } = require("../src/storage/subscriptions");
 
 const DAILY_LOG_FILE = path.join(tempCacheDir, "daily-log.json");
 const DAILY_LOG_MODULE_PATH = require.resolve("../src/storage/dailyLog");
@@ -271,6 +275,156 @@ test("maybeSendMonthlyRecap - BUKAN hari terakhir bulan -> gerbang ketutup, gak 
     await maybeSendMonthlyRecap(NOT_A_LAST_DAY_OF_MONTH);
     assert.equal(callCount, 0);
     assert.equal(loadDailyLog().recapSentMonth, null);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+// ==== Saran fitur ke-4 (§10's kelimapuluh+item): heads-up jadwal PUBLIK ====
+// Beda dari priorityDm.test.js's maybeSendHeadsUpAlerts (DM ke owner, cuma
+// member prioritas) - ini buat member MANAPUN yang punya subscriber, dikirim
+// ke channel (postToWebhook) sambil nge-tag subscriber-nya. Recipe waktu
+// yang sama persis kayak priorityDm.test.js (5 riwayat di jam 13:00+07:00,
+// durasi 1 jam -> rentang perkiraan 12:00-12:00 WIB) biar gampang
+// dibandingin, member-nya beda nama biar gak numpang state test lain.
+function fiveHeadsUpEntries(name) {
+  return [1, 2, 3, 4, 5].map((day) => ({ name, durationMs: 60 * 60_000, at: `2026-09-0${day}T13:00:00+07:00` }));
+}
+const PUBLIC_INSIDE_WINDOW_NOW = new Date("2026-09-20T12:30:00+07:00"); // jam 12 WIB - di dalem rentang 12-12
+const PUBLIC_OUTSIDE_WINDOW_NOW = new Date("2026-09-20T18:00:00+07:00"); // jam 18 WIB - jelas di luar
+
+test("maybeSendPublicHeadsUpAlerts - pola kuat + jam masuk rentang + ada subscriber + belum live -> post ke channel, nge-tag SEMUA subscriber", async () => {
+  saveDurationHistory({ jkt48_headsuppub1: fiveHeadsUpEntries("Headsuppub1") });
+  addSubscription("headsuppub1", "sub-user-1");
+  addSubscription("headsuppub1", "sub-user-2");
+
+  const original = global.fetch;
+  let capturedBody = null;
+  global.fetch = async (url, options) => {
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW);
+    assert.match(capturedBody.content, /\*\*Headsuppub1\*\* biasanya live sekitar jam segini/);
+    assert.match(capturedBody.content, /<@sub-user-1>/);
+    assert.match(capturedBody.content, /<@sub-user-2>/);
+    assert.deepEqual(new Set(capturedBody.allowed_mentions.users), new Set(["sub-user-1", "sub-user-2"]));
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendPublicHeadsUpAlerts - dipanggil 2x hari yang sama -> post cuma SEKALI (dedup harian, key 'sub:' terpisah dari versi DM)", async () => {
+  saveDurationHistory({ jkt48_headsuppub2: fiveHeadsUpEntries("Headsuppub2") });
+  addSubscription("headsuppub2", "sub-user-3");
+
+  let sendCount = 0;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sendCount++;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW);
+    await maybeSendPublicHeadsUpAlerts(new Date("2026-09-20T13:00:00+07:00")); // masih hari yang sama, masih dalem rentang
+    assert.equal(sendCount, 1);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendPublicHeadsUpAlerts - member LAGI LIVE SEKARANG -> gak ngirim apa-apa, walau pola/jam-nya cocok", async () => {
+  saveDurationHistory({ jkt48_headsuppub3: fiveHeadsUpEntries("Headsuppub3") });
+  addSubscription("headsuppub3", "sub-user-4");
+  activeLives.set("jkt48_headsuppub3", { name: "Headsuppub3", username: "jkt48_headsuppub3", slug: "s", liveAt: new Date().toISOString() });
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW);
+    assert.equal(sent, false);
+  } finally {
+    global.fetch = original;
+    activeLives.delete("jkt48_headsuppub3");
+  }
+});
+
+test("maybeSendPublicHeadsUpAlerts - dua keyword subscribe BEDA yang resolve ke member yang SAMA -> digabung jadi SATU alert (union subscriber), bukan dua kali kirim", async () => {
+  saveDurationHistory({ jkt48_headsuppub5: fiveHeadsUpEntries("Headsuppub5") });
+  addSubscription("headsuppub5", "sub-user-6");
+  addSubscription("headsuppub5 jkt48", "sub-user-7"); // ejaan beda, member IDN yang SAMA
+
+  let callCount = 0;
+  let capturedBody = null;
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    callCount++;
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW);
+    assert.equal(callCount, 1, "harus SATU alert doang, bukan sekali per keyword yang match ke member yang sama");
+    assert.deepEqual(new Set(capturedBody.allowed_mentions.users), new Set(["sub-user-6", "sub-user-7"]));
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendPublicHeadsUpAlerts - riwayat kurang dari 5x (di bawah ambang) -> gak ngirim", async () => {
+  saveDurationHistory({ jkt48_headsuppub6: fiveHeadsUpEntries("Headsuppub6").slice(0, 3) });
+  addSubscription("headsuppub6", "sub-user-8");
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW);
+    assert.equal(sent, false);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendPublicHeadsUpAlerts - jam sekarang di LUAR rentang perkiraan -> gak ngirim", async () => {
+  saveDurationHistory({ jkt48_headsuppub7: fiveHeadsUpEntries("Headsuppub7") });
+  addSubscription("headsuppub7", "sub-user-9");
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_OUTSIDE_WINDOW_NOW);
+    assert.equal(sent, false);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeSendPublicHeadsUpAlerts - member yang gak punya subscriber sama sekali gak ikut diproses (gak nyentuh network)", async () => {
+  saveDurationHistory({ jkt48_headsuppub8nosub: fiveHeadsUpEntries("Headsuppub8nosub") });
+  // Sengaja TANPA addSubscription
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW);
+    assert.equal(sent, false);
   } finally {
     global.fetch = original;
   }

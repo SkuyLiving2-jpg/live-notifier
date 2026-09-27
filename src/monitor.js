@@ -12,6 +12,7 @@ const {
   maybeSendDailyRecap,
   maybeSendWeeklyRecap,
   maybeSendMonthlyRecap,
+  maybeSendPublicHeadsUpAlerts,
 } = require("./notify/publicAlerts");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
@@ -163,6 +164,7 @@ async function checkLiveMembers() {
     await maybeSendWeeklyRecap();
     await maybeSendMonthlyRecap();
     await maybeSendHeadsUpAlerts();
+    await maybeSendPublicHeadsUpAlerts();
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);
   }

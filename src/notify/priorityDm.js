@@ -4,7 +4,7 @@ const { getPriorityConfig, buildPriorityPayload, getAllPriorityMembers } = requi
 const { getAverageDuration, findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { activeLives, saveActiveLives } = require("../storage/activeLives");
 const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts");
-const { computeSchedulePattern, isHourInRange } = require("../schedulePattern");
+const { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
 const { formatDuration, getDateWIB, getHourWIBOf } = require("../utils");
 
 // Notif flashy (embed warna-warni + tombol + pesan spesial) buat member
@@ -120,20 +120,10 @@ async function maybeAlertEndingSoon(entry, durationHistory) {
   }
 }
 
-// Ambang buat alert heads-up PROAKTIF (§10's forty-third item, owner minta
-// "Q2" fitur ke-5) - SENGAJA lebih ketat dari "cok jadwal <nama>"'s ambang
-// (minimal 3 riwayat, ditampilin apa adanya soalnya USER yang nanya, gampang
-// diabein kalau meleset). Alert ini NYAMPERIN owner duluan tanpa diminta -
-// owner sendiri ngingetin jam live JKT48 itu SANGAT random/acak, jadi harus
-// lebih yakin dulu sebelum berani ngasih tau:
-// - minimal 5 live yang ke-track (bukan 3) - riwayat yang lebih panjang
-//   sebelum berani nebak ada pola beneran.
-// - pola jam yang PALING SERING muncul (topBucketName) harus ngerangkum
-//   MINIMAL SEPARUH (50%) dari riwayat yang ke-track - kalau live-nya
-//   beneran tersebar acak ke semua jam, gak ada pola yang cukup kuat buat
-//   dipercaya, mendingan diem daripada ngasih heads-up yang bakal sering meleset.
-const HEADS_UP_MIN_ENTRIES = 5;
-const HEADS_UP_MIN_DOMINANCE = 0.5;
+// Ambang HEADS_UP_MIN_ENTRIES/HEADS_UP_MIN_DOMINANCE (§10's forty-third
+// item) DIPINDAH ke ../schedulePattern.js (§10's kelimapuluh+item) - sekarang
+// dipake DUA jalur (DM prioritas di sini DAN heads-up publik buat subscriber
+// di notify/publicAlerts.js), lihat komennya di sana buat alasan lengkapnya.
 
 async function sendHeadsUpAlert(priority, displayName, pattern) {
   const client = getDiscordClient();

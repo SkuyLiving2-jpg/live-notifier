@@ -271,7 +271,7 @@ function replyHelp() {
     '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',
     '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
     '- "cok daftar prioritas" - lihat member prioritas',
-    '- "cok ingetin <nama member>" - kamu di-tag pribadi kalau dia mulai live',
+    '- "cok ingetin <nama member>" - kamu di-tag kalau dia mulai live, ATAU kalau ada tanda-tanda bentar lagi live (perkiraan dari pola jam biasanya dia live, kalau histori-nya udah cukup)',
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
     '- "cok reminder aku" - lihat kamu subscribe reminder siapa aja',
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
