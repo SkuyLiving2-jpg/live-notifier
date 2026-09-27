@@ -429,3 +429,115 @@ test("maybeSendPublicHeadsUpAlerts - member yang gak punya subscriber sama sekal
     global.fetch = original;
   }
 });
+
+// ==== Saran fitur ke-5 (§10's kelimapuluh+item): LIVE STREAK milestone ====
+// freshPublicAlerts() dipake di sini (bukan cuma top-level maybeSendPublicHeadsUpAlerts
+// yang gak nyentuh dailyLog sama sekali) - maybeAnnounceStreakMilestone
+// manggil getDistinctSessionDatesForMember (storage/dailyLog.js), dan file
+// ini nge-fresh-reload dailyLog+publicAlerts bareng di test-test LAIN, jadi
+// referensi top-level yang di-capture di awal file udah gak konsisten lagi
+// sama instance dailyLog TERBARU begitu ada test freshPublicAlerts() lain
+// yang jalan duluan - sama pola freshDailyLog()-nya kayak tests di atas.
+function recordConsecutiveDays(recordLiveEnded, name, username, daysAgoList) {
+  const now = Date.now();
+  for (const daysAgo of daysAgoList) {
+    const endedAt = new Date(now - daysAgo * 24 * 60 * 60 * 1000);
+    recordLiveEnded(name, username, new Date(endedAt.getTime() - 60_000), endedAt, 5);
+  }
+}
+
+test("maybeAnnounceStreakMilestone - streak nyampe milestone pertama (3 hari) -> alert kekirim SEKALI, gak diulang buat streak yang SAMA", async () => {
+  freshPublicAlerts();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { maybeAnnounceStreakMilestone } = require("../src/notify/publicAlerts");
+  recordConsecutiveDays(recordLiveEnded, "Streakmilea", "jkt48_streakmilea", [0, 1, 2]);
+
+  let sendCount = 0;
+  let capturedBody = null;
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    sendCount++;
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeAnnounceStreakMilestone("jkt48_streakmilea", "Streakmilea");
+    assert.equal(sendCount, 1);
+    assert.match(capturedBody.content, /\*\*Streakmilea\*\* lagi live \*\*3 hari berturut-turut\*\*/);
+
+    await maybeAnnounceStreakMilestone("jkt48_streakmilea", "Streakmilea"); // streak masih 3, milestone 3 udah diumumin
+    assert.equal(sendCount, 1, "gak boleh ngirim ulang buat streak yang sama persis");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeAnnounceStreakMilestone - streak di BAWAH milestone pertama -> gak ngirim apa-apa", async () => {
+  freshPublicAlerts();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { maybeAnnounceStreakMilestone } = require("../src/notify/publicAlerts");
+  recordConsecutiveDays(recordLiveEnded, "Streakmileb", "jkt48_streakmileb", [0, 1]); // streak 2, milestone pertama 3
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeAnnounceStreakMilestone("jkt48_streakmileb", "Streakmileb");
+    assert.equal(sent, false);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeAnnounceStreakMilestone - streak LONCAT ngelewatin beberapa milestone sekaligus -> cuma SATU alert (milestone TERTINGGI yang kelewatan)", async () => {
+  freshPublicAlerts();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { maybeAnnounceStreakMilestone } = require("../src/notify/publicAlerts");
+  recordConsecutiveDays(recordLiveEnded, "Streakmilec", "jkt48_streakmilec", [0, 1, 2, 3, 4]); // streak 5 - lewatin milestone 3 DAN 5 sekaligus
+
+  let sendCount = 0;
+  let capturedBody = null;
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    sendCount++;
+    capturedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeAnnounceStreakMilestone("jkt48_streakmilec", "Streakmilec");
+    assert.equal(sendCount, 1);
+    assert.match(capturedBody.content, /\*\*5 hari berturut-turut\*\*/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("maybeAnnounceStreakMilestone - streak SEKARANG putus (gak ada aktivitas hari ini/kemarin) -> penanda lama ke-reset ke 0, walau dulu sempet nyampe milestone", async () => {
+  freshPublicAlerts();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { maybeAnnounceStreakMilestone } = require("../src/notify/publicAlerts");
+  const { setLastAlertedStreak, getLastAlertedStreak } = require("../src/storage/streaks");
+
+  // Sesi LAMA (5 hari lalu) - streak yang PERNAH ada tapi UDAH putus sekarang
+  // (gak ada aktivitas hari ini/kemarin).
+  const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+  recordLiveEnded("Streakmileputus", "jkt48_streakmileputus", new Date(fiveDaysAgo.getTime() - 60_000), fiveDaysAgo, 5);
+  setLastAlertedStreak("jkt48_streakmileputus", 3); // pura-pura dulu sempet ngelewatin milestone 3
+
+  let sent = false;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sent = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeAnnounceStreakMilestone("jkt48_streakmileputus", "Streakmileputus");
+    assert.equal(sent, false, "streak-nya 0 sekarang, gak ada milestone baru buat diumumin");
+    assert.equal(getLastAlertedStreak("jkt48_streakmileputus"), 0, "penanda lama harus ke-reset begitu streak-nya putus");
+  } finally {
+    global.fetch = original;
+  }
+});

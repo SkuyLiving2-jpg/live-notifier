@@ -164,6 +164,21 @@ function getEarliestSessionDate() {
   return getDateWIB(new Date(earliestUnix * 1000));
 }
 
+// Set tanggal WIB ("YYYY-MM-DD") DISTINCT tempat `username` PUNYA SESI
+// SELESAI, dalam `daysBack` hari terakhir - dasar penghitungan LIVE STREAK
+// (§10's kelimapuluh+item, saran fitur ke-5, lihat ../streakMath.js's
+// computeCurrentStreak). Dikelompokkan per tanggal SELESAI (bukan tanggal
+// MULAI) - konsisten sama seluruh fungsi lain di modul ini yang ngelompokin
+// sesi per tanggal WIB (getCompletedSessionsForDate/getDistinctSessionMonths
+// dkk selalu pake tanggal selesai, bukan mulai).
+function getDistinctSessionDatesForMember(username, daysBack = SESSION_RETENTION_DAYS) {
+  return new Set(
+    getCompletedSessionsSince(daysBack)
+      .filter((s) => s.username === username)
+      .map((s) => getDateWIB(new Date(s.endedAtUnix * 1000))),
+  );
+}
+
 // Dipanggil monitor.js pas sebuah live SELESAI. startedAtDate/endedAtDate
 // dari activeLives's liveAt (udah akurat, independen total dari file ini -
 // gak pernah kena bug rollover/reset apapun yang sempet kejadian di sini).
@@ -204,5 +219,6 @@ module.exports = {
   getCompletedSessionsForMonth,
   getDistinctSessionMonths,
   getEarliestSessionDate,
+  getDistinctSessionDatesForMember,
   recordLiveEnded,
 };

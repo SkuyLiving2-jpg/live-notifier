@@ -7,11 +7,14 @@ const {
   getCompletedSessionsToday,
   getCompletedSessionsSince,
   getCompletedSessionsForMonth,
+  getDistinctSessionDatesForMember,
 } = require("../storage/dailyLog");
 const { activeLives, saveActiveLives } = require("../storage/activeLives");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts");
+const { getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert } = require("../storage/streaks");
 const { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
+const { computeCurrentStreak, STREAK_MILESTONES } = require("../streakMath");
 const { DAILY_RECAP_HOUR, DAILY_RECAP_COLOR } = require("../config");
 
 // Ambang jumlah penonton buat alert "tembus milestone" - sekali per ambang
@@ -286,6 +289,47 @@ async function maybeSendPublicHeadsUpAlerts(now = new Date()) {
   }
 }
 
+// Saran fitur ke-5 (§10's kelimapuluh+item): LIVE STREAK - dipanggil
+// monitor.js pas sebuah live SELESAI (titik yang SAMA kayak maybeAnnounceNewRecord
+// di atas, cuma buat sesi yang durasinya udah lolos validasi plausible),
+// jadi tanggal hari ini (WIB) UDAH pasti masuk arsip completed di titik ini -
+// beda dari chat/replies.js's replyStreak yang ON-DEMAND (bisa dipanggil
+// KAPAN AJA termasuk pas membernya LAGI live, belum selesai, makanya versi
+// itu perlu isLiveNow, versi ini enggak).
+async function sendStreakMilestoneAlert(memberName, streak) {
+  const payload = {
+    content: `🔥 **${memberName}** lagi live **${streak} hari berturut-turut**! Konsisten banget nih 👏`,
+  };
+  if (await postToWebhook(payload, "Gagal ngirim alert milestone streak:")) {
+    console.log(`Milestone streak ${streak} hari terkirim untuk ${memberName}`);
+  }
+}
+
+async function maybeAnnounceStreakMilestone(username, memberName) {
+  const dates = getDistinctSessionDatesForMember(username);
+  const streak = computeCurrentStreak(dates, getTodayWIB());
+
+  if (streak === 0) {
+    // Keputus - bersihin penanda "udah pernah diumumin" biar streak BARU
+    // yang mulai dari 0 lagi bisa ngelewatin milestone yang SAMA dan tetep
+    // dirayain lagi (lihat komen lengkapnya di storage/streaks.js).
+    clearStreakAlert(username);
+    return;
+  }
+
+  const lastAlerted = getLastAlertedStreak(username);
+  // Milestone TERTINGGI yang udah kelewatan (streak >= milestone) tapi BELUM
+  // pernah diumumin (milestone > lastAlerted) - bukan cuma "streak PERSIS
+  // sama angka milestone", biar streak yang "meloncat" (mis. data direstore/
+  // dihitung ulang) tetep dirayain sekali, bukan diem-diem kelewatan gara-gara
+  // gak PERSIS hinggap di angkanya.
+  const milestone = [...STREAK_MILESTONES].reverse().find((m) => streak >= m && lastAlerted < m);
+  if (!milestone) return;
+
+  setLastAlertedStreak(username, milestone);
+  await sendStreakMilestoneAlert(memberName, streak);
+}
+
 module.exports = {
   maybeAlertViewerMilestone,
   maybeAnnounceNewRecord,
@@ -293,6 +337,7 @@ module.exports = {
   maybeSendWeeklyRecap,
   maybeSendMonthlyRecap,
   maybeSendPublicHeadsUpAlerts,
+  maybeAnnounceStreakMilestone,
   buildDailyRecapPayload,
   buildWeeklyRecapPayload,
   buildMonthlyRecapPayload,

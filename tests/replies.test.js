@@ -56,6 +56,7 @@ const {
   handleRecapMemberModalSubmit,
   tryHandleRecapPageShortcut,
   replyRecapMember,
+  replyStreak,
   extractRecapMemberFragment,
   resolveRecapMember,
   handleRecapMenuButton,
@@ -2213,6 +2214,64 @@ test("replyRecapMember - nge-clear pendingRecapPage lama biar 'y' nyasar dari re
   await replyRecapMember("mrecclear", "c-mrec7", "u-mrec7"); // pending halaman 1/2
   await replyRecapMember("member-yang-gak-pernah-ada", "c-mrec7", "u-mrec7"); // hasil gagal
   assert.equal(await tryHandleRecapPageShortcut("y", "c-mrec7", "u-mrec7"), null);
+});
+
+// ==== Saran fitur ke-5 (§10's kelimapuluh+item): "cok streak <nama>" ====
+function recordConsecutiveDaySessions(name, username, daysAgoList) {
+  const now = Date.now();
+  for (const daysAgo of daysAgoList) {
+    const endedAt = new Date(now - daysAgo * 24 * 60 * 60 * 1000);
+    recordLiveEnded(name, username, new Date(endedAt.getTime() - 60_000), endedAt, 5);
+  }
+  recordLiveCompleted(username, name);
+}
+
+test("replyStreak - 3 hari berturut-turut (termasuk hari ini) -> 'streak 3 hari'", async () => {
+  recordConsecutiveDaySessions("Streakqxa", "jkt48_streakqxa", [0, 1, 2]);
+  const reply = await replyStreak("streakqxa");
+  assert.match(reply, /🔥 \*\*Streakqxa\*\* lagi streak \*\*3 hari\*\* berturut-turut live!/);
+  assert.doesNotMatch(reply, /lagi live sekarang/);
+});
+
+test("replyStreak - member LAGI LIVE SEKARANG (sesi hari ini belum selesai) ikut kehitung, dikasih catatan tambahan", async () => {
+  recordConsecutiveDaySessions("Streakqxb", "jkt48_streakqxb", [1]); // kemarin doang yang UDAH selesai
+  activeLives.set("jkt48_streakqxb", { name: "Streakqxb", username: "jkt48_streakqxb", slug: "s", liveAt: new Date().toISOString() });
+  try {
+    const reply = await replyStreak("streakqxb");
+    assert.match(reply, /lagi streak \*\*2 hari\*\* berturut-turut live \(lagi live sekarang, ikut ke-hitung\)/);
+  } finally {
+    activeLives.delete("jkt48_streakqxb");
+  }
+});
+
+test("replyStreak - dikenal bot (pernah live) tapi streak-nya udah PUTUS (gak ada aktivitas hari ini/kemarin)", async () => {
+  const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+  recordLiveEnded("Streakqxc", "jkt48_streakqxc", new Date(fiveDaysAgo.getTime() - 60_000), fiveDaysAgo, 5);
+  recordLiveCompleted("jkt48_streakqxc", "Streakqxc");
+  const reply = await replyStreak("streakqxc");
+  assert.match(reply, /Cok, \*\*Streakqxc\*\* lagi nggak dalam streak/);
+});
+
+test("replyStreak - ambigu (beberapa member cocok) -> daftar nama, BUKAN pilih sembarang", async () => {
+  recordConsecutiveDaySessions("Streakambigone", "jkt48_streakambigone", [0]);
+  recordConsecutiveDaySessions("Streakambigtwo", "jkt48_streakambigtwo", [0]);
+  const reply = await replyStreak("streakambig");
+  assert.match(reply, /ada beberapa member yang cocok sama "streakambig": Streakambigone, Streakambigtwo/);
+});
+
+test("replyStreak - nama yang gak dikenal bot sama sekali -> lewat describeMissingMember (belum pernah live/gak ketemu)", async () => {
+  const original = global.fetch;
+  try {
+    global.fetch = fakeIdnFetch({ jkt48_streakneverlive: { name: "Streakneverlive JKT48" } });
+    const neverLive = await replyStreak("streakneverlive");
+    assert.match(neverLive, /\*\*Streakneverlive JKT48\*\* belum pernah live.*dicek streak live-nya/);
+
+    global.fetch = fakeIdnFetch({});
+    const notFound = await replyStreak("streaknamagakadasamsek");
+    assert.match(notFound, /gak nemu member JKT48 bernama "streaknamagakadasamsek"/);
+  } finally {
+    global.fetch = original;
+  }
 });
 
 test("replyRecapMenu tombol 'Rekap member' (recap_menu:member) -> munculin modal recap_member_modal:x, BUKAN update/reply", async () => {

@@ -13,6 +13,7 @@ const {
   maybeSendWeeklyRecap,
   maybeSendMonthlyRecap,
   maybeSendPublicHeadsUpAlerts,
+  maybeAnnounceStreakMilestone,
 } = require("./notify/publicAlerts");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
@@ -146,6 +147,12 @@ async function checkLiveMembers() {
                 new Date(),
                 memberData.peakViewCount ?? memberData.viewCount ?? null,
               );
+              // Saran fitur ke-5 (§10's kelimapuluh+item, live streak) -
+              // dicek SETELAH recordLiveEnded (hari ini harus udah masuk
+              // arsip completed dulu sebelum dihitung), dan CUMA buat sesi
+              // yang durasinya udah lolos validasi plausible di atas (sesi
+              // implausible juga gak boleh ikut ngedongkrak/ngerusak streak).
+              await maybeAnnounceStreakMilestone(username, memberData.name);
             } else {
               console.error(
                 `Durasi live ${memberData.name} implausible (${durationMs}ms) - kemungkinan cache activeLives basi (bot sempet mati lama). Sesi ini DIBUANG dari stats/rekap, gak dicatet.`,

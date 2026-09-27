@@ -136,6 +136,18 @@ test("berapa kali <nama> live - dispatch ke replyLiveCount", async () => {
   assert.match(reply, /belum ada catatan live buat "livecountroutertest"/);
 });
 
+// Saran fitur ke-5 (§10's kelimapuluh+item): "cok streak <nama member>".
+test("streak <nama> - dispatch ke replyStreak", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({ errors: [{ message: "User Not found" }] }) });
+  try {
+    const reply = await buildChatReply("cok streak streakroutertest", { authorId: "u-streak-router" });
+    assert.match(reply, /gak nemu member JKT48 bernama "streakroutertest"/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
 test("berapa kali si <nama> live - varian dengan 'si' juga jalan", async () => {
   const reply = await buildChatReply("cok berapa kali si liveCountRoutertest2 live");
   assert.match(reply, /belum ada catatan live buat "livecountroutertest2"/);

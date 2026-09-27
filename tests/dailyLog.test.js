@@ -222,3 +222,32 @@ test("getEarliestSessionDate - tanggal WIB sesi TERTUA di arsip (null kalau arsi
 
   assert.equal(getEarliestSessionDate(), getDateWIB(fiveDaysAgo));
 });
+
+// Saran fitur ke-5 (§10's kelimapuluh+item, live streak) - dasar penghitungan
+// computeCurrentStreak (../streakMath.js).
+test("getDistinctSessionDatesForMember - balikin Set tanggal WIB DISTINCT (2 sesi hari yang sama -> 1 tanggal), per-username, dan bisa dibatesin daysBack", () => {
+  const { getDistinctSessionDatesForMember, recordLiveEnded } = freshDailyLog();
+  const now = Date.now();
+  const today = getDateWIB(new Date(now));
+  const yesterday = getDateWIB(new Date(now - 24 * 60 * 60 * 1000));
+  const tenDaysAgo = new Date(now - 10 * 24 * 60 * 60 * 1000);
+
+  // Nala live 2x hari ini (harus cuma 1 tanggal di hasilnya) + 1x kemarin +
+  // 1x 10 hari lalu (buat nguji daysBack motong yang ini).
+  recordLiveEnded("Nala", "jkt48_streaktest", new Date(now - 3 * 60_000), new Date(now - 2 * 60_000), 5);
+  recordLiveEnded("Nala", "jkt48_streaktest", new Date(now - 2 * 60_000), new Date(now - 1 * 60_000), 5);
+  recordLiveEnded("Nala", "jkt48_streaktest", new Date(`${yesterday}T10:00:00+07:00`), new Date(`${yesterday}T11:00:00+07:00`), 5);
+  recordLiveEnded("Nala", "jkt48_streaktest", new Date(tenDaysAgo.getTime() - 60_000), tenDaysAgo, 5);
+  // Member LAIN gak boleh ikut ke-campur.
+  recordLiveEnded("Levi", "jkt48_streaklain", new Date(now - 2 * 60_000), new Date(now - 1 * 60_000), 5);
+
+  // daysBack default (SESSION_RETENTION_DAYS, 35 hari) - semuanya kebawa.
+  const dates = getDistinctSessionDatesForMember("jkt48_streaktest");
+  assert.deepEqual(dates, new Set([today, yesterday, getDateWIB(tenDaysAgo)]));
+
+  // daysBack sempit (2 hari terakhir) motong yang 10 hari lalu.
+  const datesNarrow = getDistinctSessionDatesForMember("jkt48_streaktest", 2);
+  assert.deepEqual(datesNarrow, new Set([today, yesterday]));
+
+  assert.deepEqual(getDistinctSessionDatesForMember("member-yang-gak-ada"), new Set());
+});

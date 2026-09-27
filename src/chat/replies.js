@@ -19,7 +19,9 @@ const {
   getEarliestSessionDate,
   fetchExternalTodayLiveHistory,
   SESSION_RETENTION_DAYS,
+  getDistinctSessionDatesForMember,
 } = require("../storage/dailyLog");
+const { computeCurrentStreak } = require("../streakMath");
 const { findDurationHistoryByNameFragment, loadDurationHistory, getAverageDuration, getPreviousMaxDuration } = require("../storage/durationHistory");
 const {
   loadLiveCount,
@@ -269,6 +271,7 @@ function replyHelp() {
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
     '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',
+    '- "cok streak <nama member>" - lagi live berapa hari berturut-turut',
     '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
     '- "cok daftar prioritas" - lihat member prioritas',
     '- "cok ingetin <nama member>" - kamu di-tag kalau dia mulai live, ATAU kalau ada tanda-tanda bentar lagi live (perkiraan dari pola jam biasanya dia live, kalau histori-nya udah cukup)',
@@ -1372,6 +1375,34 @@ async function replyRecapMember(fragment, channelId, authorId) {
   return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
 }
 
+// Saran fitur ke-5 (§10's kelimapuluh+item): "cok streak <nama member>" -
+// berapa hari BERTURUT-TURUT (WIB) member itu punya live. Resolusi member-nya
+// SAMA kayak "cok rekap <nama>" (resolveRecapMember) - butuh minimal 1 live
+// yang TERCATAT (selesai ATAU lagi berlangsung), bukan cuma
+// findLiveCountByNameFragment doang, biar member yang lagi live PERTAMA
+// KALINYA (belum pernah selesai sekalipun) tetep kejawab bener soal
+// streak-nya, bukan disangka "gak ketemu".
+async function replyStreak(fragment) {
+  const shown = (fragment || "").trim();
+  const resolved = resolveRecapMember(shown);
+  if (resolved.status === "ambiguous") {
+    return `Cok, ada beberapa member yang cocok sama "${shown}": ${resolved.names.join(", ")}. Ketik nama yang lebih lengkap ya.`;
+  }
+  if (resolved.status === "none") {
+    return await describeMissingMember(shown, "dicek streak live-nya");
+  }
+
+  const dates = getDistinctSessionDatesForMember(resolved.username);
+  const isLiveNow = activeLives.has(resolved.username);
+  const streak = computeCurrentStreak(dates, getTodayWIB(), isLiveNow);
+
+  if (streak === 0) {
+    return `Cok, **${resolved.name}** lagi nggak dalam streak (kemarin maupun hari ini belum ada live yang kecatet).`;
+  }
+  const liveNowNote = isLiveNow ? " (lagi live sekarang, ikut ke-hitung)" : "";
+  return `🔥 **${resolved.name}** lagi streak **${streak} hari** berturut-turut live${liveNowNote}! _(Dihitung dari arsip ${SESSION_RETENTION_DAYS} hari terakhir.)_`;
+}
+
 // Submit modal "Rekap member" (dibuka tombol menu "recap_menu:member") -
 // NGE-EDIT pesan menu-nya jadi tabel rekap member (interaction.update, bukan
 // pesan baru), atau jadi pesan gagal + menu lagi biar bisa coba nama lain.
@@ -2198,6 +2229,7 @@ module.exports = {
   handleRecapSearchModalSubmit,
   handleRecapMemberModalSubmit,
   replyRecapMember,
+  replyStreak,
   extractRecapMemberFragment,
   resolveRecapMember,
   handleRecapJumpModalSubmit,

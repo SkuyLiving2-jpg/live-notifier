@@ -46,6 +46,7 @@ const {
   handleRecapSearchModalSubmit,
   handleRecapMemberModalSubmit,
   replyRecapMember,
+  replyStreak,
   extractRecapMemberFragment,
   handleRecapJumpModalSubmit,
   handleRecapMenuButton,
@@ -174,6 +175,13 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const statsMatch = text.match(/stat(?:s|istik)\s+(.+)/);
   if (statsMatch) {
     return replyMemberStats(statsMatch[1]);
+  }
+
+  // Saran fitur ke-5 (§10's kelimapuluh+item): "cok streak <nama member>" -
+  // berapa hari berturut-turut dia punya live.
+  const streakMatch = text.match(/streak\s+(.+)/);
+  if (streakMatch) {
+    return await replyStreak(streakMatch[1]);
   }
 
   // Dua cara natural buat nanya total hitungan live, sama pola dual-arah
