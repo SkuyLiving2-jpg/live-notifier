@@ -2,6 +2,7 @@ const path = require("path");
 const { CACHE_DIR } = require("../config");
 const { createJsonStore } = require("./jsonStore");
 const { matchesNameFragment } = require("../utils");
+const { resolveAliasInFragment } = require("./aliases");
 
 // Snapshot top-gifter: username -> { name, gifters, checkedAt }. Bot ini
 // SENDIRI nggak pernah manggil API top-gifter IDN (itu butuh login pribadi,
@@ -27,7 +28,9 @@ function saveGifterSnapshot(snapshot) {
 // gifter (bukan di activeLives) - member yang MASIH live maupun yang udah
 // kelar tetap bisa ketemu, soalnya ini data historis/snapshot.
 function findGifterSnapshotByNameFragment(fragment) {
-  const needle = (fragment || "").trim().toLowerCase();
+  // Saran fitur ke-5 (§10's kelimapuluh item) - lihat komentarnya di
+  // activeLives.js's findMemberByNameFragment.
+  const needle = resolveAliasInFragment(fragment);
   if (!needle) return null;
 
   const { members } = loadGifterSnapshot();

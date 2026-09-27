@@ -2,6 +2,7 @@ const path = require("path");
 const { CACHE_DIR } = require("../config");
 const { createJsonStore } = require("./jsonStore");
 const { matchesNameFragment } = require("../utils");
+const { resolveAliasInFragment } = require("./aliases");
 
 // Riwayat durasi live per username (dalam ms), disimpan biar bisa dipakai
 // ngitung rata-rata durasi live seseorang - dasar buat nebak "kemungkinan
@@ -61,7 +62,9 @@ function getPreviousMaxDuration(durationHistory, username) {
 }
 
 function findDurationHistoryByNameFragment(fragment) {
-  const needle = (fragment || "").trim().toLowerCase();
+  // Saran fitur ke-5 (§10's kelimapuluh item) - lihat komentarnya di
+  // activeLives.js's findMemberByNameFragment.
+  const needle = resolveAliasInFragment(fragment);
   if (!needle) return null;
 
   const history = loadDurationHistory();

@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { CACHE_DIR } = require("../config");
 const { matchesNameFragment } = require("../utils");
+const { resolveAliasInFragment } = require("./aliases");
 
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug, ... }
 // Disimpan juga ke file (CACHE_FILE) biar kalau proses restart (crash, atau
@@ -44,7 +45,13 @@ function getSortedActiveLives() {
 // bukan nama lengkap persis. Jadi cocokin ke kata pertama dari nama-nya,
 // bukan nyari nama lengkap sebagai substring persis (itu penyebab bug-nya).
 function findMemberByNameFragment(fragment) {
-  const needle = (fragment || "").trim().toLowerCase();
+  // resolveAliasInFragment (saran fitur ke-5, §10's kelimapuluh item)
+  // ngegantiin normalisasi lowercase+trim polos yang tadinya di sini -
+  // sekaligus nyubstitusi tiap kata yang cocok alias/panggilan yang owner
+  // udah daftarin (storage/aliases.js) ke nama aslinya, SEBELUM masuk ke
+  // matchesNameFragment di bawah. Kosong/gak ada alias sama sekali (default)
+  // hasilnya persis sama kayak sebelumnya, gak ada bedanya.
+  const needle = resolveAliasInFragment(fragment);
   if (!needle) return null;
 
   for (const entry of activeLives.values()) {

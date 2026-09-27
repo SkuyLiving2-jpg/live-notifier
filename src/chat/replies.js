@@ -9,7 +9,7 @@ const {
   AttachmentBuilder,
 } = require("discord.js");
 const { deleteInteractionMessage } = require("./interactionHelpers");
-const { activeLives, getSortedActiveLives } = require("../storage/activeLives");
+const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
 const {
   getCompletedSessionsToday,
   getCompletedSessionsForDate,
@@ -31,6 +31,7 @@ const {
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
+const { loadAliases, addAlias, removeAlias, resolveAliasInFragment } = require("../storage/aliases");
 const { fetchPublicProfileByUsername, isJkt48Member } = require("../idnApi");
 const { computeSchedulePattern } = require("../schedulePattern");
 const { PRIORITY_PING_USER_ID, DAILY_RECAP_COLOR } = require("../config");
@@ -273,6 +274,7 @@ function replyHelp() {
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
     '- "cok reminder aku" - lihat kamu subscribe reminder siapa aja',
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
+    '- "cok daftar alias" - lihat panggilan/nickname yang udah kedaftar. (khusus owner) "cok tambah alias <alias> = <nama asli>" / "cok hapus alias <alias>" - biar panggilan yang beda dari nama akun IDN-nya tetep kekenal pas dicari',
     "",
     'Kalau abis muncul menu tombol, kamu juga bisa cukup balas angkanya doang (misal "1" atau "4 Nala") tanpa perlu klik.',
     '💡 Notif kerasa suka telat/gak keluar? Cek setting notifikasi channel-nya - klik nama channel > Notification Settings, pastiin di "All Messages" (bukan "Only @mentions"), soalnya notif live biasa emang gak nge-tag siapa-siapa kecuali kamu subscribe ("cok ingetin <nama>").',
@@ -1185,7 +1187,12 @@ async function handleRecapSearchModalSubmit(interaction) {
   const query = interaction.fields.getTextInputValue("member_name").trim();
 
   const sessions = getSessionsForRange(rangeDays);
-  const needle = query.toLowerCase();
+  // resolveAliasInFragment (§10's kelimapuluh item) - ini nge-loop
+  // matchesNameFragment MANUAL (bukan lewat salah satu find*ByNameFragment
+  // di storage/), jadi alias-nya harus diresolve EKSPLISIT di sini juga,
+  // biar "🔍 Cari member" di tabel rekap ikut ngenalin panggilan yang
+  // owner udah daftarin, konsisten sama pencarian di tempat lain.
+  const needle = resolveAliasInFragment(query);
   const matched = sessions.filter((s) => s.name && matchesNameFragment(needle, s.name.split(/[\s|]+/)[0].toLowerCase()));
 
   const components = buildKeepOrDeleteRecapComponents(interaction.message?.id);
@@ -1287,7 +1294,12 @@ function firstNameOf(name) {
 // - jangan asal pilih yang pertama). "none" -> pemanggil nanya ke IDN lewat
 // describeMissingMember (belum pernah live vs gak ada sama sekali).
 function resolveRecapMember(fragment) {
-  const needle = normalizeMemberFragment(fragment);
+  // resolveAliasInFragment (§10's kelimapuluh item) DULUAN, baru
+  // normalizeMemberFragment - searchLiveCountByNameFragment di bawah udah
+  // otomatis alias-aware sendiri (resolusinya ada DI DALEM fungsi itu), tapi
+  // loop activeLives manual tepat di bawahnya butuh needle yang UDAH
+  // di-resolve secara eksplisit juga.
+  const needle = resolveAliasInFragment(normalizeMemberFragment(fragment));
   if (!needle) return { status: "none" };
 
   const candidates = new Map();
@@ -1788,6 +1800,26 @@ function sameMemberMessage(fragmentA, fragmentB) {
   return `Cok, "${fragmentA.trim()}" sama "${fragmentB.trim()}" itu member yang sama, gak bisa dibandingin sama diri sendiri. Pilih dua member yang BEDA ya.`;
 }
 
+// Gerbang "ini beneran nama member?" - dipindah ke sini (§10's kelimapuluh
+// item) dari chat/router.js, yang tadinya nyimpen definisi ini sendiri.
+// Dipindah biar bisa dipakai DUA tempat: router.js's bare-form compare gate
+// ("<nama> dan <nama>" polos, lihat komennya di sana) DAN handleAddAlias di
+// bawah (nolak alias yang kebetulan nabrak nama member yang UDAH dikenal -
+// lihat komennya). router.js require dari sini (chat/replies.js), bukan
+// sebaliknya, jadi naronya di sini (bukan balik ke router.js) gak
+// ngebalik arah dependency yang udah ada.
+//
+// Cek LiveCount/activeLives/durationHistory (lewat findLiveCountByNameFragment
+// dkk) OTOMATIS ikut ngenalin alias (storage/aliases.js's resolveAliasInFragment
+// dipanggil DI DALEM tiap fungsi itu) - cek prioritas di bawah ini yang perlu
+// resolveAliasInFragment SECARA EKSPLISIT, soalnya containsWholeWord manggil
+// `fragment` mentah, bukan lewat salah satu fungsi find*ByNameFragment itu.
+function isKnownMemberFragment(fragment) {
+  if (findLiveCountByNameFragment(fragment) || findMemberByNameFragment(fragment) || findDurationHistoryByNameFragment(fragment)) return true;
+  const resolved = resolveAliasInFragment(fragment);
+  return getAllPriorityMembers().some((p) => containsWholeWord(resolved, p.keyword));
+}
+
 // Nama yang gak ada di live-count.json (belum pernah ke-track live-nya) BUKAN
 // berarti "member itu gak ada" - Kimmy misalnya beneran member JKT48 dengan
 // akun IDN (jkt48_kimmy), cuma belum pernah live semenjak bot ini mulai
@@ -1799,7 +1831,13 @@ function sameMemberMessage(fragmentA, fragmentB) {
 // - IDN gagal dihubungi     -> bilang gak bisa ngecek, BUKAN nebak salah satunya
 async function describeMissingMember(fragment, purpose = "dibandingin") {
   const shown = (fragment || "").trim();
-  const token = normalizeMemberFragment(shown).split(" ")[0];
+  // `shown` (bukan hasil alias) yang ditampilin di pesan di bawah - biar user
+  // liat persis apa yang dia ketik. resolveAliasInFragment (§10's kelimapuluh
+  // item) cuma dipakai buat NENTUIN username IDN yang bakal dicek (token) -
+  // tanpa ini, alias yang UDAH kedaftar (mis. "kimkim" -> "kimmy") bakal salah
+  // nyoba `jkt48_kimkim` (gak ada) alih-alih `jkt48_kimmy` yang beneran ada,
+  // jadi ngasih tau "gak nemu" padahal membernya jelas ada di bawah alias itu.
+  const token = normalizeMemberFragment(resolveAliasInFragment(shown)).split(" ")[0];
   if (!token || token.length < 2) return `Cok, ketik nama membernya yang jelas ya - "${shown}" terlalu pendek/gak valid.`;
 
   try {
@@ -1945,6 +1983,70 @@ function handleRemovePriority(nameFragment, authorId) {
   return `✅ "${name}" dihapus dari daftar prioritas.`;
 }
 
+// Saran fitur ke-5 (§10's kelimapuluh item): alias/panggilan buat pencarian
+// nama member ("cok tambah alias <alias> = <nama asli>", "buat"/"untuk"
+// juga diterima gantiin "="). Owner-gated (sama kayak prioritas, BUKAN
+// terbuka kayak subscribe) - alias yang salah/nyasar bisa DIEM-DIEM ngerusak
+// pencarian nama itu buat SEMUA ORANG (bukan cuma yang nambahin), jadi bukan
+// resiko yang aman dibuka ke siapa aja.
+async function handleAddAlias(aliasFragment, targetFragment, authorId) {
+  if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ubah daftar alias.";
+
+  const alias = (aliasFragment || "").trim();
+  const target = (targetFragment || "").trim();
+  if (!alias || !target) return 'Format-nya "cok tambah alias <alias> = <nama asli>" (atau "buat"/"untuk" gantiin "=").';
+
+  // Alias gak boleh nabrak nama yang UDAH dikenal (nama asli member manapun)
+  // - kalau dibolehin, alias itu bakal DIEM-DIEM nge-shadow lookup buat nama
+  // yang sebenernya udah kepake (mis. alias "nala" ke member lain bakal
+  // bikin ketikan "nala" polos ke-alihin, bukan tetep nunjuk ke Nala asli).
+  if (isKnownMemberFragment(alias)) {
+    return `Cok, "${alias}" udah dikenal sebagai nama member sendiri - gak bisa dijadiin alias ke member lain.`;
+  }
+
+  // Target-nya divalidasi LANGSUNG ke IDN (bukan cuma isKnownMemberFragment,
+  // yang butuh histori yang UDAH TERCATAT bot) - sama alasan describeMissingMember
+  // di atas: member yang REAL tapi belum pernah live sekalipun (kayak Kimmy)
+  // tetep harus bisa didaftarin alias-nya dari awal, gak perlu nunggu dia
+  // live dulu baru bisa dikasih panggilan.
+  const targetToken = normalizeMemberFragment(target).split(" ")[0];
+  if (!targetToken || targetToken.length < 2) return `Cok, "${target}" bukan nama member yang valid.`;
+  try {
+    const profile = await fetchPublicProfileByUsername(`jkt48_${targetToken}`);
+    if (!profile || !isJkt48Member(profile)) {
+      return `Cok, "${target}" gak ketemu sebagai member JKT48 di IDN - cek lagi ejaannya.`;
+    }
+  } catch (error) {
+    console.error(`Gagal ngecek target alias "${target}" ke IDN:`, error.message);
+    return `Cok, bot lagi gak bisa ngecek ke IDN buat mastiin "${target}" member beneran atau bukan. Coba lagi bentar.`;
+  }
+
+  const result = addAlias(alias, targetToken);
+  if (!result.ok && result.reason === "too_short") return "Alias-nya kependekan, minimal 2 huruf ya.";
+  if (!result.ok) return "Gagal nambahin alias, coba lagi.";
+
+  const replacedNote = result.previous ? ` (gantiin target lama "${result.previous}")` : "";
+  return `✅ Alias "${alias}" -> "${targetToken}" ditambahin${replacedNote}. Sekarang ketik "${alias}" bakal ke-anggep sama kayak "${targetToken}".`;
+}
+
+function handleRemoveAlias(aliasFragment, authorId) {
+  if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ubah daftar alias.";
+  const alias = (aliasFragment || "").trim();
+  const result = removeAlias(alias);
+  if (!result.ok) return `Alias "${alias}" gak ketemu.`;
+  return `✅ Alias "${alias}" dihapus.`;
+}
+
+// Siapa aja boleh liat daftar alias yang ada (read-only, gak ada resiko) -
+// sama pola aksesnya kayak replyPriorityList.
+function replyAliasList() {
+  const map = loadAliases();
+  const entries = Object.entries(map).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return "Cok, belum ada alias yang kedaftar.";
+  const lines = entries.map(([alias, target]) => `- "${alias}" -> "${target}"`);
+  return `📛 Daftar alias:\n${lines.join("\n")}`;
+}
+
 // Beda dari priority list (khusus owner), subscribe ini SIAPA AJA boleh -
 // personal reminder buat di-tag pas member manapun mulai live.
 function handleSubscribe(rawName, authorId) {
@@ -2025,6 +2127,10 @@ module.exports = {
   isOwner,
   handleAddPriority,
   handleRemovePriority,
+  isKnownMemberFragment,
+  handleAddAlias,
+  handleRemoveAlias,
+  replyAliasList,
   handleSubscribe,
   handleUnsubscribe,
 };

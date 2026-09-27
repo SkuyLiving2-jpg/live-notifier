@@ -1,7 +1,5 @@
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
-const { findLiveCountByNameFragment } = require("../storage/liveCount");
-const { getAllPriorityMembers } = require("../priority");
 const { getUsernameForChannel } = require("../storage/channelRouting");
 const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
 const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
@@ -54,6 +52,10 @@ const {
   handleRecapMonthSelect,
   handleAddPriority,
   handleRemovePriority,
+  isKnownMemberFragment,
+  handleAddAlias,
+  handleRemoveAlias,
+  replyAliasList,
   handleSubscribe,
   handleUnsubscribe,
 } = require("./replies");
@@ -69,17 +71,6 @@ const CHAT_WAKE_WORDS = ["cok"];
 // bot" kalau ada tanda tanya atau kata tanya juga di pesannya.
 const TOPIC_WORDS = ["live"];
 const QUESTION_HINTS = ["?", "siapa", "apa", "gimana", "kapan", "berapa"];
-
-// Gerbang "ini beneran nama member?" buat bentuk polos "<nama> dan <nama>" -
-// dulu cuma live-count.json, jadi begitu file itu kosong/ke-reset (mis. data
-// gak ada di Volume Railway) "nala dan levi" gak kedeteksi sama sekali dan
-// jatuh ke jawaban ngawur. Sekarang semua sumber yang tau nama member dicek:
-// live-count, yang lagi live, riwayat durasi, dan daftar prioritas (yang
-// ada di config, jadi gak tergantung data yang tersimpan).
-function isKnownMemberFragment(fragment) {
-  if (findLiveCountByNameFragment(fragment) || findMemberByNameFragment(fragment) || findDurationHistoryByNameFragment(fragment)) return true;
-  return getAllPriorityMembers().some((p) => containsWholeWord(fragment, p.keyword));
-}
 
 async function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
@@ -136,6 +127,27 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const removePriorityMatch = text.match(/hapus\s+prioritas\s+(.+)/);
   if (removePriorityMatch) {
     return handleRemovePriority(removePriorityMatch[1], authorId);
+  }
+
+  // Saran fitur ke-5 (§10's kelimapuluh item): "cok tambah alias <alias> =
+  // <nama asli>" - pemisahnya "=", "untuk", atau "buat" (sama filosofi
+  // multi-pemisah kayak compareMatch's "dan"/"&" di bawah). Dicek sebelum
+  // "hapus alias"/"daftar alias" di bawahnya, dan gak nabrak "tambah
+  // prioritas"/"hapus prioritas" di atas - kata kunci "alias" vs "prioritas"
+  // beda persis setelah "tambah(in/kan)?"/"hapus", jadi dua-duanya gak
+  // pernah saling ke-tangkep.
+  const addAliasMatch = text.match(/tambah(?:in|kan)?\s+alias\s+(.+?)\s*(?:=|untuk|buat)\s*(.+)/);
+  if (addAliasMatch) {
+    return await handleAddAlias(addAliasMatch[1], addAliasMatch[2], authorId);
+  }
+
+  const removeAliasMatch = text.match(/hapus\s+alias\s+(.+)/);
+  if (removeAliasMatch) {
+    return handleRemoveAlias(removeAliasMatch[1], authorId);
+  }
+
+  if (containsWholeWord(text, "alias") && (containsWholeWord(text, "daftar") || containsWholeWord(text, "list"))) {
+    return replyAliasList();
   }
 
   // Dicek sebelum unsubscribeMatch/subscribeMatch di bawah - "reminder"

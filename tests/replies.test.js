@@ -15,6 +15,7 @@ const { activeLives } = require("../src/storage/activeLives");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
 const { saveDurationHistory } = require("../src/storage/durationHistory");
 const { recordLiveCompleted, loadLiveCount, saveLiveCount } = require("../src/storage/liveCount");
+const { addAlias, loadAliases } = require("../src/storage/aliases");
 const {
   buildRecapTablePage,
   buildRecapPageBlock,
@@ -45,6 +46,10 @@ const {
   isOwner,
   handleAddPriority,
   handleRemovePriority,
+  isKnownMemberFragment,
+  handleAddAlias,
+  handleRemoveAlias,
+  replyAliasList,
   handleRecapNavButton,
   handleRecapSearchModalSubmit,
   handleRecapMemberModalSubmit,
@@ -680,6 +685,78 @@ test("isOwner / handleAddPriority / handleRemovePriority - gated ke PRIORITY_PIN
   assert.match(handleAddPriority("repliestestmember", "bukan-owner"), /cuma owner yang boleh/);
   assert.match(handleAddPriority("repliestestmember", "owner-id-replies-test"), /ditambahin ke daftar prioritas/);
   assert.match(handleRemovePriority("repliestestmember", "owner-id-replies-test"), /dihapus dari daftar prioritas/);
+});
+
+// ==== Saran fitur ke-5 (§10's kelimapuluh item): alias/panggilan member ====
+
+test("handleAddAlias - owner-gated, dan nolak alias yang nabrak nama member yang UDAH dikenal (shadow protection)", async () => {
+  recordLiveCompleted("jkt48_aliasshadow", "Aliasshadow");
+
+  assert.match(await handleAddAlias("aliaskimkim", "aliasshadow", "bukan-owner"), /cuma owner yang boleh/);
+  assert.match(await handleAddAlias("aliasshadow", "levi", "owner-id-replies-test"), /udah dikenal sebagai nama member sendiri/);
+});
+
+test("handleAddAlias - target yang gak ketemu di IDN ditolak, gak ke-save", async () => {
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({}); // semua username balikin "not found"
+  try {
+    const reply = await handleAddAlias("aliasgakada", "membergakadasamsek", "owner-id-replies-test");
+    assert.match(reply, /gak ketemu sebagai member JKT48/);
+    assert.equal(loadAliases().aliasgakada, undefined);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("handleAddAlias - sukses (target divalidasi ke IDN), bisa nimpa target lama, dilist, dan dihapus", async () => {
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({ jkt48_kimkimtarget: { name: "Kimkimtarget JKT48" } });
+  try {
+    const reply = await handleAddAlias("panggilankimkim", "kimkimtarget", "owner-id-replies-test");
+    assert.match(reply, /Alias "panggilankimkim" -> "kimkimtarget" ditambahin/);
+    assert.match(replyAliasList(), /"panggilankimkim" -> "kimkimtarget"/);
+
+    global.fetch = fakeIdnFetch({ jkt48_targetbaru: { name: "Targetbaru JKT48" } });
+    const replaced = await handleAddAlias("panggilankimkim", "targetbaru", "owner-id-replies-test");
+    assert.match(replaced, /gantiin target lama "kimkimtarget"/);
+
+    assert.match(handleRemoveAlias("panggilankimkim", "bukan-owner"), /cuma owner yang boleh/);
+    assert.match(handleRemoveAlias("panggilankimkim", "owner-id-replies-test"), /"panggilankimkim" dihapus/);
+    assert.match(handleRemoveAlias("panggilankimkim", "owner-id-replies-test"), /gak ketemu/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+// Bukti end-to-end: sekali alias kedaftar, SEMUA find*ByNameFragment yang
+// dipanggil lewat reply biasa (bukan cuma resolveAliasInFragment-nya
+// sendiri) otomatis ikut ngenalin panggilan itu, tanpa perlu ubah apapun di
+// masing-masing reply function-nya.
+test("alias kedaftar -> replyLiveCount (findLiveCountByNameFragment) ngenalin panggilan itu, bukan cuma nama aslinya", () => {
+  recordLiveCompleted("jkt48_aliastarget1", "Aliastarget1");
+  addAlias("panggilansatu", "aliastarget1");
+
+  const reply = replyLiveCount("panggilansatu");
+  assert.match(reply, /\*\*Aliastarget1\*\* udah live \*\*1x\*\*/);
+});
+
+test("alias buat member yang BELUM PERNAH live -> describeMissingMember tetep ngenalin lewat alias (bukan salah nyoba username dari alias-nya sendiri)", async () => {
+  const original = global.fetch;
+  global.fetch = fakeIdnFetch({ jkt48_belumlivetarget: { name: "Belumlivetarget JKT48" } });
+  try {
+    addAlias("panggilanbelumlive", "belumlivetarget");
+    const reply = await describeMissingMember("panggilanbelumlive");
+    assert.match(reply, /\*\*Belumlivetarget JKT48\*\* belum pernah live/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("isKnownMemberFragment - dipindah ke replies.js, tetep ngenalin live-count/activeLives/durationHistory/prioritas kayak sebelumnya", () => {
+  recordLiveCompleted("jkt48_isknowntest", "Isknowntest");
+  assert.equal(isKnownMemberFragment("isknowntest"), true);
+  assert.equal(isKnownMemberFragment("nala"), true); // member prioritas dari config, gak butuh data tersimpan
+  assert.equal(isKnownMemberFragment("member-yang-beneran-gak-ada-sama-sekali"), false);
 });
 
 test("replyRecapRange - belum ada live yang kecatet dalam rentang itu", async () => {

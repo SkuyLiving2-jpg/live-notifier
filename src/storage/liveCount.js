@@ -2,6 +2,7 @@ const path = require("path");
 const { CACHE_DIR } = require("../config");
 const { createJsonStore } = require("./jsonStore");
 const { matchesNameFragment } = require("../utils");
+const { resolveAliasInFragment } = require("./aliases");
 
 // Total berapa kali tiap member SELESAI live semenjak bot ini pertama kali
 // jalan - append-only, GAK PERNAH di-prune/reset (beda sama
@@ -78,7 +79,9 @@ function getLiveCountLeaderboard(limit = 10) {
 }
 
 function findLiveCountByNameFragment(fragment) {
-  const needle = (fragment || "").trim().toLowerCase();
+  // Saran fitur ke-5 (§10's kelimapuluh item) - lihat komentarnya di
+  // activeLives.js's findMemberByNameFragment.
+  const needle = resolveAliasInFragment(fragment);
   if (!needle) return null;
 
   const data = loadLiveCount();
@@ -100,7 +103,9 @@ function findLiveCountByNameFragment(fragment) {
 // Object.entries (yang gak dijamin match paling relevan). Diurutin
 // alfabetis by nama biar dropdown-nya rapi/konsisten.
 function searchLiveCountByNameFragment(fragment) {
-  const needle = (fragment || "").trim().toLowerCase();
+  // Saran fitur ke-5 (§10's kelimapuluh item) - lihat komentarnya di
+  // activeLives.js's findMemberByNameFragment.
+  const needle = resolveAliasInFragment(fragment);
   if (!needle) return [];
 
   const data = loadLiveCount();

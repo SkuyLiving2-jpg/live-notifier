@@ -67,6 +67,65 @@ test("tambah prioritas - owner boleh, non-owner ditolak", async () => {
   assert.match(asOther, /cuma owner yang boleh/);
 });
 
+// Saran fitur ke-5 (§10's kelimapuluh item): "cok tambah alias <alias> =
+// <nama asli>" (dan variasi pemisah "buat"/"untuk"). fetch dipalsuin di sini
+// (bukan pakai withFakeIdn yang SELALU balikin profil null) soalnya
+// handleAddAlias butuh target-nya BENERAN ketemu di IDN dulu.
+test("tambah alias - owner boleh (semua pemisah '=' / 'buat' / 'untuk'), non-owner ditolak, dan gak nabrak 'tambah prioritas'", async () => {
+  recordLiveCompleted("jkt48_aliasroutertarget", "Aliasroutertarget");
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    const { variables } = JSON.parse(options.body);
+    if (variables.username !== "jkt48_aliasroutertarget") return { ok: true, json: async () => ({ errors: [{ message: "User Not found" }] }) };
+    return {
+      ok: true,
+      json: async () => ({ data: { getPublicProfileByUsername: { username: variables.username, name: "Aliasroutertarget JKT48" } } }),
+    };
+  };
+  try {
+    const asOther = await buildChatReply("cok tambah alias arttest1 = aliasroutertarget", { authorId: "bukan-owner" });
+    assert.match(asOther, /cuma owner yang boleh/);
+
+    for (const [i, sep] of ["=", "buat", "untuk"].entries()) {
+      const reply = await buildChatReply(`cok tambah alias arttest${i} ${sep} aliasroutertarget`, { authorId: OWNER });
+      assert.match(reply, /ditambahin/, sep);
+    }
+
+    // Gak salah ke-tangkep sama regex "tambah prioritas" (beda kata kunci)
+    const reply = await buildChatReply("cok tambah prioritas anotherprioritytest", { authorId: OWNER });
+    assert.match(reply, /ditambahin ke daftar prioritas/);
+    assert.doesNotMatch(reply, /Alias/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("hapus alias / daftar alias - dispatch ke handleRemoveAlias/replyAliasList", async () => {
+  recordLiveCompleted("jkt48_hapusaliastarget", "Hapusaliastarget");
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    const { variables } = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({ data: { getPublicProfileByUsername: { username: variables.username, name: "Hapusaliastarget JKT48" } } }),
+    };
+  };
+  try {
+    await buildChatReply("cok tambah alias hapusaliastest = hapusaliastarget", { authorId: OWNER });
+
+    const listed = await buildChatReply("cok daftar alias");
+    assert.match(listed, /"hapusaliastest" -> "hapusaliastarget"/);
+
+    const asOther = await buildChatReply("cok hapus alias hapusaliastest", { authorId: "bukan-owner" });
+    assert.match(asOther, /cuma owner yang boleh/);
+
+    const removed = await buildChatReply("cok hapus alias hapusaliastest", { authorId: OWNER });
+    assert.match(removed, /"hapusaliastest" dihapus/);
+  } finally {
+    global.fetch = original;
+  }
+});
+
 test("stats <nama> - dispatch ke replyMemberStats", async () => {
   const reply = await buildChatReply("cok stats statstestmember");
   assert.match(reply, /belum ada data riwayat live buat "statstestmember"/);
