@@ -13,6 +13,9 @@ const {
   replyTodayRecapSoFar,
   replyMemberNotFound,
   replyGifterSnapshotByUsername,
+  replyLongestNotLiveLeaderboard,
+  replyAliasList,
+  replyHelp,
 } = require("./replies");
 
 // "channelId:authorId" -> kapan terakhir menu fallback ditampilin buat orang
@@ -26,7 +29,9 @@ const {
 // dibaca di handleFallbackMenuButton(). Discord batesin maksimal 5 tombol
 // per baris, jadi 9 pilihan dipecah jadi 2 baris (5 + 4) - baris kedua
 // (6-9) masih nyisa 1 slot, jadi tombol "Tutup" (di bawah) nempel di situ,
-// tetep 2 baris, gak perlu baris ketiga.
+// gak perlu baris ketiga KHUSUS buat "Tutup" doang. Baris ketiga yang
+// BENERAN ada sekarang (lihat komen di bawah) isinya bukan lanjutan 1-9,
+// jadi penomorannya gak kesentuh sama sekali.
 //
 // "Tutup" di sini ("fallback_menu:delete") beda customId dari "Tutup" yang
 // udah ada di buildFallbackPickActionRow ("fallback_menu:close", nempel di
@@ -35,6 +40,25 @@ const {
 // thirty-fourth/thirty-fifth item): pesannya BENERAN DIHAPUS, bukan diedit
 // jadi teks dismiss - dianggep kayak gak pernah ada. Lihat
 // handleFallbackMenuButton's "delete"/"close" branch (digabung jadi satu).
+//
+// BARIS KETIGA (owner minta, "gimana caranya user baru bisa tau fitur-fitur
+// yang masih keyword-only kayak alias/streak/bandingin/dll"): menu 9-opsi
+// ini SATU-SATUNYA titik yang hampir semua orang lihat kalau bot-nya gak
+// ngerti pesan mereka - fitur yang baru DITAMBAH (§10's kelimapuluh+item
+// dst) gak pernah nongol di situ sama sekali, cuma kesebut di teks "cok
+// bantuan" yang gak ada yang tau harus ngetik. customId-nya SENGAJA gak ikut
+// skema penomoran 1-9 (bukan "fallback_menu:10"/"11") - biar gak perlu
+// nambahin lagi ke shortcut ketik-angka (pendingState.js's tryHandleMenuShortcut,
+// yang regexnya eksplisit cuma ngenalin 1-9), sama kelas "utility button"
+// kayak "Tutup"/"Kembali" yang emang dari awal cuma bisa diklik.
+// - "😴 Paling lama gak live" & "📖 Daftar alias": dua fitur baru yang
+//   TANPA parameter (gak perlu nanya nama dulu kayak opsi 4/9), jadi bisa
+//   langsung jawab di tempat, sama pola-nya kayak opsi 3/5/6 yang udah ada.
+// - "❓ Fitur lainnya": nunjukkin replyHelp() (daftar LENGKAP semua command,
+//   termasuk yang butuh nama kayak "cok streak <nama>"/"cok bandingin A,
+//   B, dan C"/"cok tambah alias") di tempat yang sama (in-place edit, sama
+//   pola-nya kayak semua tombol lain di bot ini) - jadi user baru gak perlu
+//   tau/ngetik "cok bantuan" sendiri, cukup klik.
 function buildFallbackMenuComponents() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("fallback_menu:1").setLabel("1. Siapa yang live").setStyle(ButtonStyle.Primary),
@@ -50,7 +74,12 @@ function buildFallbackMenuComponents() {
     new ButtonBuilder().setCustomId("fallback_menu:9").setLabel("9. Cek top gifter").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("fallback_menu:delete").setLabel("Tutup").setStyle(ButtonStyle.Danger),
   );
-  return [row1, row2];
+  const row3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("fallback_menu:notlive").setLabel("😴 Paling lama gak live").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("fallback_menu:aliaslist").setLabel("📖 Daftar alias").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("fallback_menu:more").setLabel("❓ Fitur lainnya").setStyle(ButtonStyle.Primary),
+  );
+  return [row1, row2, row3];
 }
 
 // Baris tombol "Tutup"/"Kembali" yang nempel DI BAWAH dropdown pilih
@@ -92,7 +121,7 @@ function buildFallbackPickActionRow() {
 // (buat yang gak bisa klik tombol) dan kontak owner dipindah ke
 // replyHelp() - orang yang emang nyari itu biasanya nanya "cok bantuan" duluan.
 function replyFallbackMenu() {
-  const content = `Halo, selamat ${getGreeting()}! Klik salah satu di bawah, atau tanya "cok bantuan" buat command lengkapnya.`;
+  const content = `Halo, selamat ${getGreeting()}! Klik salah satu di bawah - ada juga tombol "❓ Fitur lainnya" buat lihat command lengkapnya (gak perlu ngetik "cok bantuan" sendiri).`;
   return { content, components: buildFallbackMenuComponents() };
 }
 
@@ -353,6 +382,32 @@ async function handleFallbackMenuButton(interaction) {
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
     await interaction.update(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickActionRow()] }));
+    return;
+  }
+
+  // Baris ketiga (owner minta, biar fitur-fitur baru yang masih keyword-only
+  // kekenal user baru - lihat komen panjang di buildFallbackMenuComponents).
+  // "notlive"/"aliaslist" gak butuh nama/parameter apapun, jadi langsung
+  // jawab di tempat - SAMA POLA persis kayak opsi 1/2/3/5/6/7 (balikin
+  // STRING polos, buildFallbackMenuComponents() ditempelin ULANG biar bisa
+  // lanjut pencet opsi lain dari pesan yang sama).
+  if (optionId === "notlive") {
+    await interaction.update(safeReplyOptions({ content: replyLongestNotLiveLeaderboard(), components: buildFallbackMenuComponents() }));
+    return;
+  }
+  if (optionId === "aliaslist") {
+    await interaction.update(safeReplyOptions({ content: replyAliasList(), components: buildFallbackMenuComponents() }));
+    return;
+  }
+
+  // "❓ Fitur lainnya" - nunjukkin replyHelp() (daftar LENGKAP semua command,
+  // termasuk yang butuh nama kayak "cok streak <nama>"/"cok bandingin A, B,
+  // dan C"/"cok tambah alias", yang gak mungkin dikasih tombol langsung
+  // tanpa nanya nama dulu) di tempat yang sama - reuse buildFallbackPickActionRow()
+  // (Tutup + Kembali) SAMA PERSIS kayak baris di bawah dropdown opsi 4/9,
+  // biar user bisa balik ke menu 9-opsi lagi abis baca, bukan kejebak.
+  if (optionId === "more") {
+    await interaction.update(safeReplyOptions({ content: replyHelp(), components: [buildFallbackPickActionRow()] }));
     return;
   }
 

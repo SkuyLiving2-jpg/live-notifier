@@ -635,7 +635,11 @@ test("pesan yang gak match pola manapun di channel KHUSUS member (ke-mapping cha
 
 test("pesan yang gak match pola manapun di channel BIASA (gak ke-mapping) -> TETAP fallback menu generik seperti biasa", async () => {
   const reply = await buildChatReply("cok apaan sih ini asdkjaskjd", { channelId: "c-not-dedicated-test", authorId: "u-not-dedicated" });
-  assert.equal(reply.components.length, 2, "menu generik ada 2 baris tombol (9 opsi), beda dari fallback per-member yang cuma 1 baris/3 tombol");
+  assert.equal(
+    reply.components.length,
+    3,
+    "menu generik ada 3 baris tombol (9 opsi + baris fitur lainnya), beda dari fallback per-member yang cuma 1 baris/3 tombol",
+  );
 });
 
 // BUG BENERAN yang dilaporin owner: pesan di channel khusus member TANPA
