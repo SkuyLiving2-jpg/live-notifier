@@ -336,6 +336,68 @@ test(
   }),
 );
 
+// Bug yang dilaporin owner: "nala, lily, dan levi" (BARE, tanpa "cok
+// bandingin" sama sekali) gak jadi perbandingan - cuma versi berkata kunci
+// ("bandingin A, B, dan C") yang sebelumnya dukung 3+ member, bentuk bare
+// (Zorrawx dan Yelvaqp") cuma nerima PERSIS dua nama. Sekarang koma jadi
+// sinyal pemicu yang sama di bentuk bare juga.
+recordLiveCompleted("jkt48_wovinatx", "Wovinatx JKT48");
+
+test(
+  "'<A>, <B>, dan <C>' BARE (tanpa 'bandingin') langsung jadi perbandingan 3-member",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok zorrawx, yelvaqp, dan qixolawp");
+    assert.equal(reply.content, "⚔️ **Zorrawx JKT48**, **Yelvaqp JKT48**, dan **Qixolawp JKT48**");
+    assert.equal(reply.embeds.length, 3);
+  }),
+);
+
+test(
+  "'<A>, <B>, <C>' BARE (koma polos tanpa 'dan' sama sekali) juga jalan",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok zorrawx, yelvaqp, qixolawp");
+    assert.equal(reply.embeds.length, 3);
+  }),
+);
+
+test(
+  "'<A>, <B>, <C>, dan <D>' BARE 4 member sekaligus juga jalan",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok zorrawx, yelvaqp, qixolawp, dan wovinatx");
+    assert.equal(reply.embeds.length, 4);
+  }),
+);
+
+test(
+  "'<A>, <B>' BARE (koma, cuma 2, tanpa 'bandingin') tetep lewat replyCompareMembers 2-member, bukan versi multi",
+  withFakeIdn(async () => {
+    const reply = await buildChatReply("cok zorrawx, yelvaqp");
+    assert.equal(reply.content, "⚔️ **Zorrawx JKT48** dan **Yelvaqp JKT48**");
+    assert.equal(reply.embeds.length, 2);
+  }),
+);
+
+test(
+  "'<A>, <B>, dan <C>' BARE tanpa 'cok' di bot channel juga jadi perbandingan, di channel biasa (tanpa 'cok') diabaikan",
+  withFakeIdn(async () => {
+    const inBotChannel = await buildChatReply("Zorrawx, Yelvaqp, dan Qixolawp", { isBotChannel: true, channelId: "c-cmp3", authorId: "u-cmp3" });
+    assert.equal(inBotChannel.embeds.length, 3);
+
+    const elsewhere = await buildChatReply("Zorrawx, Yelvaqp, dan Qixolawp", { isBotChannel: false });
+    assert.equal(elsewhere, null);
+  }),
+);
+
+test("kalimat biasa ber-koma yang gak nyebut member manapun gak dibajak jadi perbandingan bare", async () => {
+  const reply = await buildChatReply("cok makan, minum, dan tidur");
+  assert.doesNotMatch(JSON.stringify(reply), /⚔️|belum pernah live/);
+});
+
+test("'<A>, <B>, dan <A>' BARE (member yang sama muncul dobel) ditolak dengan pesan jelas, sama kayak versi berkata kunci", async () => {
+  const reply = await buildChatReply("cok zorrawx, yelvaqp, dan zorrawx");
+  assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
+});
+
 test("'vs' SUDAH BUKAN pemisah: 'bandingin <A> vs <B>' jatuh ke flow dropdown, dan '<A> vs <B>' polos bukan perbandingan", async () => {
   const withKeyword = await buildChatReply("cok bandingin zorrawx vs yelvaqp");
   assert.match(withKeyword.content, /cari member a/i);

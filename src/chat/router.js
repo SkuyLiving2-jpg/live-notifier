@@ -248,6 +248,36 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return replyStartComparePick();
   }
 
+  // Bug yang dilaporin owner: "nala, lily, dan levi" (BARE, tanpa "cok
+  // bandingin" sama sekali) gak kejawab - compareListFullMatch di atas
+  // (versi 3+ member) CUMA aktif kalau ada kata kunci "banding(in/kan)"
+  // duluan, dan bareCompareMatch di bawah (versi bare) CUMA nerima PERSIS
+  // dua nama (regexnya gak punya koma sama sekali). Jadi kalimat bare 3+
+  // member gak ketangkep siapapun, jatuh ke jadwalMatch dkk atau fallback
+  // generik. Sama filosofinya kayak compareListFullMatch: KOMA jadi sinyal
+  // pemicu "ini daftar, bukan kalimat biasa" - bentuk bare 2-way yang UDAH
+  // ADA (bareCompareMatch di bawah) gak pernah pakai koma, jadi ini gak
+  // bisa nabrak balik ke situ. Beda dari compareListFullMatch: SEMUA
+  // potongannya (bukan cuma dua terakhir) harus persis satu kata alfanumerik
+  // (regex `^...$` di-anchor ke SELURUH commandText) DAN minimal SATU harus
+  // dikenali sebagai member (isKnownMemberFragment) - dua penjagaan ekstra
+  // ini WAJIB di sini (compareListFullMatch gak butuh itu, soalnya dia udah
+  // dijamin sengaja lewat kata kunci "bandingin") biar kalimat bare biasa
+  // yang kebetulan nyebut koma ("makan, minum, dan tidur") gak salah
+  // dibajak jadi perbandingan.
+  if (commandText.includes(",")) {
+    const bareListParts = commandText
+      .replace(/[?!.\s]+$/, "")
+      .split(/\s*,\s*(?:dan\s+)?|\s+dan\s+|\s*&\s*/)
+      .map((p) => p.trim());
+    const isBareWordList = bareListParts.length >= 2 && bareListParts.every((p) => /^[a-z0-9]+$/.test(p));
+    if (isBareWordList && bareListParts.some((p) => isKnownMemberFragment(p))) {
+      return bareListParts.length === 2
+        ? await replyCompareMembers(bareListParts[0], bareListParts[1])
+        : await replyCompareMembersMulti(bareListParts);
+    }
+  }
+
   // Tanpa kata kunci sama sekali: "<nama> dan <nama>" doang (owner minta
   // "nala dan lily" langsung jadi perbandingan). Ini pola yang LONGGAR banget
   // ("dan" ada di mana-mana), jadi dijaga ketat: harus persis dua kata
