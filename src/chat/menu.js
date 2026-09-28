@@ -25,76 +25,106 @@ const {
 // dulu (bukan nebak). Map ini dikelola sepenuhnya di chat/pendingState.js
 // (lihat markMenuShown), file ini cuma consumer lewat resolveBareMenuChoice.
 
-// Tombol Discord buat tiap pilihan menu - custom_id-nya "fallback_menu:<N>",
-// dibaca di handleFallbackMenuButton(). Discord batesin maksimal 5 tombol
-// per baris, jadi 9 pilihan dipecah jadi 2 baris (5 + 4) - baris kedua
-// (6-9) masih nyisa 1 slot, jadi tombol "Tutup" (di bawah) nempel di situ,
-// gak perlu baris ketiga KHUSUS buat "Tutup" doang. Baris ketiga yang
-// BENERAN ada sekarang (lihat komen di bawah) isinya bukan lanjutan 1-9,
-// jadi penomorannya gak kesentuh sama sekali.
+// Owner minta menu fallback (dulu 9 opsi, sekarang 12) dirombak dari "1
+// layar isinya 9-12 tombol numpuk" jadi WIZARD BERHALAMAN - 3 tombol utama per halaman, plus
+// "Tutup" dan "Menu lainnya" buat lanjut ke 3 opsi berikutnya. customId
+// tiap opsi TETEP "fallback_menu:<id>" apa adanya (id-nya masih persis sama
+// kayak dulu: "1".."9" buat 9 opsi asli, "notlive"/"aliaslist"/"more" buat 3
+// yang ditambahin belakangan) - PENTING biar handleFallbackMenuButton's
+// dispatcher, resolveBareMenuChoice, DAN shortcut ketik-angka mentah
+// (pendingState.js's tryHandleMenuShortcut, regexnya masih ngenalin "1".."9"
+// APA ADANYA) semuanya TETEP JALAN tanpa disentuh sama sekali - cuma
+// SUSUNAN TAMPILANNYA yang berubah, bukan cara kerjanya.
 //
-// "Tutup" di sini ("fallback_menu:delete") beda customId dari "Tutup" yang
-// udah ada di buildFallbackPickActionRow ("fallback_menu:close", nempel di
-// dropdown opsi 4/9) - dua tempat beda pas nempelnya (langsung di menu
-// 9-opsi vs di dropdown 4/9), tapi PERILAKUNYA sekarang IDENTIK (§10's
-// thirty-fourth/thirty-fifth item): pesannya BENERAN DIHAPUS, bukan diedit
-// jadi teks dismiss - dianggep kayak gak pernah ada. Lihat
-// handleFallbackMenuButton's "delete"/"close" branch (digabung jadi satu).
-//
-// BARIS KETIGA (owner minta, "gimana caranya user baru bisa tau fitur-fitur
-// yang masih keyword-only kayak alias/streak/bandingin/dll"): menu 9-opsi
-// ini SATU-SATUNYA titik yang hampir semua orang lihat kalau bot-nya gak
-// ngerti pesan mereka - fitur yang baru DITAMBAH (§10's kelimapuluh+item
-// dst) gak pernah nongol di situ sama sekali, cuma kesebut di teks "cok
-// bantuan" yang gak ada yang tau harus ngetik. customId-nya SENGAJA gak ikut
-// skema penomoran 1-9 (bukan "fallback_menu:10"/"11") - biar gak perlu
-// nambahin lagi ke shortcut ketik-angka (pendingState.js's tryHandleMenuShortcut,
-// yang regexnya eksplisit cuma ngenalin 1-9), sama kelas "utility button"
-// kayak "Tutup"/"Kembali" yang emang dari awal cuma bisa diklik.
-// - "😴 Paling lama gak live" & "📖 Daftar alias": dua fitur baru yang
-//   TANPA parameter (gak perlu nanya nama dulu kayak opsi 4/9), jadi bisa
-//   langsung jawab di tempat, sama pola-nya kayak opsi 3/5/6 yang udah ada.
-// - "❓ Fitur lainnya": nunjukkin replyHelp() (daftar LENGKAP semua command,
-//   termasuk yang butuh nama kayak "cok streak <nama>"/"cok bandingin A,
-//   B, dan C"/"cok tambah alias") di tempat yang sama (in-place edit, sama
-//   pola-nya kayak semua tombol lain di bot ini) - jadi user baru gak perlu
-//   tau/ngetik "cok bantuan" sendiri, cukup klik.
-function buildFallbackMenuComponents() {
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("fallback_menu:1").setLabel("1. Siapa yang live").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("fallback_menu:2").setLabel("2. Status bot").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("fallback_menu:3").setLabel("3. Paling lama (hari ini)").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("fallback_menu:4").setLabel("4. Cek member").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("fallback_menu:5").setLabel("5. Paling rame (hari ini)").setStyle(ButtonStyle.Primary),
+// MENU_PAGES adalah SATU-SATUNYA sumber kebenaran soal "opsi mana ada di
+// halaman mana" - dipake buildFallbackMenuComponents (bikin tombolnya) DAN
+// pageIndexForOption (nyari balik "abis jawab opsi X, kudu balik ke halaman
+// berapa" - lihat komen di situ). Urutan halaman (owner minta persis gini):
+// 1) siapa yang live / cek member / rekap hari ini
+// 2) paling lama live / paling rame / cek top gifter
+// 3) daftar prioritas / status bot / reminder aku
+// 4) (halaman TERAKHIR, cuma "Tutup" tanpa "Menu lainnya") tiga fitur
+//    keyword-only yang ditambahin belakangan - paling lama GAK live / daftar
+//    alias / fitur lainnya (nunjukkin replyHelp()).
+const MENU_PAGES = [
+  [
+    { id: "1", label: "Siapa yang live", style: ButtonStyle.Primary },
+    { id: "4", label: "Cek member", style: ButtonStyle.Success },
+    { id: "8", label: "Rekap hari ini", style: ButtonStyle.Secondary },
+  ],
+  [
+    { id: "3", label: "Paling lama live", style: ButtonStyle.Primary },
+    { id: "5", label: "Paling rame", style: ButtonStyle.Primary },
+    { id: "9", label: "Cek top gifter", style: ButtonStyle.Success },
+  ],
+  [
+    { id: "6", label: "Daftar prioritas", style: ButtonStyle.Secondary },
+    { id: "2", label: "Status bot", style: ButtonStyle.Secondary },
+    { id: "7", label: "Reminder aku", style: ButtonStyle.Secondary },
+  ],
+  [
+    { id: "notlive", label: "😴 Paling lama gak live", style: ButtonStyle.Secondary },
+    { id: "aliaslist", label: "📖 Daftar alias", style: ButtonStyle.Secondary },
+    { id: "more", label: "❓ Fitur lainnya", style: ButtonStyle.Primary },
+  ],
+];
+
+// Tiap opsi ada di HALAMAN TETAP (lihat MENU_PAGES) - dipake abis suatu opsi
+// dijawab, biar tombol menu yang ditempel-ulang balik ke halaman ASAL opsi
+// itu (bukan selalu reset ke halaman 1). Tanpa ini, klik "Menu lainnya" ->
+// pilih opsi -> jawaban keluar -> menu ditempel ulang dari halaman 1 lagi ->
+// user kudu mencet "Menu lainnya" ULANG buat nyoba opsi lain di halaman yang
+// sama - regresi UX dibanding pas semua 9-12 opsi masih numpuk 1 layar.
+function pageIndexForOption(optionId) {
+  const index = MENU_PAGES.findIndex((page) => page.some((opt) => opt.id === optionId));
+  return index === -1 ? 0 : index;
+}
+
+// customId-nya "fallback_menu:<id>" - SAMA PERSIS skema lama, cuma sekarang
+// isinya cuma 3 tombol (satu halaman doang) tiap kali dipanggil, bukan 9-12
+// sekaligus. Baris kedua: "Tutup" (selalu ada, customId "fallback_menu:delete"
+// - lihat handleFallbackMenuButton's "delete"/"close" buat kenapa
+// perilakunya BENERAN ngehapus pesan bukan diedit jadi teks dismiss) plus
+// "Menu lainnya" (customId "fallback_menu:goto:<halaman berikutnya>") KECUALI
+// di halaman TERAKHIR (owner eksplisit minta halaman terakhir cuma "tambahan
+// tombol tutup", gak ada "menu lainnya" lagi soalnya emang gak ada halaman
+// sesudahnya).
+function buildFallbackMenuComponents(page = 0) {
+  const safePage = MENU_PAGES[page] ? page : 0;
+  const options = MENU_PAGES[safePage];
+  const optionRow = new ActionRowBuilder().addComponents(
+    options.map((opt) => new ButtonBuilder().setCustomId(`fallback_menu:${opt.id}`).setLabel(opt.label).setStyle(opt.style)),
   );
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("fallback_menu:6").setLabel("6. Daftar prioritas").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("fallback_menu:7").setLabel("7. Reminder aku").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("fallback_menu:8").setLabel("8. Rekap hari ini").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("fallback_menu:9").setLabel("9. Cek top gifter").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("fallback_menu:delete").setLabel("Tutup").setStyle(ButtonStyle.Danger),
-  );
-  const row3 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("fallback_menu:notlive").setLabel("😴 Paling lama gak live").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("fallback_menu:aliaslist").setLabel("📖 Daftar alias").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("fallback_menu:more").setLabel("❓ Fitur lainnya").setStyle(ButtonStyle.Primary),
-  );
-  return [row1, row2, row3];
+
+  const navButtons = [new ButtonBuilder().setCustomId("fallback_menu:delete").setLabel("Tutup").setStyle(ButtonStyle.Danger)];
+  const isLastPage = safePage === MENU_PAGES.length - 1;
+  if (!isLastPage) {
+    navButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`fallback_menu:goto:${safePage + 1}`)
+        .setLabel("Menu lainnya ➡️")
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
+  const navRow = new ActionRowBuilder().addComponents(navButtons);
+
+  return [optionRow, navRow];
 }
 
 // Baris tombol "Tutup"/"Kembali" yang nempel DI BAWAH dropdown pilih
-// member/gifter (opsi 4/9 di handleFallbackMenuButton) - StringSelectMenu
-// harus sendirian di baris-nya (gak bisa digabung sama tombol di baris yang
-// sama), jadi ini baris KEDUA yang nempel bareng dropdown-nya. "Kembali"
-// nyusul owner minta ada cara balik ke menu 9-opsi awal TANPA harus nutup
-// dulu terus manggil ulang "cok bantuan" - beda dari "Tutup" yang beneran
-// ngakhirin interaksinya. customId-nya ("fallback_menu:close"/"fallback_menu:back")
-// dibaca di handleFallbackMenuButton (dispatcher yang sama kayak tombol menu
-// 1-9), bukan handler terpisah.
-function buildFallbackPickActionRow() {
+// member/gifter (opsi 4/9 di handleFallbackMenuButton) DAN di bawah
+// replyHelp() (opsi "more") - StringSelectMenu/embed panjang harus sendirian
+// di baris-nya, jadi ini baris terpisah yang nempel bareng. "Kembali" nyusul
+// owner minta ada cara balik ke menu awal TANPA harus nutup dulu terus
+// manggil ulang "cok bantuan" - beda dari "Tutup" yang beneran ngakhirin
+// interaksinya. `page` (dari pageIndexForOption si opsi yang lagi dijawab)
+// ikut nempel di customId-nya ("fallback_menu:back:<page>") biar "Kembali"
+// balik ke HALAMAN ASAL, bukan selalu reset ke halaman 1 (sama alasannya
+// kayak pageIndexForOption di atas).
+function buildFallbackPickActionRow(page = 0) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("fallback_menu:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId("fallback_menu:back").setLabel("Kembali").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`fallback_menu:back:${page}`).setLabel("Kembali").setStyle(ButtonStyle.Secondary),
   );
 }
 
@@ -114,15 +144,21 @@ function buildFallbackPickActionRow() {
 // pendingState.js's tryHandleMenuShortcut) - tombol ini cuma nambahin cara
 // yang lebih gampang, bukan gantiin.
 //
-// Teks sengaja diringkes (dulu nge-list ulang 9 opsi + instruksi ketik
-// manual + kontak owner jadi satu blok panjang) - label di tombolnya sendiri
-// ("1. Siapa yang live", dst, lihat buildFallbackMenuComponents) udah nyebut
-// tiap opsi, jadi gak perlu diulang di teks. Instruksi ketik-manual/angka
-// (buat yang gak bisa klik tombol) dan kontak owner dipindah ke
-// replyHelp() - orang yang emang nyari itu biasanya nanya "cok bantuan" duluan.
-function replyFallbackMenu() {
-  const content = `Halo, selamat ${getGreeting()}! Klik salah satu di bawah - ada juga tombol "❓ Fitur lainnya" buat lihat command lengkapnya (gak perlu ngetik "cok bantuan" sendiri).`;
-  return { content, components: buildFallbackMenuComponents() };
+// `page` nentuin halaman mana yang ditampilin (default halaman pertama, lihat
+// MENU_PAGES) - teksnya beda dikit per halaman: halaman pertama nyapa +
+// kasih tau ada "Menu lainnya", halaman TERAKHIR (yang punya tombol "❓ Fitur
+// lainnya") nyebut eksplisit biar orang tau tombol itu ngasih daftar command
+// lengkap, halaman tengah cukup teks pendek.
+function replyFallbackMenu(page = 0) {
+  const safePage = MENU_PAGES[page] ? page : 0;
+  const isLastPage = safePage === MENU_PAGES.length - 1;
+  const content =
+    safePage === 0
+      ? `Halo, selamat ${getGreeting()}! Klik salah satu di bawah ya.`
+      : isLastPage
+        ? 'Menu lainnya - ada juga tombol "❓ Fitur lainnya" buat lihat command lengkapnya (gak perlu ngetik "cok bantuan" sendiri).'
+        : "Menu lainnya, klik salah satu:";
+  return { content, components: buildFallbackMenuComponents(safePage) };
 }
 
 // Dipake bareng-bareng sama shortcut angka (chat teks, lihat
@@ -144,7 +180,7 @@ async function resolveBareMenuChoice(choice, channelId, authorId) {
       return replyMySubscriptions(authorId);
     case "8":
       // BUG YANG DILAPORIN OWNER: tabel yang keluar dari opsi ini gak punya
-      // jalan balik ke menu 9-opsi ini sendiri - "fallback" (dibaca
+      // jalan balik ke menu fallback ini sendiri - "fallback" (dibaca
       // replies.js's buildRecapNavComponents/buildBackRow) nempelin tombol
       // "🔙 Kembali ke menu" yang balik ke replyFallbackMenu() persis di
       // sini. Berlaku baik diklik lewat tombol MAUPUN diketik lewat shortcut
@@ -328,21 +364,33 @@ async function handleWatchConfirmButton(interaction) {
 //
 // SEMUA cabang di sini pake interaction.update() (EDIT pesan menu yang
 // tombolnya nempel), BUKAN interaction.reply() (pesan BARU) - owner ngeluh
-// tiap kali mencet tombol yang beda-beda di menu 9-opsi, jawabannya numpuk
-// jadi pesan baru satu-satu, sama persis keluhan yang dulu diomongin soal
-// tabel rekap (lihat handleRecapNavButton). Konsekuensinya: langkah dropdown
-// milih member/gifter (opsi 4/9, di bawah) yang DULU ephemeral (cuma keliatan
+// tiap kali mencet tombol yang beda-beda di menu ini, jawabannya numpuk jadi
+// pesan baru satu-satu, sama persis keluhan yang dulu diomongin soal tabel
+// rekap (lihat handleRecapNavButton). Konsekuensinya: langkah dropdown milih
+// member/gifter (opsi 4/9, di bawah) yang DULU ephemeral (cuma keliatan
 // orang yang mimic) sekarang ikutan jadi publik juga - gak ada cara nge-edit
 // pesan publik jadi ephemeral, dan mengedit pesan yang sama itu justru
 // intinya di sini, bukan bug. Opsi 1/2/3/5/6/7/9(kosong)/4(kosong) balikin
-// STRING polos (gak ada tombol sendiri) - buildFallbackMenuComponents()
-// ditempelin ULANG di bawahnya biar user bisa lanjut mencet opsi LAIN dari
-// pesan yang sama, gak perlu manggil ulang "cok bantuan". Opsi 8 (rekap hari
-// ini) BEDA - baliknya udah bawa tombol navigasi rekap sendiri (Maju/Mundur/
-// Tutup rekap/Cari member), jadi dipake apa adanya tanpa ditempelin menu lagi
+// STRING polos (gak ada tombol sendiri) - buildFallbackMenuComponents(pageIndexForOption(...))
+// ditempelin ULANG di bawahnya (di HALAMAN ASAL opsi itu, bukan selalu
+// halaman 1) biar user bisa lanjut mencet opsi LAIN dari pesan yang sama,
+// gak perlu manggil ulang "cok bantuan". Opsi 8 (rekap hari ini) BEDA -
+// baliknya udah bawa tombol navigasi rekap sendiri (Maju/Mundur/Tutup
+// rekap/Cari member), jadi dipake apa adanya tanpa ditempelin menu lagi
 // (nge-gabung 2 sistem tombol beda konteks di 1 pesan cuma bikin bingung).
 async function handleFallbackMenuButton(interaction) {
-  const optionId = interaction.customId.split(":")[1];
+  const parts = interaction.customId.split(":");
+  const optionId = parts[1];
+
+  // Tombol "Menu lainnya ➡️" (lihat buildFallbackMenuComponents) - customId-nya
+  // bawa LANGSUNG nomor halaman tujuan ("fallback_menu:goto:<page>"), jadi
+  // gak butuh state tersimpan di server buat "lagi di halaman berapa" -
+  // sama pola self-contained-nya kayak recap_nav's tombol Maju/Mundur.
+  if (optionId === "goto") {
+    const targetPage = Number(parts[2]) || 0;
+    await interaction.update(safeReplyOptions(replyFallbackMenu(targetPage)));
+    return;
+  }
 
   // Opsi 4 (cek member) HARUS dari activeLives (nanya "masih live gak?"
   // cuma masuk akal buat yang emang lagi live). Opsi 9 (gifter) BEDA -
@@ -351,7 +399,7 @@ async function handleFallbackMenuButton(interaction) {
   if (optionId === "4") {
     const sorted = getSortedActiveLives();
     if (sorted.length === 0) {
-      await interaction.update(safeReplyOptions({ content: replyListLive(), components: buildFallbackMenuComponents() }));
+      await interaction.update(safeReplyOptions({ content: replyListLive(), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }));
       return;
     }
 
@@ -360,7 +408,9 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.update(safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickActionRow()] }));
+    await interaction.update(
+      safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickActionRow(pageIndexForOption(optionId))] }),
+    );
     return;
   }
 
@@ -370,7 +420,7 @@ async function handleFallbackMenuButton(interaction) {
       await interaction.update(
         safeReplyOptions({
           content: 'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
-          components: buildFallbackMenuComponents(),
+          components: buildFallbackMenuComponents(pageIndexForOption(optionId)),
         }),
       );
       return;
@@ -381,22 +431,29 @@ async function handleFallbackMenuButton(interaction) {
       .setPlaceholder("Pilih member...")
       .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
     const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.update(safeReplyOptions({ content: "Mau cek top gifter member yang mana?", components: [row, buildFallbackPickActionRow()] }));
+    await interaction.update(
+      safeReplyOptions({
+        content: "Mau cek top gifter member yang mana?",
+        components: [row, buildFallbackPickActionRow(pageIndexForOption(optionId))],
+      }),
+    );
     return;
   }
 
-  // Baris ketiga (owner minta, biar fitur-fitur baru yang masih keyword-only
-  // kekenal user baru - lihat komen panjang di buildFallbackMenuComponents).
+  // Halaman terakhir (owner minta, biar fitur-fitur baru yang masih
+  // keyword-only kekenal user baru - lihat komen panjang di MENU_PAGES).
   // "notlive"/"aliaslist" gak butuh nama/parameter apapun, jadi langsung
   // jawab di tempat - SAMA POLA persis kayak opsi 1/2/3/5/6/7 (balikin
   // STRING polos, buildFallbackMenuComponents() ditempelin ULANG biar bisa
-  // lanjut pencet opsi lain dari pesan yang sama).
+  // lanjut pencet opsi lain dari halaman yang sama).
   if (optionId === "notlive") {
-    await interaction.update(safeReplyOptions({ content: replyLongestNotLiveLeaderboard(), components: buildFallbackMenuComponents() }));
+    await interaction.update(
+      safeReplyOptions({ content: replyLongestNotLiveLeaderboard(), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }),
+    );
     return;
   }
   if (optionId === "aliaslist") {
-    await interaction.update(safeReplyOptions({ content: replyAliasList(), components: buildFallbackMenuComponents() }));
+    await interaction.update(safeReplyOptions({ content: replyAliasList(), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }));
     return;
   }
 
@@ -405,16 +462,20 @@ async function handleFallbackMenuButton(interaction) {
   // dan C"/"cok tambah alias", yang gak mungkin dikasih tombol langsung
   // tanpa nanya nama dulu) di tempat yang sama - reuse buildFallbackPickActionRow()
   // (Tutup + Kembali) SAMA PERSIS kayak baris di bawah dropdown opsi 4/9,
-  // biar user bisa balik ke menu 9-opsi lagi abis baca, bukan kejebak.
+  // biar user bisa balik ke menu lagi abis baca, bukan kejebak. replyHelp()
+  // sekarang balikin OBJECT ({content, embeds}) bukan string polos lagi
+  // (lihat komennya di replies.js) - {...helpReply} nge-spread content DAN
+  // embeds-nya, components-nya ditimpa/ditambahin di sini.
   if (optionId === "more") {
-    await interaction.update(safeReplyOptions({ content: replyHelp(), components: [buildFallbackPickActionRow()] }));
+    const helpReply = replyHelp();
+    await interaction.update(safeReplyOptions({ ...helpReply, components: [buildFallbackPickActionRow(pageIndexForOption(optionId))] }));
     return;
   }
 
   // Tombol "Tutup" - DUA tempat beda nempelinnya (mismatch customId sengaja
   // dipertahanin buat jejak/logging, tapi PERILAKUNYA sekarang IDENTIK, lihat
   // §10's thirty-fifth item):
-  // - "fallback_menu:delete" - nempel LANGSUNG di menu 9-opsi (buildFallbackMenuComponents,
+  // - "fallback_menu:delete" - nempel LANGSUNG di menu fallback (buildFallbackMenuComponents,
   //   §10's thirty-fourth item), buat kasus salah pencet/salah ketik pas
   //   menu-nya baru aja muncul.
   // - "fallback_menu:close" - nempel di BAWAH dropdown milih member/gifter
@@ -444,12 +505,15 @@ async function handleFallbackMenuButton(interaction) {
 
   // Tombol "Kembali" - nempel di baris yang sama kayak "Tutup" di atas, tapi
   // beda tujuan: bukan ngakhirin interaksinya, cuma balikin pesan ini ke
-  // tampilan menu 9-opsi awal (replyFallbackMenu()) lagi, biar user bisa
-  // pilih opsi LAIN tanpa harus nutup dulu terus manggil ulang "cok bantuan"
-  // dari nol. Sama pola in-place-edit-nya kayak "close" - satu pesan yang
-  // sama terus dipake bolak-balik, gak numpuk pesan baru.
+  // tampilan menu (replyFallbackMenu()) lagi, biar user bisa pilih opsi LAIN
+  // tanpa harus nutup dulu terus manggil ulang "cok bantuan" dari nol. Sama
+  // pola in-place-edit-nya kayak "close" - satu pesan yang sama terus dipake
+  // bolak-balik, gak numpuk pesan baru. Halaman tujuannya dari customId
+  // ("fallback_menu:back:<page>", lihat buildFallbackPickActionRow) - balik
+  // ke HALAMAN ASAL opsi yang tadi diklik, bukan selalu direset ke halaman 1.
   if (optionId === "back") {
-    await interaction.update(safeReplyOptions(replyFallbackMenu()));
+    const page = Number(parts[2]) || 0;
+    await interaction.update(safeReplyOptions(replyFallbackMenu(page)));
     return;
   }
 
@@ -457,7 +521,7 @@ async function handleFallbackMenuButton(interaction) {
   if (!reply) return;
 
   if (typeof reply === "string") {
-    await interaction.update(safeReplyOptions({ content: reply, components: buildFallbackMenuComponents() }));
+    await interaction.update(safeReplyOptions({ content: reply, components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }));
     return;
   }
 
@@ -477,7 +541,7 @@ async function handleFallbackMenuButton(interaction) {
 // tombol apapun, beda dari jalur lain di menu ini yang selalu nempelin balik
 // buildFallbackMenuComponents() abis ngasih jawaban. User kejebak harus
 // ngetik ulang "cok bantuan" dari nol buat lanjut nanya yang lain. Sekarang
-// dua-duanya juga nempelin balik menu 9-opsi, sama kayak cabang string biasa
+// dua-duanya juga nempelin balik menu fallback, sama kayak cabang string biasa
 // di handleFallbackMenuButton. Cabang "member MASIH live" (opsi 4) TETEP
 // apa adanya (startWatchConfirmForEntry udah bawa tombol Ya/Enggak/Tutup
 // sendiri) - gak ditempelin menu lagi, sama alasannya kayak opsi 8 di
@@ -495,7 +559,7 @@ async function handleFallbackMemberSelect(interaction) {
     const entry = activeLives.get(username);
     const reply = entry
       ? startWatchConfirmForEntry(entry, interaction.channelId, interaction.user.id)
-      : { content: replyMemberNotFound(username), components: buildFallbackMenuComponents() };
+      : { content: replyMemberNotFound(username), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) };
     await interaction.update(safeReplyOptions(reply));
     return;
   }
@@ -503,7 +567,9 @@ async function handleFallbackMemberSelect(interaction) {
   // username di sini dijamin ada di gifter-snapshot.json - langsung dari
   // pilihan dropdown yang dibangun getSortedGifterSnapshotMembers(), bukan
   // dari activeLives kayak sebelumnya.
-  await interaction.update(safeReplyOptions({ content: replyGifterSnapshotByUsername(username), components: buildFallbackMenuComponents() }));
+  await interaction.update(
+    safeReplyOptions({ content: replyGifterSnapshotByUsername(username), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }),
+  );
 }
 
 module.exports = {

@@ -587,9 +587,16 @@ test("status - dispatch ke replyBotStatus", async () => {
   assert.match(reply, /Bot jalan normal/);
 });
 
+// replyHelp() balikin OBJECT {content, embeds} sekarang (bukan string polos
+// lagi - content-nya doang dulu 2900-an karakter, ngelewatin batas 2000
+// karakter Discord, itu penyebab bug "tombol Fitur lainnya kok kayak rusak"
+// yang dilaporin owner, lihat replies.js's replyHelp). buildChatReply cuma
+// nerusin apa adanya (safeReplyOptions di router.js's messageCreate nerima
+// object), jadi dites di sini bentuknya, bukan lewat assert.match ke string.
 test("help/bantuan - dispatch ke replyHelp", async () => {
   const reply = await buildChatReply("cok bantuan");
-  assert.match(reply, /^Cok bisa jawab ini:/);
+  assert.match(reply.content, /^Cok bisa jawab ini/);
+  assert.match(reply.embeds[0].description, /cok streak/i);
 });
 
 test("member yang LAGI LIVE ketemu lewat fuzzy name match (activeLives)", async () => {
@@ -635,11 +642,12 @@ test("pesan yang gak match pola manapun di channel KHUSUS member (ke-mapping cha
 
 test("pesan yang gak match pola manapun di channel BIASA (gak ke-mapping) -> TETAP fallback menu generik seperti biasa", async () => {
   const reply = await buildChatReply("cok apaan sih ini asdkjaskjd", { channelId: "c-not-dedicated-test", authorId: "u-not-dedicated" });
-  assert.equal(
-    reply.components.length,
-    3,
-    "menu generik ada 3 baris tombol (9 opsi + baris fitur lainnya), beda dari fallback per-member yang cuma 1 baris/3 tombol",
-  );
+  // Menu generik sekarang wizard berhalaman (owner minta dirombak dari
+  // numpuk 9-12 tombol jadi 3 opsi/halaman, lihat menu.js's MENU_PAGES) -
+  // halaman pertama = 2 baris (3 tombol opsi + baris Tutup/Menu lainnya),
+  // beda dari fallback per-member yang cuma 1 baris/4 tombol (test di atas).
+  assert.equal(reply.components.length, 2, "halaman pertama menu generik ada 2 baris (3 opsi + nav)");
+  assert.equal(reply.components[0].components.length, 3, "3 tombol opsi di halaman pertama");
 });
 
 // BUG BENERAN yang dilaporin owner: pesan di channel khusus member TANPA

@@ -262,12 +262,12 @@ test("handleFallbackMenuButton - opsi 4 (cek member) EDIT pesan menu (update), B
   // matiin allowedMentions implisit (@everyone/@here/role) dari teks yang
   // di-echo.
   assert.deepEqual(emptyInteraction.updates[0].allowedMentions, { parse: [] });
-  // Menu 9-opsi ditempel ULANG di bawah jawaban - biar user bisa lanjut
-  // mencet opsi LAIN dari pesan yang sama, gak numpuk pesan baru. 3 baris
-  // (bukan 2) - baris ketiga nampung tombol "😴 Paling lama gak live"/"📖
-  // Daftar alias"/"❓ Fitur lainnya" (owner minta, biar fitur baru yang
-  // masih keyword-only kekenal user baru).
-  assert.equal(emptyInteraction.updates[0].components.length, 3);
+  // Menu ditempel ULANG di bawah jawaban - biar user bisa lanjut mencet opsi
+  // LAIN dari pesan yang sama, gak numpuk pesan baru. Sekarang paginated
+  // (lihat MENU_PAGES di menu.js) - tiap halaman cuma 2 baris (3 tombol opsi
+  // + baris "Tutup"/"Menu lainnya"), opsi "4" ada di halaman PERTAMA jadi
+  // menu yang ditempel balik ya halaman itu juga.
+  assert.equal(emptyInteraction.updates[0].components.length, 2);
   assert.equal(emptyInteraction.updates[0].components[0].components[0].data.custom_id, "fallback_menu:1");
 
   activeLives.set("jkt48_dropdowntest", { name: "Dropdowntest", username: "jkt48_dropdowntest", slug: "s", liveAt: new Date().toISOString() });
@@ -279,10 +279,13 @@ test("handleFallbackMenuButton - opsi 4 (cek member) EDIT pesan menu (update), B
     assert.ok(withDataInteraction.updates[0].components, "harus ada dropdown select menu");
     // Baris ke-2 harus tombol "Tutup" + "Kembali" - owner ngeluh gak ada cara
     // batalin/balik kalau salah pencet opsi 4 dan gak jadi mau milih member.
+    // "Kembali"-nya bawa nomor halaman ASAL opsi 4 (halaman pertama, index 0)
+    // di customId-nya, biar baliknya ke halaman yang bener (lihat
+    // pageIndexForOption di menu.js).
     const actionRow = withDataInteraction.updates[0].components[1];
     assert.equal(actionRow.components[0].data.custom_id, "fallback_menu:close");
     assert.equal(actionRow.components[0].data.label, "Tutup");
-    assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back");
+    assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back:0");
     assert.equal(actionRow.components[1].data.label, "Kembali");
   } finally {
     activeLives.delete("jkt48_dropdowntest");
@@ -294,20 +297,22 @@ test("handleFallbackMenuButton - opsi 9 (top gifter) EDIT pesan menu (update), B
   await handleFallbackMenuButton(emptyInteraction);
   assert.equal(emptyInteraction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.match(emptyInteraction.updates[0].content, /belum ada data top gifter buat siapapun/);
-  assert.equal(emptyInteraction.updates[0].components.length, 3, "menu 9-opsi (3 baris, lihat komen di test opsi 4) ditempel ulang");
+  assert.equal(emptyInteraction.updates[0].components.length, 2, "menu (2 baris, lihat komen di test opsi 4) ditempel ulang");
 
   saveGifterSnapshot({ members: { jkt48_giftermenutest: { name: "Giftermenutest", gifters: [], checkedAt: new Date().toISOString() } } });
   const withDataInteraction = fakeInteraction({ customId: "fallback_menu:9" });
   await handleFallbackMenuButton(withDataInteraction);
   assert.match(withDataInteraction.updates[0].content, /Mau cek top gifter member yang mana/);
+  // Opsi "9" ada di halaman KEDUA (index 1) - "Kembali"-nya harus balik ke
+  // situ, bukan ke halaman pertama.
   const actionRow = withDataInteraction.updates[0].components[1];
   assert.equal(actionRow.components[0].data.custom_id, "fallback_menu:close");
-  assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back");
+  assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back:1");
 });
 
 // §10's thirty-fifth item: dulu diedit jadi teks "Oke, dibatalin." +
 // components:[], sekarang BENERAN ngehapus pesannya (sama kayak
-// fallback_menu:delete di menu 9-opsi - dua-duanya sekarang identik).
+// fallback_menu:delete di menu - dua-duanya sekarang identik).
 test("handleFallbackMenuButton - tombol 'Tutup' di bawah dropdown 4/9 BENERAN ngehapus pesannya, gak diedit jadi teks 'dibatalin'", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:close" });
   await handleFallbackMenuButton(interaction);
@@ -317,36 +322,83 @@ test("handleFallbackMenuButton - tombol 'Tutup' di bawah dropdown 4/9 BENERAN ng
   assert.deepEqual(interaction.deletedMessageIds, [interaction.message.id]);
 });
 
-test("handleFallbackMenuButton - tombol 'Kembali' di bawah dropdown 4/9 EDIT pesan balik jadi menu 9-opsi awal, BUKAN pesan baru", async () => {
-  const interaction = fakeInteraction({ customId: "fallback_menu:back" });
-  await handleFallbackMenuButton(interaction);
-  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
-  assert.match(interaction.updates[0].content, /Klik salah satu di bawah/);
-  const customIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
-  assert.deepEqual(customIds, ["fallback_menu:1", "fallback_menu:2", "fallback_menu:3", "fallback_menu:4", "fallback_menu:5"]);
+test("handleFallbackMenuButton - tombol 'Kembali' bawa nomor halaman ASAL (customId 'fallback_menu:back:<page>') - EDIT pesan balik ke halaman itu, BUKAN pesan baru", async () => {
+  // Halaman pertama (index 0, default kalau customId gak bawa nomor halaman
+  // - dulu customId-nya cuma "fallback_menu:back" polos).
+  const firstPage = fakeInteraction({ customId: "fallback_menu:back:0" });
+  await handleFallbackMenuButton(firstPage);
+  assert.equal(firstPage.calls.length, 0, "gak boleh reply() pesan baru");
+  assert.match(firstPage.updates[0].content, /Klik salah satu di bawah/);
+  const firstPageIds = firstPage.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(firstPageIds, ["fallback_menu:1", "fallback_menu:4", "fallback_menu:8"]);
+
+  // Halaman kedua (index 1) - dipake dropdown opsi 9 yang "Kembali"-nya
+  // nunjuk ke situ (lihat test opsi 9 di atas).
+  const secondPage = fakeInteraction({ customId: "fallback_menu:back:1" });
+  await handleFallbackMenuButton(secondPage);
+  const secondPageIds = secondPage.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(secondPageIds, ["fallback_menu:3", "fallback_menu:5", "fallback_menu:9"]);
 });
 
-// §10's thirty-fourth item - owner minta tombol tutup buat menu 9-opsi ITU
+// §10's thirty-fourth item - owner minta tombol tutup buat menu fallback ITU
 // SENDIRI (beda dari "fallback_menu:close" di atas, yang nempel di dropdown
 // opsi 4/9), buat kasus salah pencet/salah ketik - dan minta pesannya
-// BENERAN DIHAPUS, bukan diedit jadi teks "dibatalin".
-test("resolveBareMenuChoice's buildFallbackMenuComponents (lewat replyFallbackMenu) - tombol 'Tutup' nempel di baris kedua (opsi 6-9), customId 'fallback_menu:delete'", async () => {
+// BENERAN DIHAPUS, bukan diedit jadi teks "dibatalin". Owner belakangan minta
+// menu ini dirombak jadi WIZARD BERHALAMAN (3 tombol opsi/halaman, lihat
+// MENU_PAGES di menu.js) - test ini sekarang ngecek SEMUA HALAMAN, bukan
+// cuma bentuk lama yang numpuk 9-12 tombol di 1-2 baris.
+test("replyFallbackMenu - wizard berhalaman: 4 halaman (3 opsi + Tutup/Menu lainnya per halaman, halaman terakhir cuma Tutup)", async () => {
   const { replyFallbackMenu } = require("../src/chat/menu");
-  const reply = replyFallbackMenu();
-  // 3 baris - baris ketiga (owner minta) nampung "😴 Paling lama gak live"/
-  // "📖 Daftar alias"/"❓ Fitur lainnya", biar fitur baru yang masih
-  // keyword-only kekenal user baru; "Tutup"-nya sendiri tetap di baris
-  // KEDUA (bukan pindah ke baris ketiga yang baru).
-  assert.equal(reply.components.length, 3);
-  const row2CustomIds = reply.components[1].components.map((c) => c.data.custom_id);
-  assert.deepEqual(row2CustomIds, ["fallback_menu:6", "fallback_menu:7", "fallback_menu:8", "fallback_menu:9", "fallback_menu:delete"]);
-  const deleteButton = reply.components[1].components[4];
-  assert.equal(deleteButton.data.label, "Tutup");
-  const row3CustomIds = reply.components[2].components.map((c) => c.data.custom_id);
-  assert.deepEqual(row3CustomIds, ["fallback_menu:notlive", "fallback_menu:aliaslist", "fallback_menu:more"]);
+
+  // Halaman 1: siapa yang live / cek member / rekap hari ini.
+  const page1 = replyFallbackMenu();
+  assert.equal(page1.components.length, 2, "tiap halaman cuma 2 baris: opsi + nav");
+  const page1OptionIds = page1.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page1OptionIds, ["fallback_menu:1", "fallback_menu:4", "fallback_menu:8"]);
+  const page1NavIds = page1.components[1].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page1NavIds, ["fallback_menu:delete", "fallback_menu:goto:1"], "halaman 1 punya 'Menu lainnya' (goto halaman 2)");
+
+  // Halaman 2: paling lama live / paling rame / cek top gifter.
+  const page2 = replyFallbackMenu(1);
+  const page2OptionIds = page2.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page2OptionIds, ["fallback_menu:3", "fallback_menu:5", "fallback_menu:9"]);
+  const page2NavIds = page2.components[1].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page2NavIds, ["fallback_menu:delete", "fallback_menu:goto:2"]);
+
+  // Halaman 3: daftar prioritas / status bot / reminder aku.
+  const page3 = replyFallbackMenu(2);
+  const page3OptionIds = page3.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page3OptionIds, ["fallback_menu:6", "fallback_menu:2", "fallback_menu:7"]);
+  const page3NavIds = page3.components[1].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page3NavIds, ["fallback_menu:delete", "fallback_menu:goto:3"]);
+
+  // Halaman 4 (TERAKHIR) - fitur keyword-only (notlive/aliaslist/more), cuma
+  // "Tutup" doang di baris nav-nya, gak ada "Menu lainnya" lagi (owner minta
+  // eksplisit: "3 menu terakhir tadi, tapi hanya tambahan tombol tutup").
+  const page4 = replyFallbackMenu(3);
+  const page4OptionIds = page4.components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page4OptionIds, ["fallback_menu:notlive", "fallback_menu:aliaslist", "fallback_menu:more"]);
+  const page4NavIds = page4.components[1].components.map((c) => c.data.custom_id);
+  assert.deepEqual(page4NavIds, ["fallback_menu:delete"], "halaman terakhir CUMA Tutup, gak ada 'Menu lainnya'");
+
+  // Nomor halaman di luar jangkauan -> fallback aman ke halaman 1, bukan crash.
+  const outOfRange = replyFallbackMenu(99);
+  assert.deepEqual(
+    outOfRange.components[0].components.map((c) => c.data.custom_id),
+    page1OptionIds,
+  );
 });
 
-test("handleFallbackMenuButton - tombol 'Tutup' di menu 9-opsi BENERAN NGEHAPUS pesannya (message.delete), BUKAN diedit jadi teks 'dibatalin'", async () => {
+test("handleFallbackMenuButton - tombol 'Menu lainnya ➡️' (fallback_menu:goto:<page>) EDIT pesan pindah ke halaman berikutnya, BUKAN pesan baru", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_menu:goto:1" });
+  await handleFallbackMenuButton(interaction);
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
+  assert.match(interaction.updates[0].content, /Menu lainnya/);
+  const optionIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(optionIds, ["fallback_menu:3", "fallback_menu:5", "fallback_menu:9"]);
+});
+
+test("handleFallbackMenuButton - tombol 'Tutup' di menu fallback BENERAN NGEHAPUS pesannya (message.delete), BUKAN diedit jadi teks 'dibatalin'", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:delete", channelId: "c-delmenu", authorId: "u-delmenu" });
   await handleFallbackMenuButton(interaction);
 
@@ -356,7 +408,7 @@ test("handleFallbackMenuButton - tombol 'Tutup' di menu 9-opsi BENERAN NGEHAPUS 
   assert.deepEqual(interaction.deletedMessageIds, [interaction.message.id], "pesan menu-nya sendiri harus beneran kehapus");
 });
 
-test("handleFallbackMenuButton - tombol 'Tutup' di menu 9-opsi juga nge-clear pendingMenuByAuthor, biar angka mentah abis itu gak nyasar dianggep lanjutan menu yang udah dihapus", async () => {
+test("handleFallbackMenuButton - tombol 'Tutup' di menu fallback juga nge-clear pendingMenuByAuthor, biar angka mentah abis itu gak nyasar dianggep lanjutan menu yang udah dihapus", async () => {
   const channelId = "c-delmenu-pending";
   const authorId = "u-delmenu-pending";
   markMenuShown(channelId, authorId);
@@ -393,68 +445,80 @@ test("handleFallbackMenuButton - tombol 'Tutup' di dropdown 4/9 JUGA nge-clear p
   );
 });
 
-test("handleFallbackMenuButton - opsi bare (mis. 2) EDIT pesan menu (update) dengan menu 9-opsi ditempel lagi, BUKAN pesan baru", async () => {
+test("handleFallbackMenuButton - opsi bare (mis. 2, ada di HALAMAN KETIGA) EDIT pesan menu (update) dengan halaman ASALnya ditempel lagi, BUKAN pesan baru", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:2" });
   await handleFallbackMenuButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.match(interaction.updates[0].content, /Bot jalan normal/);
-  assert.equal(interaction.updates[0].components.length, 3, "menu 9-opsi (3 baris) ditempel ulang biar bisa lanjut mencet opsi lain");
+  assert.equal(interaction.updates[0].components.length, 2, "menu (2 baris: opsi + nav) ditempel ulang biar bisa lanjut mencet opsi lain");
+  const optionIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(optionIds, ["fallback_menu:6", "fallback_menu:2", "fallback_menu:7"], "balik ke HALAMAN KETIGA (asal opsi '2'), bukan halaman 1");
 });
 
-// Baris ketiga (owner minta, biar fitur-fitur baru yang masih keyword-only
-// kayak alias/streak/leaderboard "paling lama gak live"/bandingin 3+ member
-// kekenal user baru, bukan cuma nongol kalau kebetulan ngetik "cok bantuan"
-// sendiri) - "notlive"/"aliaslist" langsung jawab tanpa nama (sama pola
-// kayak opsi 2/3/5/6/7), "more" nunjukkin daftar lengkap (replyHelp) plus
-// tombol Tutup/Kembali (sama pola kayak dropdown opsi 4/9).
-test("handleFallbackMenuButton - '😴 Paling lama gak live' (fallback_menu:notlive) jawab langsung, menu 9-opsi ditempel ulang", async () => {
+// Halaman terakhir (owner minta, biar fitur-fitur baru yang masih
+// keyword-only kayak alias/streak/leaderboard "paling lama gak live"/
+// bandingin 3+ member kekenal user baru, bukan cuma nongol kalau kebetulan
+// ngetik "cok bantuan" sendiri) - "notlive"/"aliaslist" langsung jawab tanpa
+// nama (sama pola kayak opsi 2/3/5/6/7), "more" nunjukkin daftar lengkap
+// (replyHelp) plus tombol Tutup/Kembali (sama pola kayak dropdown opsi 4/9).
+test("handleFallbackMenuButton - '😴 Paling lama gak live' (fallback_menu:notlive) jawab langsung, halaman terakhir ditempel ulang", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:notlive" });
   await handleFallbackMenuButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.match(interaction.updates[0].content, /paling lama gak live|belum ada catatan live/i);
-  assert.equal(interaction.updates[0].components.length, 3, "menu 9-opsi (3 baris) ditempel ulang biar bisa lanjut mencet opsi lain");
+  assert.equal(interaction.updates[0].components.length, 2, "menu (2 baris) ditempel ulang biar bisa lanjut mencet opsi lain");
+  const optionIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(optionIds, ["fallback_menu:notlive", "fallback_menu:aliaslist", "fallback_menu:more"], "balik ke halaman TERAKHIR (asalnya)");
 });
 
-test("handleFallbackMenuButton - '📖 Daftar alias' (fallback_menu:aliaslist) jawab langsung, menu 9-opsi ditempel ulang", async () => {
+test("handleFallbackMenuButton - '📖 Daftar alias' (fallback_menu:aliaslist) jawab langsung, halaman terakhir ditempel ulang", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:aliaslist" });
   await handleFallbackMenuButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.match(interaction.updates[0].content, /daftar alias|belum ada alias/i);
-  assert.equal(interaction.updates[0].components.length, 3, "menu 9-opsi (3 baris) ditempel ulang biar bisa lanjut mencet opsi lain");
+  assert.equal(interaction.updates[0].components.length, 2, "menu (2 baris) ditempel ulang biar bisa lanjut mencet opsi lain");
 });
 
-test("handleFallbackMenuButton - '❓ Fitur lainnya' (fallback_menu:more) nunjukkin replyHelp() lengkap, plus tombol Tutup+Kembali (BUKAN menu 9-opsi ditempel ulang)", async () => {
+test("handleFallbackMenuButton - '❓ Fitur lainnya' (fallback_menu:more) nunjukkin replyHelp() lengkap (embed), plus tombol Tutup+Kembali (BUKAN menu ditempel ulang)", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:more" });
   await handleFallbackMenuButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
-  // replyHelp() nyebut fitur-fitur yang masih keyword-only - ini SATU-SATUNYA
-  // tempat fitur itu bisa kelihat dari menu 9-opsi tanpa ngetik "cok bantuan".
-  assert.match(interaction.updates[0].content, /cok streak/i);
-  assert.match(interaction.updates[0].content, /cok tambah alias/i);
-  assert.match(interaction.updates[0].content, /cok bandingin/i);
-  assert.equal(interaction.updates[0].components.length, 1, "cuma 1 baris (Tutup+Kembali), bukan menu 9-opsi ditempel ulang");
+  // replyHelp() sekarang balikin OBJECT {content, embeds} (dipecah dari
+  // content polos - kepanjangan, ngelewatin batas 2000 karakter Discord,
+  // itu bug "Fitur lainnya kok kayak rusak" yang dilaporin owner). Daftar
+  // command lengkapnya (termasuk fitur keyword-only) ada di embeds[0].description,
+  // ini SATU-SATUNYA tempat fitur itu bisa kelihat dari menu tanpa ngetik
+  // "cok bantuan".
+  assert.ok(interaction.updates[0].embeds, "harus ada embed (bukan content polos - kena limit 2000 karakter Discord)");
+  assert.match(interaction.updates[0].embeds[0].description, /cok streak/i);
+  assert.match(interaction.updates[0].embeds[0].description, /cok tambah alias/i);
+  assert.match(interaction.updates[0].embeds[0].description, /cok bandingin/i);
+  assert.ok(interaction.updates[0].content.length < 2000, "content-nya sendiri (di luar embed) harus jauh di bawah batas 2000 karakter Discord");
+  assert.equal(interaction.updates[0].components.length, 1, "cuma 1 baris (Tutup+Kembali), bukan menu ditempel ulang");
   const actionRow = interaction.updates[0].components[0];
   assert.equal(actionRow.components[0].data.custom_id, "fallback_menu:close");
   assert.equal(actionRow.components[0].data.label, "Tutup");
-  assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back");
+  assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back:3", "'Kembali' balik ke HALAMAN TERAKHIR (asal tombol 'Fitur lainnya')");
   assert.equal(actionRow.components[1].data.label, "Kembali");
 });
 
-test("handleFallbackMenuButton - tombol 'Kembali' di bawah replyHelp() ('❓ Fitur lainnya') EDIT balik jadi menu 9-opsi awal", async () => {
+test("handleFallbackMenuButton - tombol 'Kembali' di bawah replyHelp() ('❓ Fitur lainnya') EDIT balik ke HALAMAN TERAKHIR (bukan halaman 1)", async () => {
   const helpInteraction = fakeInteraction({ customId: "fallback_menu:more" });
   await handleFallbackMenuButton(helpInteraction);
-  assert.match(helpInteraction.updates[0].content, /cok streak/i);
+  assert.match(helpInteraction.updates[0].embeds[0].description, /cok streak/i);
 
-  const backInteraction = fakeInteraction({ customId: "fallback_menu:back" });
+  const backInteraction = fakeInteraction({ customId: "fallback_menu:back:3" });
   await handleFallbackMenuButton(backInteraction);
-  assert.match(backInteraction.updates[0].content, /Klik salah satu di bawah/);
-  assert.equal(backInteraction.updates[0].components.length, 3);
+  assert.match(backInteraction.updates[0].content, /Fitur lainnya/);
+  assert.equal(backInteraction.updates[0].components.length, 2);
+  const optionIds = backInteraction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(optionIds, ["fallback_menu:notlive", "fallback_menu:aliaslist", "fallback_menu:more"]);
 });
 
 // Opsi 8 (rekap hari ini) balikin object {content, components} yang UDAH
 // bawa tombol navigasi rekap sendiri (Maju/Mundur/Tutup rekap/Cari member) -
-// dipake APA ADANYA, gak ditempelin menu 9-opsi lagi di atasnya (2 sistem
-// tombol beda konteks numpuk di 1 pesan bakal bikin bingung, bukan bantu).
+// dipake APA ADANYA, gak ditempelin menu lagi di atasnya (2 sistem tombol
+// beda konteks numpuk di 1 pesan bakal bikin bingung, bukan bantu).
 // resolveBareMenuChoice("8") sengaja gak dites lewat handleFallbackMenuButton
 // beneran di sini - manggil replyTodayRecapSoFar() yang nge-fetch arsip
 // eksternal via network (lihat catetan di bawah), jadi cukup dipastiin lewat
@@ -474,7 +538,7 @@ test("handleFallbackMemberSelect - opsi 4: member yang dipilih dari dropdown lag
   const goneInteraction = fakeInteraction({ customId: "fallback_select:4", values: ["jkt48_selecttest"] });
   await handleFallbackMemberSelect(goneInteraction);
   assert.match(goneInteraction.updates[0].content, /nggak nemu member/);
-  assert.equal(goneInteraction.updates[0].components.length, 3, "menu 9-opsi (3 baris) ditempelin balik, bukan dead-end tanpa tombol");
+  assert.equal(goneInteraction.updates[0].components.length, 2, "menu (halaman asal opsi 4, index 0) ditempelin balik, bukan dead-end tanpa tombol");
 });
 
 test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown (bukan fuzzy search), EDIT pesan (update)", async () => {
@@ -487,5 +551,7 @@ test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown
   await handleFallbackMemberSelect(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.match(interaction.updates[0].content, /Top Gifter Selectgiftertest/);
-  assert.equal(interaction.updates[0].components.length, 3, "menu 9-opsi (3 baris) ditempelin balik, bukan dead-end tanpa tombol");
+  assert.equal(interaction.updates[0].components.length, 2, "menu (halaman asal opsi 9, index 1) ditempelin balik, bukan dead-end tanpa tombol");
+  const optionIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(optionIds, ["fallback_menu:3", "fallback_menu:5", "fallback_menu:9"]);
 });

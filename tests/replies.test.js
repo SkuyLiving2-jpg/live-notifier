@@ -747,10 +747,26 @@ test("replyPriorityList - urut rank, format '<rank>. **LABEL** (keyword: \"...\"
 // setting channel Discord ("Only @mentions" ngeblokir notif live biasa yang
 // emang gak nge-tag siapa-siapa), bukan bug di bot. Ditambahin ke
 // replyHelp() biar user nemu sendiri jawabannya tanpa perlu nanya owner.
+// BUG YANG DILAPORIN OWNER ("Fitur lainnya kok kayak rusak"): daftar command
+// replyHelp() digabung jadi SATU string polos, panjangnya 2900-an karakter -
+// ngelewatin batas 2000 karakter Discord buat `content`, jadi Discord API
+// NOLAK ngirimnya sama sekali (baik lewat "cok bantuan" maupun tombol "❓
+// Fitur lainnya" di menu fallback). Sekarang replyHelp() balikin OBJECT
+// {content, embeds} - content-nya cuma intro pendek, daftar commandnya
+// dipindah ke embeds[0].description (batas Discord buat field itu 4096
+// karakter, jauh lebih longgar).
+test("replyHelp - balikin OBJECT {content, embeds}, content-nya JAUH di bawah batas 2000 karakter Discord (bug 'Fitur lainnya rusak')", () => {
+  const reply = replyHelp();
+  assert.equal(typeof reply, "object");
+  assert.ok(reply.content.length < 2000, "content harus jauh di bawah limit 2000 karakter Discord");
+  assert.ok(Array.isArray(reply.embeds) && reply.embeds.length === 1);
+  assert.ok(reply.embeds[0].description.length < 4096, "description embed harus di bawah limit 4096 karakter Discord");
+});
+
 test("replyHelp - nyantumin tips soal setting notifikasi channel (All Messages vs Only @mentions)", () => {
   const reply = replyHelp();
-  assert.match(reply, /All Messages/);
-  assert.match(reply, /Only @mentions/);
+  assert.match(reply.embeds[0].description, /All Messages/);
+  assert.match(reply.embeds[0].description, /Only @mentions/);
 });
 
 test("handleSubscribe / handleUnsubscribe - validasi & pesan", () => {

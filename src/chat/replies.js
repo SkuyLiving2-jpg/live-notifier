@@ -252,10 +252,22 @@ function replyMemberNotFound(fragment) {
   return `Cok, nggak nemu member "${fragment}" yang lagi live. Coba cek ejaannya, atau tanya "cok siapa yang live" buat liat daftarnya.`;
 }
 
+// BUG YANG DILAPORIN OWNER ("Fitur lainnya kok kayak rusak"): daftar
+// command di bawah ini kepanjangan - digabung jadi SATU string polos
+// (`content`), panjangnya 2900-an karakter, ngelewatin batas 2000 karakter
+// punya Discord buat `content` pesan. Efeknya interaction.update()/message.reply()
+// nolak ngirim SAMA SEKALI (Discord API balikin error), jadi baik tombol "❓
+// Fitur lainnya" (menu.js) MAUPUN ngetik "cok bantuan" langsung dua-duanya
+// diem-diem gagal - user ngerasa tombolnya "rusak" padahal akar masalahnya
+// teksnya kepanjangan. Sekarang dipecah: `content` cuma intro pendek (bebas
+// jauh dari batas 2000), daftar commandnya sendiri dipindah ke `embeds`
+// (field `description` embed batasnya 4096 karakter, jauh lebih longgar).
+// Balikin OBJECT ({content, embeds}), bukan string lagi - safeReplyOptions
+// (utils.js) nerima dua-duanya, jadi pemanggil (router.js's "cok bantuan"
+// DAN menu.js's tombol "❓ Fitur lainnya") gak perlu ubah cara manggilnya.
 function replyHelp() {
   const ownerContact = PRIORITY_PING_USER_ID ? `<@${PRIORITY_PING_USER_ID}>` : "owner channel ini";
-  return [
-    "Cok bisa jawab ini:",
+  const description = [
     '- "cok ini yang masih live siapa aja?"',
     '- "cok siapa yang paling lama live" / "cok siapa yang paling rame ditonton" - tambahin "minggu ini"/"bulan ini"/nama bulan/tanggal buat rentang laen, default hari ini',
     '- "cok status"',
@@ -282,8 +294,11 @@ function replyHelp() {
     "",
     'Kalau abis muncul menu tombol, kamu juga bisa cukup balas angkanya doang (misal "1" atau "4 Nala") tanpa perlu klik.',
     '💡 Notif kerasa suka telat/gak keluar? Cek setting notifikasi channel-nya - klik nama channel > Notification Settings, pastiin di "All Messages" (bukan "Only @mentions"), soalnya notif live biasa emang gak nge-tag siapa-siapa kecuali kamu subscribe ("cok ingetin <nama>").',
-    `Ada yang belum kejawab? Hubungi ${ownerContact}.`,
   ].join("\n");
+  return {
+    content: `Cok bisa jawab ini (daftar lengkap di bawah). Ada yang belum kejawab? Hubungi ${ownerContact}.`,
+    embeds: [{ description, color: DAILY_RECAP_COLOR }],
+  };
 }
 
 // Daftar SEMUA member prioritas (bawaan Nala/Levi/Lily + custom yang
