@@ -9,7 +9,7 @@ const { replyFallbackMenu } = require("./menu");
 const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
 const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
-const { replyDurationChart } = require("./chartReply");
+const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
 const {
@@ -706,6 +706,8 @@ function wireDiscordEvents(client) {
         await handleCompareModalSubmit(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("compare_select:")) {
         await handleCompareSelect(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("chart_flow:")) {
+        await handleChartButton(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("alias_flow:")) {
         await handleAliasFlowButton(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("alias_modal:")) {

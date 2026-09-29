@@ -20,10 +20,13 @@
 // modul ini pertama di-require, bukan tiap kali chart dibikin.
 const path = require("path");
 const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
-const { AttachmentBuilder } = require("discord.js");
-const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
+const { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { activeLives } = require("../storage/activeLives");
+const { SESSION_RETENTION_DAYS, getCompletedSessionsSince } = require("../storage/dailyLog");
+const { findDurationHistoryByNameFragment, loadDurationHistory } = require("../storage/durationHistory");
 const { formatDuration, formatShortDateWIB } = require("../utils");
-const { describeMissingMember } = require("./replies");
+const { describeMissingMember, resolveRecapMember } = require("./replies");
+const { deleteInteractionMessage } = require("./interactionHelpers");
 
 const FONT_REGULAR = "ChartSans";
 const FONT_BOLD = "ChartSansBold";
@@ -154,21 +157,105 @@ function drawDurationChart(displayName, entries) {
   return canvas.toBuffer("image/png");
 }
 
+const MAX_CHART_SESSIONS = 10;
+
+// BUG YANG DILAPORIN OWNER ("grafik dan rekap gak sinkron"): grafik dulu
+// HANYA baca riwayat durasi (live-duration-history.json, 10 data terakhir),
+// sementara "cok rekap <nama>" baca arsip rekap (daily-log.json, 35 hari) -
+// dua file terpisah yang gak selalu berisi hal yang sama (mis. sebagian sesi
+// cuma ke-backfill ke salah satunya, atau riwayat durasi kepotong/direset).
+// Hasilnya rekap bilang 6 sesi sementara grafik nunjukkin 2 sesi lain yang
+// jauh lebih lama.
+//
+// Aturannya sekarang: DALAM jendela rekap (SESSION_RETENTION_DAYS hari
+// terakhir) arsip rekap berlaku SEPENUHNYA - grafik = sesi-sesi yang sama
+// dengan tabel "cok rekap <nama>" member itu, riwayat durasi yang nyelip di
+// jendela itu tapi gak ada di arsip DIABAIKAN (justru itu sumber gak
+// sinkronnya). Riwayat durasi cuma dipake buat (1) nambah sesi yang LEBIH TUA
+// dari jendela itu (yang emang udah dipangkas dari rekap, biar member yang
+// jarang live tetep dapet grafik berisi), dan (2) cadangan penuh kalau arsip
+// rekap member itu kosong sama sekali. Hasilnya 10 sesi TERAKHIR, kronologis
+// (terlama dulu).
+function mergeChartEntries(
+  archiveSessions,
+  historyEntries,
+  { now = Date.now(), retentionDays = SESSION_RETENTION_DAYS, limit = MAX_CHART_SESSIONS } = {},
+) {
+  const fromArchive = archiveSessions
+    .filter((s) => s.endedAtUnix !== null && s.durationMs > 0)
+    .map((s) => ({ name: s.name, durationMs: s.durationMs, at: new Date(s.endedAtUnix * 1000).toISOString() }));
+
+  const windowStartMs = now - retentionDays * 24 * 60 * 60 * 1000;
+  const fallbackToHistory = fromArchive.length === 0;
+  const historyUsed = fallbackToHistory ? historyEntries : historyEntries.filter((entry) => new Date(entry.at).getTime() < windowStartMs);
+
+  const entries = [...historyUsed, ...fromArchive].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()).slice(-limit);
+  const olderFromHistory = entries.filter((e) => historyUsed.includes(e)).length;
+  return { entries, olderFromHistory, fallbackToHistory };
+}
+
+// Baris tombol "Tutup" di bawah grafik (owner minta: grafik belum ada tombol
+// tutupnya, beda dari fitur lain yang jawabannya bisa ditutup). customId
+// sendiri ("chart_flow:close", dibaca router.js) - boleh diklik siapa aja,
+// sama kayak semua tombol Tutup lain di bot ini.
+function buildChartCloseRow() {
+  return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("chart_flow:close").setLabel("Tutup").setStyle(ButtonStyle.Danger));
+}
+
+async function handleChartButton(interaction) {
+  if (interaction.customId === "chart_flow:close") await deleteInteractionMessage(interaction);
+}
+
 // Titik masuk utama - dipanggil chat/router.js's "cok grafik <nama>" DAN
 // chat/slashCommands.js's "/grafik". Async (sama pola-nya kayak
 // replyCompareMembers dkk) soalnya describeMissingMember butuh network call
 // ke IDN buat mbedain "member beneran tapi belum pernah live" vs "bukan
-// member JKT48 sama sekali" kalau gak ketemu histori durasinya.
+// member JKT48 sama sekali" kalau gak ketemu datanya.
+//
+// Member di-resolve lewat resolveRecapMember (SAMA kayak "cok rekap <nama>"),
+// bukan cuma fuzzy-match pertama di riwayat durasi - jadi nama yang cocok ke
+// beberapa member ditanyain balik ("ketik yang lebih lengkap") persis kayak
+// rekap, bukan diem-diem milih yang pertama ketemu. Riwayat durasi tetep jadi
+// jalur cadangan buat member yang (entah kenapa) gak ada di live-count.
 async function replyDurationChart(fragment) {
-  const found = findDurationHistoryByNameFragment(fragment);
-  if (!found) return describeMissingMember(fragment, "digrafikin");
+  const shown = (fragment || "").trim();
+  const resolved = resolveRecapMember(shown);
+  if (resolved.status === "ambiguous") {
+    return `Cok, ada beberapa member yang cocok sama "${shown}": ${resolved.names.join(", ")}. Ketik nama yang lebih lengkap ya.`;
+  }
 
-  const buffer = drawDurationChart(found.displayName, found.entries);
-  const fileName = `grafik-${found.username}.png`;
+  let username;
+  let displayName;
+  if (resolved.status === "ok") {
+    ({ username, name: displayName } = resolved);
+  } else {
+    const fromHistory = findDurationHistoryByNameFragment(shown);
+    if (!fromHistory) return describeMissingMember(shown, "digrafikin");
+    ({ username, displayName } = fromHistory);
+  }
+
+  const archiveSessions = getCompletedSessionsSince(SESSION_RETENTION_DAYS).filter((s) => s.username === username);
+  const { entries, olderFromHistory, fallbackToHistory } = mergeChartEntries(archiveSessions, loadDurationHistory()[username] || []);
+  const isLiveNow = activeLives.has(username);
+
+  if (entries.length === 0) {
+    const liveNote = isLiveNow ? " - dia lagi live sekarang, grafiknya bisa dibikin begitu sesi ini kelar" : "";
+    return `Cok, **${displayName}** belum punya sesi live yang udah selesai buat digrafikin${liveNote}.`;
+  }
+
+  const notes = [];
+  if (fallbackToHistory) {
+    notes.push("Rekap gak nyimpen sesi member ini, jadi grafik diambil dari riwayat durasi.");
+  } else if (olderFromHistory > 0) {
+    notes.push(`${olderFromHistory} sesi yang lebih tua dari ${SESSION_RETENTION_DAYS} hari (udah gak ada di rekap) ikut dari riwayat durasi.`);
+  }
+  if (isLiveNow) notes.push("Sesi yang lagi live sekarang belum ikut (grafik cuma ngitung sesi yang udah selesai).");
+
   return {
-    content: `📊 Grafik durasi live **${found.displayName}** (${found.entries.length} sesi terakhir).`,
-    files: [new AttachmentBuilder(buffer, { name: fileName })],
+    content: [`📊 Grafik durasi live **${displayName}** (${entries.length} sesi terakhir yang udah selesai).`, ...notes].join(" "),
+    files: [new AttachmentBuilder(drawDurationChart(displayName, entries), { name: `grafik-${username}.png` })],
+    components: [buildChartCloseRow()],
   };
 }
 
-module.exports = { replyDurationChart, computeDurationChartMetrics, drawDurationChart };
+module.exports = { replyDurationChart, computeDurationChartMetrics, drawDurationChart, mergeChartEntries, handleChartButton };

@@ -2,8 +2,17 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { saveDurationHistory } = require("../src/storage/durationHistory");
-const { replyDurationChart, computeDurationChartMetrics, drawDurationChart } = require("../src/chat/chartReply");
+const { saveDurationHistory, recordLiveDurationAt } = require("../src/storage/durationHistory");
+const { recordLiveEnded } = require("../src/storage/dailyLog");
+const { recordLiveCompleted } = require("../src/storage/liveCount");
+const { activeLives } = require("../src/storage/activeLives");
+const {
+  replyDurationChart,
+  computeDurationChartMetrics,
+  drawDurationChart,
+  mergeChartEntries,
+  handleChartButton,
+} = require("../src/chat/chartReply");
 
 // PNG file selalu diawali 8 byte "magic number" ini - cara paling gampang
 // mastiin drawDurationChart beneran ngasilin PNG valid tanpa perlu decode
@@ -92,4 +101,130 @@ test("replyDurationChart - nama yang bener-bener gak ketemu di IDN sama sekali -
   } finally {
     global.fetch = original;
   }
+});
+
+// ==== Bug "grafik dan rekap gak sinkron" + tombol Tutup ====
+const HOUR = 3600_000;
+const DAY = 24 * HOUR;
+
+function archiveSession(username, name, endedAgoMs, durationMs) {
+  const end = new Date(Date.now() - endedAgoMs);
+  recordLiveEnded(name, username, new Date(end.getTime() - durationMs), end, 50);
+  recordLiveCompleted(username, name);
+}
+
+test("mergeChartEntries - DALAM jendela rekap arsip berlaku penuh, riwayat durasi yang nyelip di jendela itu diabaikan; yang LEBIH TUA dari jendela ditambahin", () => {
+  const now = Date.now();
+  const archive = [
+    { name: "M", username: "u", endedAtUnix: Math.floor((now - 2 * DAY) / 1000), durationMs: 3 * HOUR },
+    { name: "M", username: "u", endedAtUnix: Math.floor((now - 1 * DAY) / 1000), durationMs: 4 * HOUR },
+  ];
+  const history = [
+    { name: "M", durationMs: 9 * HOUR, at: new Date(now - 50 * DAY).toISOString() }, // lebih tua dari 35 hari -> ikut
+    { name: "M", durationMs: 8 * HOUR, at: new Date(now - 10 * DAY).toISOString() }, // di jendela tapi gak ada di arsip -> diabaikan
+    { name: "M", durationMs: 7 * HOUR, at: new Date(now - 2 * DAY).toISOString() }, // sesi yang sama kayak arsip -> gak dobel
+  ];
+  const { entries, olderFromHistory, fallbackToHistory } = mergeChartEntries(archive, history, { now });
+  assert.deepEqual(
+    entries.map((e) => e.durationMs),
+    [9 * HOUR, 3 * HOUR, 4 * HOUR],
+    "kronologis: 1 sesi tua dari riwayat, lalu 2 sesi arsip persis",
+  );
+  assert.equal(olderFromHistory, 1);
+  assert.equal(fallbackToHistory, false);
+});
+
+test("mergeChartEntries - arsip kosong -> cadangan penuh dari riwayat durasi; cuma 10 sesi terakhir yang dipake, kronologis", () => {
+  const now = Date.now();
+  const history = Array.from({ length: 12 }, (_, i) => ({ name: "M", durationMs: (i + 1) * HOUR, at: new Date(now - (12 - i) * DAY).toISOString() }));
+  const { entries, fallbackToHistory } = mergeChartEntries([], history, { now });
+  assert.equal(fallbackToHistory, true);
+  assert.equal(entries.length, 10);
+  assert.equal(entries[0].durationMs, 3 * HOUR, "2 sesi paling lama kepotong");
+  assert.equal(entries[9].durationMs, 12 * HOUR);
+});
+
+test("mergeChartEntries - sesi arsip yang belum selesai/durasi 0 gak ikut", () => {
+  const { entries } = mergeChartEntries(
+    [
+      { name: "M", endedAtUnix: null, durationMs: null },
+      { name: "M", endedAtUnix: Math.floor(Date.now() / 1000), durationMs: 0 },
+    ],
+    [],
+  );
+  assert.deepEqual(entries, []);
+});
+
+// Persis kasus yang dilaporin owner: rekap bilang N sesi, grafik nunjukkin
+// sesi lain (riwayat durasi cuma nyimpen 2 sesi lama yang beda dari arsip).
+test("replyDurationChart - SINKRON sama rekap member: jumlah sesi grafik = jumlah sesi di tabel rekap (arsip), bukan riwayat durasi yang beda", async () => {
+  const { replyRecapMember } = require("../src/chat/replies");
+  for (let i = 6; i >= 1; i--) archiveSession("jkt48_chartsync", "Chartsync JKT48", i * DAY, i * HOUR);
+  recordLiveDurationAt("jkt48_chartsync", "Chartsync JKT48", 9 * HOUR, new Date(Date.now() - 30 * DAY));
+  recordLiveDurationAt("jkt48_chartsync", "Chartsync JKT48", 8 * HOUR, new Date(Date.now() - 29 * DAY));
+
+  const rekap = await replyRecapMember("chartsync", "c-chart-sync", "u-chart-sync");
+  assert.match(rekap.content, /Total sesi: 6x/);
+
+  const chart = await replyDurationChart("chartsync");
+  assert.match(chart.content, /(6 sesi terakhir yang udah selesai)/, "sama-sama 6 sesi");
+  assert.doesNotMatch(chart.content, /riwayat durasi/, "gak ada catatan tambahan karena gak ada sesi yang lebih tua dari jendela rekap");
+});
+
+test("replyDurationChart - ada sesi lebih tua dari jendela rekap di riwayat durasi -> ikut, dengan catatan jelas", async () => {
+  for (let i = 3; i >= 1; i--) archiveSession("jkt48_chartold", "Chartold JKT48", i * DAY, i * HOUR);
+  recordLiveDurationAt("jkt48_chartold", "Chartold JKT48", 9 * HOUR, new Date(Date.now() - 60 * DAY));
+
+  const chart = await replyDurationChart("chartold");
+  assert.match(chart.content, /(4 sesi terakhir yang udah selesai)/);
+  assert.match(chart.content, /1 sesi yang lebih tua dari 35 hari/);
+});
+
+test("replyDurationChart - nama cocok ke BEBERAPA member -> ditanyain balik (sama kayak rekap), bukan diem-diem milih yang pertama", async () => {
+  archiveSession("jkt48_chartambigone", "Chartambigone JKT48", DAY, HOUR);
+  archiveSession("jkt48_chartambigtwo", "Chartambigtwo JKT48", DAY, HOUR);
+  const reply = await replyDurationChart("chartambig");
+  assert.equal(typeof reply, "string");
+  assert.match(reply, /ada beberapa member yang cocok sama "chartambig".*Chartambigone JKT48.*Chartambigtwo JKT48/);
+});
+
+test("replyDurationChart - member lagi live sekarang -> catatan sesi berjalan belum ikut; belum ada sesi selesai sama sekali -> pesan jelas, bukan chart kosong", async () => {
+  archiveSession("jkt48_chartlivenow", "Chartlivenow JKT48", DAY, HOUR);
+  activeLives.set("jkt48_chartlivenow", { username: "jkt48_chartlivenow", name: "Chartlivenow JKT48", liveAt: new Date().toISOString() });
+  const withNote = await replyDurationChart("chartlivenow");
+  assert.match(withNote.content, /Sesi yang lagi live sekarang belum ikut/);
+
+  recordLiveCompleted("jkt48_chartonlylive", "Chartonlylive JKT48");
+  activeLives.set("jkt48_chartonlylive", { username: "jkt48_chartonlylive", name: "Chartonlylive JKT48", liveAt: new Date().toISOString() });
+  const none = await replyDurationChart("chartonlylive");
+  assert.equal(typeof none, "string");
+  assert.match(none, /belum punya sesi live yang udah selesai buat digrafikin.*lagi live sekarang/);
+  activeLives.delete("jkt48_chartlivenow");
+  activeLives.delete("jkt48_chartonlylive");
+});
+
+// Owner minta: "grafik <member>" belum ada tombol tutupnya.
+test("replyDurationChart - balesan grafik punya tombol Tutup (chart_flow:close) di bawahnya", async () => {
+  archiveSession("jkt48_chartclose", "Chartclose JKT48", DAY, HOUR);
+  const reply = await replyDurationChart("chartclose");
+  assert.equal(reply.components.length, 1);
+  const buttons = reply.components[0].components;
+  assert.deepEqual(
+    buttons.map((b) => [b.data.custom_id, b.data.label]),
+    [["chart_flow:close", "Tutup"]],
+  );
+});
+
+test("handleChartButton - 'chart_flow:close' beneran ngehapus pesannya (deferUpdate + message.delete), siapa aja boleh nutup", async () => {
+  const deleted = [];
+  const deferred = [];
+  const interaction = {
+    customId: "chart_flow:close",
+    user: { id: "siapa-aja" },
+    message: { id: "msg-chart", delete: async () => deleted.push("msg-chart") },
+    deferUpdate: async () => deferred.push(true),
+  };
+  await handleChartButton(interaction);
+  assert.equal(deferred.length, 1);
+  assert.deepEqual(deleted, ["msg-chart"]);
 });
