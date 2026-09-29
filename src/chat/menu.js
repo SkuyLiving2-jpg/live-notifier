@@ -204,7 +204,7 @@ const EXTRA_FEATURES = [
     label: "⚔️ Bandingin member",
     description: "Bandingin 2 atau lebih member sekaligus",
     detail:
-      'Ketik `cok bandingin <A> dan <B>` (atau cukup "cok <A> dan <B>"/"cok <A> & <B>") buat 2 member, atau `cok bandingin A, B, dan C` (pakai koma) buat lebih dari 2 sekaligus. Ketik "cok bandingin" polos aja buat dicariin lewat dropdown.',
+      'Ketik `cok bandingin <A> dan <B>` (atau cukup "cok <A> dan <B>"/"cok <A> & <B>") buat 2 member, atau `cok bandingin A, B, dan C` (pakai koma) buat lebih dari 2 sekaligus. Ketik "cok bandingin" polos aja buat ditanya mau berapa member (2 sampai 5), terus dicariin satu-satu lewat dropdown.',
   },
   {
     value: "rekaprange",

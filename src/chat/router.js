@@ -7,7 +7,13 @@ const { tryHandleWatchConfirmShortcut } = require("./menu");
 const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = require("./pendingState");
 const { replyFallbackMenu } = require("./menu");
 const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
-const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
+const {
+  replyStartComparePick,
+  handleComparePickButton,
+  handleCompareModalSubmit,
+  handleCompareSelect,
+  handleCompareCountSelect,
+} = require("./compareFlow");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const { withCloseButton, handleReplyCloseButton } = require("./interactionHelpers");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
@@ -744,6 +750,8 @@ function wireDiscordEvents(client) {
         await handleComparePickButton(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("compare_modal:")) {
         await handleCompareModalSubmit(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId === "compare_count") {
+        await handleCompareCountSelect(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("compare_select:")) {
         await handleCompareSelect(interaction);
       } else if (interaction.isButton() && interaction.customId === "reply_close") {

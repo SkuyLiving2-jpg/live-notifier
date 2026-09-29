@@ -297,7 +297,7 @@ function replyHelp() {
     '- "cok siapa yang paling lama gak live" / "cok siapa yang paling jarang live" - kebalikannya, member yang UDAH LAMA gak keliatan (yang lagi live sekarang dikecualiin)',
     '- "cok kapan <nama member> biasanya live?" / "cok jadwal <nama>" - pola jam/hari dari histori (bukan jadwal resmi)',
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
-    '- "cok bandingin <nama member> dan/& <nama member>" (atau cukup "cok <nama> dan <nama>" / "cok <nama> & <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat dicariin lewat dropdown',
+    '- "cok bandingin <nama member> dan/& <nama member>" (atau cukup "cok <nama> dan <nama>" / "cok <nama> & <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat ditanya mau berapa member (2 sampai 5) lalu dicariin lewat dropdown',
     `- "cok bandingin A, B, dan C" - bisa lebih dari 2 member sekaligus (pakai koma, maks ${MAX_COMPARE_MEMBERS} orang), mis. "cok bandingin nala, levi, dan lily"`,
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
@@ -2252,6 +2252,14 @@ async function replyCompareMembersByUsername(usernameA, usernameB) {
   return buildCompareReply(a, b);
 }
 
+// Versi N-member dari replyCompareMembersByUsername - dipake compareFlow.js
+// (dropdown "bandingin" polos: pilih jumlah 2-5, lalu cari satu-satu). Username
+// udah DIJAMIN ada di live-count.json dan gak dobel (compareFlow.js yang jaga).
+async function replyCompareMembersMultiByUsername(usernames) {
+  const data = loadLiveCount();
+  return buildCompareReplyMulti(usernames.map((username) => ({ username, ...data[username] })));
+}
+
 // Saran fitur ke-3, 3+ member sekaligus (§10's kelimapuluh+item). Discord
 // ngizinin sampe 10 embed per pesan, tapi dibatesin lebih ketat di sini -
 // bukan cuma soal limit teknis, embed numpuk ke BAWAH (bukan sebelahan,
@@ -2595,6 +2603,8 @@ module.exports = {
   buildExportCsv,
   replyCompareMembers,
   replyCompareMembersByUsername,
+  replyCompareMembersMultiByUsername,
+  MAX_COMPARE_MEMBERS,
   replyCompareMembersMulti,
   describeMissingMember,
   normalizeMemberFragment,

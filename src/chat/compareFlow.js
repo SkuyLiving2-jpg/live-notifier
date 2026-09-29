@@ -8,49 +8,108 @@ const {
   StringSelectMenuBuilder,
 } = require("discord.js");
 const { loadLiveCount, searchLiveCountByNameFragment } = require("../storage/liveCount");
-const { replyCompareMembersByUsername, describeMissingMember, sameMemberMessage, buildCompareCloseRow, COMPARE_CLOSE_ID } = require("./replies");
+const {
+  replyCompareMembersByUsername,
+  replyCompareMembersMultiByUsername,
+  describeMissingMember,
+  sameMemberMessage,
+  buildCompareCloseRow,
+  COMPARE_CLOSE_ID,
+  MAX_COMPARE_MEMBERS,
+} = require("./replies");
 const { deleteInteractionMessage } = require("./interactionHelpers");
 const { safeReplyOptions } = require("../utils");
 
-// Flow dropdown/search buat "cok bandingin" yang diketik POLOS, tanpa
-// "<A> dan <B>" sekaligus (owner ngeluh kalau gitu doang, kepentok jatuh ke
-// menu fallback 9-opsi generik, padahal maksudnya emang mau bandingin -
-// cuma belum mutusin siapa dan siapa). Alurnya 2 langkah, satu pesan yang
-// SAMA terus di-edit di tempat (interaction.update) di tiap langkah - biar
-// gak numpuk beberapa pesan di channel cuma buat satu proses milih member:
-//   1. Tombol "🔍 Cari Member A" -> modal cari nama -> (0 match: coba lagi,
-//      1 match: langsung lanjut ke langkah 2, >1 match: dropdown milih).
-//   2. Sama persis buat "Member B", tapi member yang SAMA kayak A ditolak
-//      (gak masuk akal nge-compare 1 orang sama dirinya sendiri) dengan pesan
-//      yang jelas, bukan pura-pura "gak ketemu".
-// Username A dibawa lewat customId di tiap komponen (bukan disimpen di
-// pendingState.js) - sengaja STATELESS: gak ada Map yang perlu di-TTL-in
-// atau dibersihin manual pas "Tutup" dipencet, dan flow-nya juga cuma nempel
-// ke SATU pesan (gak butuh channel+author sebagai kunci state terpisah).
-function buildSearchButtonRow(step, usernameA) {
-  const customId = step === "A" ? "compare_pick:searchA" : `compare_pick:searchB:${usernameA}`;
-  const label = step === "A" ? "🔍 Cari Member A" : "🔍 Cari Member B";
+// Flow dropdown/search buat "cok bandingin" yang diketik POLOS, tanpa nama
+// member sama sekali (owner ngeluh: dulu flow ini cuma nanya "Member A" dan
+// "Member B", jadi kesannya bandingin cuma bisa 2 orang - padahal bisa sampai
+// MAX_COMPARE_MEMBERS). Alurnya satu pesan yang SAMA terus di-edit di tempat
+// (interaction.update) di tiap langkah:
+//   1. Dropdown "mau bandingin berapa member?" (2 sampai MAX_COMPARE_MEMBERS).
+//   2. Diulang sebanyak jumlah itu: tombol "🔍 Cari Member k" -> modal cari nama
+//      -> (0 match: coba lagi, 1 match: langsung kepilih, >1 match: dropdown).
+//      Member yang SAMA kayak yang udah dipilih ditolak dengan pesan jelas.
+//   3. Begitu jumlahnya terpenuhi, hasil perbandingan muncul (tombol Tutup
+//      nempel dari replies.js's buildCompareReply/buildCompareReplyMulti).
+// "Tutup" ada di SETIAP langkah.
+//
+// State (jumlah target + username yang udah dipilih) dibawa lewat customId di
+// tiap komponen - sengaja STATELESS, sama alasan kayak versi lama: gak ada Map
+// yang perlu di-TTL-in atau dibersihin pas "Tutup". Format customId:
+//   compare_pick:search:<n>:<daftar>   (tombol cari)
+//   compare_modal:<n>:<daftar>         (modal cari)
+//   compare_select:<n>:<daftar>        (dropdown hasil cari)
+// <daftar> = username dipisah koma, awalan "jkt48_" dibuang biar 4 username
+// (langkah ke-5) tetep muat di batas 100 karakter customId Discord.
+//
+// customId LAMA ("compare_pick:searchA", "searchB:<username>", "compare_modal:A",
+// "compare_modal:B:<username>", "compare_select:A"/"B:<username>") dari pesan
+// yang masih nongkrong di channel tetep dikenali, dianggap perbandingan 2 member.
+const COUNT_SELECT_ID = "compare_count";
+
+function encodePicked(usernames) {
+  return usernames.map((u) => (u.startsWith("jkt48_") ? u.slice(6) : `!${u}`)).join(",");
+}
+
+function decodePicked(text) {
+  if (!text) return [];
+  return text.split(",").map((t) => (t.startsWith("!") ? t.slice(1) : `jkt48_${t}`));
+}
+
+// `parts` = potongan customId SETELAH awalan komponennya ("compare_modal"/
+// "compare_select"/"compare_pick:search"), mis. ["3", "nala,levi"] atau bentuk
+// lama ["A"] / ["B", "jkt48_nala"].
+function parseState(parts) {
+  if (parts[0] === "A") return { n: 2, picked: [] };
+  if (parts[0] === "B") return { n: 2, picked: parts[1] ? [parts[1]] : [] };
+  const n = Math.min(Math.max(Number(parts[0]) || 2, 2), MAX_COMPARE_MEMBERS);
+  return { n, picked: decodePicked(parts[1]) };
+}
+
+function nameOf(username) {
+  return loadLiveCount()[username]?.name || username;
+}
+
+function buildCloseButton() {
+  return new ButtonBuilder().setCustomId(COMPARE_CLOSE_ID).setLabel("Tutup").setStyle(ButtonStyle.Danger);
+}
+
+function buildSearchButtonRow(state) {
+  const slot = state.picked.length + 1;
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(COMPARE_CLOSE_ID).setLabel("Tutup").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`compare_pick:search:${state.n}:${encodePicked(state.picked)}`)
+      .setLabel(`🔍 Cari Member ${slot}`)
+      .setStyle(ButtonStyle.Primary),
+    buildCloseButton(),
   );
 }
 
-// Dipanggil dari chat/router.js pas user ketik "bandingin" tanpa pola
-// "<A> dan <B>" yang lengkap (lihat compareMatch di router.js) - ganti dari
-// jatuh ke fallback menu generik.
+// Langkah 1: "bandingin" polos. Dipanggil chat/router.js.
 function replyStartComparePick() {
+  const options = [];
+  for (let n = 2; n <= MAX_COMPARE_MEMBERS; n++) options.push({ label: `${n} member`, value: String(n) });
+  const select = new StringSelectMenuBuilder().setCustomId(COUNT_SELECT_ID).setPlaceholder("Pilih jumlah member...").addOptions(options);
   return {
-    content: "Mau bandingin siapa lawan siapa nih, cok? Cari member A dulu.",
-    components: [buildSearchButtonRow("A", null)],
+    content: `Mau bandingin berapa member, cok? (2 sampai ${MAX_COMPARE_MEMBERS})`,
+    components: [new ActionRowBuilder().addComponents(select), buildCompareCloseRow()],
   };
 }
 
-function buildCompareSearchModal(step, usernameA) {
-  const customId = step === "A" ? "compare_modal:A" : `compare_modal:B:${usernameA}`;
+function buildPickPrompt(state, intro) {
+  const slot = state.picked.length + 1;
+  const pickedLine = state.picked.length > 0 ? `Udah dipilih: ${state.picked.map((u) => `**${nameOf(u)}**`).join(", ")} ✅\n` : "";
+  return {
+    content: `${intro ? `${intro}\n` : ""}${pickedLine}Sekarang cari Member ${slot} dari ${state.n}.`,
+    components: [buildSearchButtonRow(state)],
+  };
+}
+
+function buildCompareSearchModal(state) {
+  const slot = state.picked.length + 1;
   return new ModalBuilder()
-    .setCustomId(customId)
-    .setTitle(step === "A" ? "Cari Member A" : "Cari Member B")
+    .setCustomId(`compare_modal:${state.n}:${encodePicked(state.picked)}`)
+    .setTitle(`Cari Member ${slot}`)
     .addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
@@ -63,59 +122,51 @@ function buildCompareSearchModal(step, usernameA) {
     );
 }
 
-// `message` udah jadi teks jadi (dari describeMissingMember/sameMemberMessage) -
+// `message` udah jadi teks jadi (dari describeMissingMember/pesan duplikat) -
 // tombol "cari lagi" + "Tutup" ditempelin biar salah ketik gak bikin buntu.
-function buildRetryBlock(step, usernameA, message) {
+function buildRetryBlock(state, message) {
   return {
-    content: `${message}\nCoba cari lagi Member ${step}, atau tutup kalau gak jadi.`,
-    components: [buildSearchButtonRow(step, usernameA)],
+    content: `${message}\nCoba cari lagi Member ${state.picked.length + 1}, atau tutup kalau gak jadi.`,
+    components: [buildSearchButtonRow(state)],
   };
 }
 
-function buildSelectBlock(step, usernameA, matches) {
+function buildSelectBlock(state, matches) {
   const truncated = matches.slice(0, 25);
-  const customId = step === "A" ? "compare_select:A" : `compare_select:B:${usernameA}`;
   const select = new StringSelectMenuBuilder()
-    .setCustomId(customId)
+    .setCustomId(`compare_select:${state.n}:${encodePicked(state.picked)}`)
     .setPlaceholder("Pilih member...")
     .addOptions(truncated.map((m) => ({ label: m.name, value: m.username, description: `${m.count}x live` })));
   const truncNote = matches.length > 25 ? `\n_(cuma nunjukkin 25 dari ${matches.length} hasil - coba kata kunci lebih spesifik)_` : "";
-  const label = step === "A" ? "A" : "B";
 
   return {
-    content: `🔍 Ketemu ${matches.length} member buat Member ${label}. Pilih yang mana, cok?${truncNote}`,
+    content: `🔍 Ketemu ${matches.length} member buat Member ${state.picked.length + 1}. Pilih yang mana, cok?${truncNote}`,
     components: [new ActionRowBuilder().addComponents(select), buildCompareCloseRow()],
   };
 }
 
-function buildPickBPromptBlock(memberA) {
-  return {
-    content: `Member A: **${memberA.name}** ✅\nSekarang cari member B buat dibandingin.`,
-    components: [buildSearchButtonRow("B", memberA.username)],
-  };
+// Pesan penolakan buat member yang udah dipilih. Buat 2 member tetep pesan lama
+// (sameMemberMessage); buat 3+ disesuaiin ("dua member" gak pas lagi).
+function duplicateMessage(state, dupUsername, shown) {
+  if (state.n === 2) return sameMemberMessage(nameOf(dupUsername), shown);
+  return `Cok, "${shown}" itu **${nameOf(dupUsername)}** yang udah kamu pilih tadi. Pilih member yang BEDA ya.`;
 }
 
-// Langkah TERAKHIR (member B udah kepilih). Tombol Tutup di hasilnya (owner
-// minta eksplisit: "kalo perbandingan nya sudah muncul, berikan juga tombol
-// tutup") udah nempel dari replies.js's buildCompareReply - sama persis
-// kayak ketikan langsung "bandingin <A> dan <B>". Member B yang ternyata SAMA
-// kayak A (mis. dari dropdown lama yang masih kepencet) ditolak di sini.
-async function finishCompare(usernameA, memberB) {
-  if (memberB.username === usernameA) {
-    const name = loadLiveCount()[usernameA]?.name || usernameA;
-    return buildRetryBlock("B", usernameA, sameMemberMessage(name, memberB.name));
+// Abis satu member kepilih: lanjut ke slot berikutnya, atau tampilin hasil
+// kalau jumlahnya udah terpenuhi. Member yang udah ada di daftar ditolak (jaga
+// juga dari dropdown lama yang kepencet ulang).
+async function acceptPick(state, picked) {
+  if (state.picked.includes(picked.username)) {
+    return buildRetryBlock(state, duplicateMessage(state, picked.username, picked.name));
   }
-  return replyCompareMembersByUsername(usernameA, memberB.username);
+  const next = { n: state.n, picked: [...state.picked, picked.username] };
+  if (next.picked.length < next.n) return buildPickPrompt(next);
+  return next.n === 2 ? replyCompareMembersByUsername(next.picked[0], next.picked[1]) : replyCompareMembersMultiByUsername(next.picked);
 }
 
-// Dipake abis modal search cuma nemu SATU kandidat (langsung dianggep
-// kepilih, gak perlu dropdown cuma buat 1 opsi) MAUPUN abis user beneran
-// milih dari dropdown (>1 kandidat) - dua jalur itu ujungnya sama: lanjut ke
-// langkah B (kalau baru selesai milih A) atau langsung tampilin hasil
-// perbandingan (kalau baru selesai milih B).
-async function resolvePicked(step, usernameA, picked) {
-  if (step === "A") return buildPickBPromptBlock(picked);
-  return finishCompare(usernameA, picked);
+async function handleCompareCountSelect(interaction) {
+  const n = Math.min(Math.max(Number(interaction.values[0]) || 2, 2), MAX_COMPARE_MEMBERS);
+  await interaction.update(safeReplyOptions(buildPickPrompt({ n, picked: [] }, `Oke, bandingin ${n} member.`)));
 }
 
 async function handleComparePickButton(interaction) {
@@ -127,45 +178,41 @@ async function handleComparePickButton(interaction) {
     return;
   }
 
-  const step = action === "searchA" ? "A" : "B";
-  const usernameA = step === "B" ? parts[2] : null;
-  await interaction.showModal(buildCompareSearchModal(step, usernameA));
+  // Bentuk baru: "search:<n>:<daftar>". Bentuk lama: "searchA" / "searchB:<u>".
+  let state;
+  if (action === "search") state = parseState(parts.slice(2));
+  else if (action === "searchA") state = parseState(["A"]);
+  else state = parseState(["B", parts[2]]);
+  await interaction.showModal(buildCompareSearchModal(state));
 }
 
 async function handleCompareModalSubmit(interaction) {
-  const parts = interaction.customId.split(":");
-  const step = parts[1];
-  const usernameA = step === "B" ? parts[2] : null;
+  const state = parseState(interaction.customId.split(":").slice(1));
   const query = interaction.fields.getTextInputValue("member_query").trim();
 
   const allMatches = searchLiveCountByNameFragment(query);
-  // Member B gak boleh sama kayak A - yang cocok query tapi = A dibuang, dan
-  // kalau SEMUA yang cocok cuma A, bilang terus terang itu member yang sama
-  // (bukan "gak ketemu", yang salah: dia jelas ada).
-  const matches = step === "B" ? allMatches.filter((m) => m.username !== usernameA) : allMatches;
+  // Member yang udah dipilih dibuang dari hasil, dan kalau SEMUA yang cocok
+  // udah dipilih, bilang terus terang (bukan "gak ketemu", yang salah: dia
+  // jelas ada).
+  const matches = allMatches.filter((m) => !state.picked.includes(m.username));
 
   if (matches.length === 0) {
-    const message =
-      allMatches.length > 0 ? sameMemberMessage(loadLiveCount()[usernameA]?.name || usernameA, query) : await describeMissingMember(query);
-    await interaction.update(safeReplyOptions(buildRetryBlock(step, usernameA, message)));
+    const message = allMatches.length > 0 ? duplicateMessage(state, allMatches[0].username, query) : await describeMissingMember(query);
+    await interaction.update(safeReplyOptions(buildRetryBlock(state, message)));
     return;
   }
   if (matches.length === 1) {
-    await interaction.update(safeReplyOptions(await resolvePicked(step, usernameA, matches[0])));
+    await interaction.update(safeReplyOptions(await acceptPick(state, matches[0])));
     return;
   }
-  await interaction.update(safeReplyOptions(buildSelectBlock(step, usernameA, matches)));
+  await interaction.update(safeReplyOptions(buildSelectBlock(state, matches)));
 }
 
 async function handleCompareSelect(interaction) {
-  const parts = interaction.customId.split(":");
-  const step = parts[1];
-  const usernameA = step === "B" ? parts[2] : null;
+  const state = parseState(interaction.customId.split(":").slice(1));
   const chosenUsername = interaction.values[0];
-
-  const data = loadLiveCount();
-  const picked = { username: chosenUsername, name: data[chosenUsername]?.name || chosenUsername };
-  await interaction.update(safeReplyOptions(await resolvePicked(step, usernameA, picked)));
+  const picked = { username: chosenUsername, name: nameOf(chosenUsername) };
+  await interaction.update(safeReplyOptions(await acceptPick(state, picked)));
 }
 
 module.exports = {
@@ -173,4 +220,5 @@ module.exports = {
   handleComparePickButton,
   handleCompareModalSubmit,
   handleCompareSelect,
+  handleCompareCountSelect,
 };

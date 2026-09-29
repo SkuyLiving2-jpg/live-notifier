@@ -257,7 +257,7 @@ test("export rekap - dispatch ke replyExportRecap (balesan bawa file CSV), BUKAN
   const reply = await buildChatReply("cok export rekap");
   const content = textOf(reply);
   assert.match(content, /diexport ke CSV|belum ada data live buat diexport/);
-  if (typeof reply === "object") {
+  if (/diexport ke CSV/.test(content)) {
     assert.ok(reply.files, "balesan yang ada datanya harus bawa file CSV");
   }
 });
@@ -427,7 +427,7 @@ test("'<A>, <B>, dan <A>' BARE (member yang sama muncul dobel) ditolak dengan pe
 
 test("'vs' SUDAH BUKAN pemisah: 'bandingin <A> vs <B>' jatuh ke flow dropdown, dan '<A> vs <B>' polos bukan perbandingan", async () => {
   const withKeyword = await buildChatReply("cok bandingin zorrawx vs yelvaqp");
-  assert.match(withKeyword.content, /cari member a/i);
+  assert.match(withKeyword.content, /berapa member/i);
 
   const bare = await buildChatReply("cok zorrawx vs yelvaqp");
   assert.doesNotMatch(JSON.stringify(bare), /⚔️|compare_pick/);
@@ -435,7 +435,7 @@ test("'vs' SUDAH BUKAN pemisah: 'bandingin <A> vs <B>' jatuh ke flow dropdown, d
 
 test("bandingin dengan SATU nama doang (pasangannya belum ada) - dispatch ke flow dropdown, bukan menu fallback generik", async () => {
   const reply = await buildChatReply("cok bandingin zorrawx");
-  assert.match(reply.content, /cari member a/i);
+  assert.match(reply.content, /berapa member/i);
 });
 
 test("member SAMA di dua sisi ('A dan A') ditolak dengan pesan jelas, baik pakai kata kunci maupun polos", async () => {
@@ -459,10 +459,15 @@ test("kalimat biasa berpola '<kata> dan <kata>' yang BUKAN nama member gak dibaj
 test("bandingin POLOS - dispatch ke flow dropdown pencarian, BUKAN fallback menu generik", async () => {
   for (const word of ["bandingin", "bandingkan", "banding"]) {
     const reply = await buildChatReply(`cok ${word}`);
-    assert.match(reply.content, /cari member a/i, word);
+    assert.match(reply.content, /berapa member/i, word);
     assert.doesNotMatch(reply.content, /selamat (pagi|siang|sore|malam)/i);
-    const customIds = reply.components[0].components.map((b) => b.data.custom_id);
-    assert.deepEqual(customIds, ["compare_pick:searchA", "compare_pick:close"]);
+    const select = reply.components[0].components[0];
+    assert.equal(select.data.custom_id, "compare_count", word);
+    assert.deepEqual(
+      select.options.map((o) => o.data.value),
+      ["2", "3", "4", "5"],
+    );
+    assert.equal(reply.components[1].components[0].data.custom_id, "compare_pick:close", word);
   }
 });
 
