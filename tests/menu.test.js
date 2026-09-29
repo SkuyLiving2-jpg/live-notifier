@@ -347,7 +347,13 @@ test("handleFallbackMenuButton - tombol 'Kembali' bawa nomor halaman ASAL (custo
 // menu ini dirombak jadi WIZARD BERHALAMAN (3 tombol opsi/halaman, lihat
 // MENU_PAGES di menu.js) - test ini sekarang ngecek SEMUA HALAMAN, bukan
 // cuma bentuk lama yang numpuk 9-12 tombol di 1-2 baris.
-test("replyFallbackMenu - wizard berhalaman: 4 halaman (3 opsi + Tutup/Menu lainnya per halaman, halaman terakhir cuma Tutup)", async () => {
+//
+// BUG YANG DILAPORIN OWNER (nyusul, abis wizard berhalaman ini di-ship): dulu
+// cuma ada "Menu lainnya" (maju doang), gak ada cara balik ke halaman
+// sebelumnya - user yang udah kepencet sampe halaman 3-4 kejebak, satu-satunya
+// jalan keluar nutup pesannya terus manggil ulang dari awal. Sekarang tiap
+// halaman (kecuali halaman PERTAMA) juga punya "⬅️ Menu sebelumnya".
+test("replyFallbackMenu - wizard berhalaman: 4 halaman (3 opsi + Tutup/navigasi maju-mundur per halaman, halaman pertama tanpa mundur, halaman terakhir tanpa maju)", async () => {
   const { replyFallbackMenu } = require("../src/chat/menu");
 
   // Halaman 1: siapa yang live / cek member / rekap hari ini.
@@ -356,30 +362,44 @@ test("replyFallbackMenu - wizard berhalaman: 4 halaman (3 opsi + Tutup/Menu lain
   const page1OptionIds = page1.components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(page1OptionIds, ["fallback_menu:1", "fallback_menu:4", "fallback_menu:8"]);
   const page1NavIds = page1.components[1].components.map((c) => c.data.custom_id);
-  assert.deepEqual(page1NavIds, ["fallback_menu:delete", "fallback_menu:goto:1"], "halaman 1 punya 'Menu lainnya' (goto halaman 2)");
+  assert.deepEqual(
+    page1NavIds,
+    ["fallback_menu:delete", "fallback_menu:goto:1"],
+    "halaman PERTAMA gak ada 'Menu sebelumnya' (gak ada halaman sebelum itu), cuma 'Menu lainnya' (goto halaman 2)",
+  );
 
   // Halaman 2: paling lama live / paling rame / cek top gifter.
   const page2 = replyFallbackMenu(1);
   const page2OptionIds = page2.components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(page2OptionIds, ["fallback_menu:3", "fallback_menu:5", "fallback_menu:9"]);
   const page2NavIds = page2.components[1].components.map((c) => c.data.custom_id);
-  assert.deepEqual(page2NavIds, ["fallback_menu:delete", "fallback_menu:goto:2"]);
+  assert.deepEqual(
+    page2NavIds,
+    ["fallback_menu:delete", "fallback_menu:goto:0", "fallback_menu:goto:2"],
+    "halaman TENGAH punya dua-duanya: 'Menu sebelumnya' (goto halaman 1) DAN 'Menu lainnya' (goto halaman 3)",
+  );
 
   // Halaman 3: daftar prioritas / status bot / reminder aku.
   const page3 = replyFallbackMenu(2);
   const page3OptionIds = page3.components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(page3OptionIds, ["fallback_menu:6", "fallback_menu:2", "fallback_menu:7"]);
   const page3NavIds = page3.components[1].components.map((c) => c.data.custom_id);
-  assert.deepEqual(page3NavIds, ["fallback_menu:delete", "fallback_menu:goto:3"]);
+  assert.deepEqual(page3NavIds, ["fallback_menu:delete", "fallback_menu:goto:1", "fallback_menu:goto:3"]);
 
-  // Halaman 4 (TERAKHIR) - fitur keyword-only (notlive/aliaslist/more), cuma
-  // "Tutup" doang di baris nav-nya, gak ada "Menu lainnya" lagi (owner minta
-  // eksplisit: "3 menu terakhir tadi, tapi hanya tambahan tombol tutup").
+  // Halaman 4 (TERAKHIR) - fitur keyword-only (notlive/aliaslist/more): punya
+  // "Menu sebelumnya" (goto halaman 3) tapi gak ada "Menu lainnya" lagi (owner
+  // minta eksplisit: "3 menu terakhir tadi, tapi hanya tambahan tombol
+  // tutup" - itu soal gak ada halaman KELIMA buat dituju, bukan soal
+  // larangan ada tombol mundur).
   const page4 = replyFallbackMenu(3);
   const page4OptionIds = page4.components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(page4OptionIds, ["fallback_menu:notlive", "fallback_menu:aliaslist", "fallback_menu:more"]);
   const page4NavIds = page4.components[1].components.map((c) => c.data.custom_id);
-  assert.deepEqual(page4NavIds, ["fallback_menu:delete"], "halaman terakhir CUMA Tutup, gak ada 'Menu lainnya'");
+  assert.deepEqual(
+    page4NavIds,
+    ["fallback_menu:delete", "fallback_menu:goto:2"],
+    "halaman terakhir punya 'Menu sebelumnya' tapi gak ada 'Menu lainnya' (gak ada halaman ke-5)",
+  );
 
   // Nomor halaman di luar jangkauan -> fallback aman ke halaman 1, bukan crash.
   const outOfRange = replyFallbackMenu(99);
@@ -396,6 +416,20 @@ test("handleFallbackMenuButton - tombol 'Menu lainnya ➡️' (fallback_menu:got
   assert.match(interaction.updates[0].content, /Menu lainnya/);
   const optionIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(optionIds, ["fallback_menu:3", "fallback_menu:5", "fallback_menu:9"]);
+});
+
+// BUG YANG DILAPORIN OWNER: dulu cuma ada "Menu lainnya" (maju), gak ada
+// jalan balik ke halaman sebelumnya - satu-satunya customId "goto" yang ada
+// dipake buat DUA ARAH sekaligus (`fallback_menu:goto:<page-1>` buat mundur,
+// `fallback_menu:goto:<page+1>` buat maju - lihat buildFallbackMenuComponents),
+// jadi handler-nya SAMA PERSIS kayak test "Menu lainnya" di atas, gak perlu
+// branch baru - ini cuma buktiin arah mundurnya juga jalan.
+test("handleFallbackMenuButton - tombol '⬅️ Menu sebelumnya' (fallback_menu:goto:<page>, arah mundur) EDIT pesan balik ke halaman sebelumnya, BUKAN pesan baru", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_menu:goto:0" });
+  await handleFallbackMenuButton(interaction);
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
+  const optionIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(optionIds, ["fallback_menu:1", "fallback_menu:4", "fallback_menu:8"], "balik ke opsi-opsi halaman 1");
 });
 
 test("handleFallbackMenuButton - tombol 'Tutup' di menu fallback BENERAN NGEHAPUS pesannya (message.delete), BUKAN diedit jadi teks 'dibatalin'", async () => {

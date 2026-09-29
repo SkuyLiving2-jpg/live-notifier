@@ -84,11 +84,20 @@ function pageIndexForOption(optionId) {
 // isinya cuma 3 tombol (satu halaman doang) tiap kali dipanggil, bukan 9-12
 // sekaligus. Baris kedua: "Tutup" (selalu ada, customId "fallback_menu:delete"
 // - lihat handleFallbackMenuButton's "delete"/"close" buat kenapa
-// perilakunya BENERAN ngehapus pesan bukan diedit jadi teks dismiss) plus
-// "Menu lainnya" (customId "fallback_menu:goto:<halaman berikutnya>") KECUALI
-// di halaman TERAKHIR (owner eksplisit minta halaman terakhir cuma "tambahan
-// tombol tutup", gak ada "menu lainnya" lagi soalnya emang gak ada halaman
-// sesudahnya).
+// perilakunya BENERAN ngehapus pesan bukan diedit jadi teks dismiss), lalu
+// "⬅️ Menu sebelumnya" KECUALI di halaman PERTAMA (gak ada halaman sebelum
+// itu), lalu "Menu lainnya ➡️" KECUALI di halaman TERAKHIR (owner eksplisit
+// minta halaman terakhir cuma "tambahan tombol tutup", gak ada "menu
+// lainnya" lagi soalnya emang gak ada halaman sesudahnya).
+//
+// BUG YANG DILAPORIN OWNER: dulu cuma ada "Menu lainnya" (maju doang) - user
+// yang udah kepencet sampe halaman 3-4 gak ada cara balik ke halaman
+// sebelumnya SELAIN nutup pesannya terus manggil ulang dari awal. Fixed
+// dengan nambahin "⬅️ Menu sebelumnya" - customId-nya REUSE persis skema
+// "fallback_menu:goto:<page>" yang udah ada (dipake "Menu lainnya" juga),
+// cuma angkanya mundur (`safePage - 1`) bukan maju (`safePage + 1`) - gak
+// perlu handler baru sama sekali di handleFallbackMenuButton, "goto" udah
+// generic (pindah ke halaman manapun yang dikasih, gak peduli maju/mundur).
 function buildFallbackMenuComponents(page = 0) {
   const safePage = MENU_PAGES[page] ? page : 0;
   const options = MENU_PAGES[safePage];
@@ -97,6 +106,14 @@ function buildFallbackMenuComponents(page = 0) {
   );
 
   const navButtons = [new ButtonBuilder().setCustomId("fallback_menu:delete").setLabel("Tutup").setStyle(ButtonStyle.Danger)];
+  if (safePage > 0) {
+    navButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`fallback_menu:goto:${safePage - 1}`)
+        .setLabel("⬅️ Menu sebelumnya")
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
   const isLastPage = safePage === MENU_PAGES.length - 1;
   if (!isLastPage) {
     navButtons.push(
