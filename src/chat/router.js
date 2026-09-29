@@ -61,7 +61,7 @@ const {
   handleSubscribe,
   handleUnsubscribe,
 } = require("./replies");
-const { handleFallbackMenuButton, handleFallbackMemberSelect, handleWatchConfirmButton } = require("./menu");
+const { handleFallbackMenuButton, handleFallbackMemberSelect, handleFallbackExtraSelect, handleWatchConfirmButton } = require("./menu");
 
 // Kata kunci buat manggil bot di chat (contoh: "Cok, ini yang masih live
 // siapa aja?"). Pesan yang nggak nyebut salah satu kata ini bakal diabaikan,
@@ -563,6 +563,13 @@ function wireDiscordEvents(client) {
         await handleFallbackMenuButton(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("fallback_select:")) {
         await handleFallbackMemberSelect(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId === "fallback_extra_select") {
+        // Dropdown "❓ Fitur lainnya" (EXTRA_FEATURES, lihat menu.js) - customId
+        // beda skema dari "fallback_select:<4|9>" di atas SENGAJA (dropdown ini
+        // milih FITUR, bukan nama member/gifter, jadi handler-nya juga beda -
+        // exact match "===", bukan startsWith, soalnya gak ada suffix apapun
+        // nempel di customId-nya).
+        await handleFallbackExtraSelect(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("member_fallback:")) {
         await handleMemberChannelFallbackButton(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("recap_nav:")) {

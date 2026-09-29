@@ -15,7 +15,7 @@ const {
   replyGifterSnapshotByUsername,
   replyLongestNotLiveLeaderboard,
   replyAliasList,
-  replyHelp,
+  replyLiveCountLeaderboard,
 } = require("./replies");
 
 // "channelId:authorId" -> kapan terakhir menu fallback ditampilin buat orang
@@ -143,6 +143,131 @@ function buildFallbackPickActionRow(page = 0) {
     new ButtonBuilder().setCustomId("fallback_menu:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`fallback_menu:back:${page}`).setLabel("Kembali").setStyle(ButtonStyle.Secondary),
   );
+}
+
+// Owner minta "❓ Fitur lainnya" dirombak jadi dropdown, TAPI dengan syarat
+// eksplisit: cuma buat fitur yang BENERAN belum punya tombol di manapun di
+// menu 12-opsi ini (lihat MENU_PAGES). Daftar di bawah ini SENGAJA dikurasi
+// manual (bukan derivasi otomatis dari replyHelp()) - beberapa command di
+// replyHelp() KELIATANNYA gak ada tombolnya tapi sebenernya udah kesentuh
+// fitur yang sama lewat tombol lain, jadi SENGAJA gak diulang di sini biar
+// gak redundan:
+// - "cok <nama> masih live?" -> udah kesentuh tombol "Cek member" (opsi 4,
+//   dropdown member yang lagi live) - beda mekanisme milihnya (nama vs
+//   dropdown), tapi fiturnya sama.
+// - "cok gifter <nama>" -> udah kesentuh tombol "Cek top gifter" (opsi 9),
+//   alasan sama kayak di atas.
+// - "cok daftar alias"/"cok daftar prioritas" -> udah tombol sendiri
+//   ("📖 Daftar alias"/"⭐ Daftar prioritas"), tapi VARIAN tambah/hapusnya
+//   (khusus owner) TETEP keyword-only - itu yang masuk daftar ini.
+// Satu entry ("countboard", leaderboard total live count) sebenernya
+// ZERO-PARAMETER kayak opsi notlive/aliaslist - jadi dieksekusi LANGSUNG pas
+// dipilih (bukan cuma dikasih tau caranya), sama pola persis kayak opsi-opsi
+// itu. Entry LAINNYA butuh nama member sebagai argumen - gak mungkin
+// dieksekusi langsung dari dropdown tanpa nanya nama dulu (bikin modal/dropdown
+// susulan per-command dianggep kejauhan dari ask "biar user baru TAU fiturnya
+// ADA", makanya cukup dikasih tau CARA PAKENYA di sini, sisanya user ketik
+// sendiri - persis alasan yang sama kayak keputusan "❓ Fitur lainnya" yang
+// lama nunjukkin replyHelp() apa adanya).
+const EXTRA_FEATURES = [
+  {
+    value: "countboard",
+    label: "🏆 Paling sering live",
+    description: "Leaderboard total live count semua member",
+    zeroParam: true,
+  },
+  {
+    value: "stats",
+    label: "📊 Stats durasi",
+    description: "Rata-rata & rekor durasi live 1 member",
+    detail: 'Ketik `cok stats <nama member>` - liat rata-rata durasi & rekor durasi terlama live-nya. Contoh: "cok stats nala".',
+  },
+  {
+    value: "count",
+    label: "🔢 Berapa kali live",
+    description: "Total berapa kali 1 member udah live",
+    detail:
+      'Ketik `cok berapa kali <nama member> live` - total berapa kali dia udah live semenjak bot ini jalan. Contoh: "cok berapa kali nala live".',
+  },
+  {
+    value: "jadwal",
+    label: "🕒 Jadwal/pola jam live",
+    description: "Pola jam/hari biasanya dia live (dari histori)",
+    detail:
+      'Ketik `cok kapan <nama member> biasanya live?` atau `cok jadwal <nama>` - pola jam/hari dari histori (bukan jadwal resmi). Contoh: "cok jadwal nala".',
+  },
+  {
+    value: "bandingin",
+    label: "⚔️ Bandingin member",
+    description: "Bandingin 2 atau lebih member sekaligus",
+    detail:
+      'Ketik `cok bandingin <A> dan <B>` (atau cukup "cok <A> dan <B>"/"cok <A> & <B>") buat 2 member, atau `cok bandingin A, B, dan C` (pakai koma) buat lebih dari 2 sekaligus. Ketik "cok bandingin" polos aja buat dicariin lewat dropdown.',
+  },
+  {
+    value: "rekaprange",
+    label: "📅 Rekap minggu/bulan/tanggal",
+    description: "Rekap rentang lain selain hari ini",
+    detail:
+      'Ketik `cok rekap minggu ini` / `cok rekap bulan ini` / `cok rekap <nama bulan>` / `cok rekap <tanggal>` / `cok rekap <nama hari>`, atau ketik "cok rekap" polos buat dikasih menu pilihan rentangnya.',
+  },
+  {
+    value: "rekapmember",
+    label: "📁 Rekap per member",
+    description: "Semua histori live 1 member (35 hari terakhir)",
+    detail:
+      'Ketik `cok rekap <nama member>` (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen (35 hari terakhir). Bisa juga ketik "cok rekap" polos, terus klik tombol "Rekap member".',
+  },
+  {
+    value: "streak",
+    label: "🔥 Cek streak",
+    description: "Lagi live berapa hari berturut-turut",
+    detail: 'Ketik `cok streak <nama member>` - lagi live berapa hari berturut-turut. Contoh: "cok streak nala".',
+  },
+  {
+    value: "export",
+    label: "📤 Export rekap (CSV)",
+    description: "Rekap dikirim jadi file yang bisa didownload",
+    detail: 'Ketik `cok export rekap ...` - sama rentangnya kayak "cok rekap ...", cuma dikirim jadi file CSV yang bisa didownload.',
+  },
+  {
+    value: "ingetin",
+    label: "🔔 Ingetin member",
+    description: "Di-tag kalau member itu mulai live",
+    detail:
+      "Ketik `cok ingetin <nama member>` - kamu di-tag kalau dia mulai live (atau ada tanda-tanda bentar lagi live, dari pola jam biasanya). Ketik `cok berhenti ingetin <nama member>` buat matiin.",
+  },
+  {
+    value: "alias_owner",
+    label: "🔧 Kelola alias (khusus owner)",
+    description: "Tambah/hapus panggilan/nickname member",
+    detail:
+      'Khusus owner: `cok tambah alias <alias> = <nama asli>` / `cok hapus alias <alias>`. Daftar yang udah ada bisa dicek semua orang lewat tombol "📖 Daftar alias".',
+  },
+  {
+    value: "priority_owner",
+    label: "⭐ Kelola prioritas (khusus owner)",
+    description: "Tambah/hapus member prioritas",
+    detail:
+      'Khusus owner: `cok tambah prioritas <nama>` / `cok hapus prioritas <nama>`. Daftar yang udah ada bisa dicek semua orang lewat tombol "⭐ Daftar prioritas".',
+  },
+];
+
+const EXTRA_FEATURES_BY_VALUE = new Map(EXTRA_FEATURES.map((feature) => [feature.value, feature]));
+
+// StringSelectMenu HARUS sendirian di baris-nya (gak bisa digabung tombol
+// lain di baris yang sama) - dipake bareng buildFallbackPickActionRow() di
+// baris KEDUA (sama pola-nya kayak dropdown opsi 4/9), jadi ini selalu
+// dipasang [selectRow, buildFallbackPickActionRow(page)] di pemanggilnya.
+// customId "fallback_extra_select" (bukan "fallback_select:..." yang udah
+// dipake opsi 4/9 - itu buat MEMILIH MEMBER, beda makna & handler dari
+// dropdown ini yang isinya FITUR, bukan nama orang) dibaca router.js's
+// interactionCreate lalu di-dispatch ke handleFallbackExtraSelect di bawah.
+function buildExtraFeaturesSelectRow() {
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId("fallback_extra_select")
+    .setPlaceholder("Pilih fitur yang mau kamu tau caranya...")
+    .addOptions(EXTRA_FEATURES.map((feature) => ({ label: feature.label, value: feature.value, description: feature.description })));
+  return new ActionRowBuilder().addComponents(selectMenu);
 }
 
 // Dipanggil kalau pesannya kedetect nanya soal live tapi nggak match
@@ -474,18 +599,25 @@ async function handleFallbackMenuButton(interaction) {
     return;
   }
 
-  // "❓ Fitur lainnya" - nunjukkin replyHelp() (daftar LENGKAP semua command,
-  // termasuk yang butuh nama kayak "cok streak <nama>"/"cok bandingin A, B,
-  // dan C"/"cok tambah alias", yang gak mungkin dikasih tombol langsung
-  // tanpa nanya nama dulu) di tempat yang sama - reuse buildFallbackPickActionRow()
-  // (Tutup + Kembali) SAMA PERSIS kayak baris di bawah dropdown opsi 4/9,
-  // biar user bisa balik ke menu lagi abis baca, bukan kejebak. replyHelp()
-  // sekarang balikin OBJECT ({content, embeds}) bukan string polos lagi
-  // (lihat komennya di replies.js) - {...helpReply} nge-spread content DAN
-  // embeds-nya, components-nya ditimpa/ditambahin di sini.
+  // "❓ Fitur lainnya" - owner minta dirombak jadi DROPDOWN (EXTRA_FEATURES,
+  // lihat komen panjangnya di situ), bukan lagi nunjukkin replyHelp() (daftar
+  // LENGKAP) apa adanya kayak sebelumnya - replyHelp() sendiri TETEP ada,
+  // tetep dipanggil dari "cok bantuan" (chat/router.js), cuma gak dipanggil
+  // dari SINI lagi. Alasannya: dropdown ini isinya CUMA fitur yang beneran
+  // gak ada tombolnya di menu 12-opsi manapun (dikurasi manual), jadi gak
+  // ngulang-ngulang nunjukkin fitur yang udah ada tombolnya sendiri - lebih
+  // gampang di-scan ketimbang satu tumpukan ~20 baris teks. "cok bantuan"
+  // (nyebut SEMUA command tanpa kurasi) tetep disebut di teksnya buat yang
+  // mau baca lengkap sekaligus. StringSelectMenu harus sendirian di
+  // baris-nya (gak bisa gabung tombol lain), jadi Tutup+Kembali
+  // (buildFallbackPickActionRow) nempel di baris KEDUA di bawahnya, sama
+  // pola-nya kayak dropdown opsi 4/9.
   if (optionId === "more") {
-    const helpReply = replyHelp();
-    await interaction.update(safeReplyOptions({ ...helpReply, components: [buildFallbackPickActionRow(pageIndexForOption(optionId))] }));
+    const content =
+      'Ini fitur-fitur yang masih ketik manual (belum ada tombolnya) - pilih salah satu di bawah buat liat cara pakenya. Mau lihat SEMUA command sekaligus? Ketik "cok bantuan".';
+    await interaction.update(
+      safeReplyOptions({ content, components: [buildExtraFeaturesSelectRow(), buildFallbackPickActionRow(pageIndexForOption(optionId))] }),
+    );
     return;
   }
 
@@ -589,6 +721,32 @@ async function handleFallbackMemberSelect(interaction) {
   );
 }
 
+// Diklik abis milih salah satu fitur dari dropdown yang dimunculin tombol
+// "❓ Fitur lainnya" (buildExtraFeaturesSelectRow, lihat EXTRA_FEATURES).
+// "countboard" (paling sering live) itu satu-satunya entry ZERO-PARAMETER -
+// dieksekusi LANGSUNG (replyLiveCountLeaderboard(), sama pola persis kayak
+// opsi notlive/aliaslist). Entry lainnya butuh nama member yang gak dibawa
+// dropdown ini (dropdown milih FITUR, bukan nama) - jadi cuma dikasih tau
+// CARA PAKENYA (`feature.detail`), gak dieksekusi. Dropdown-nya SENDIRI
+// ditempel ULANG lagi di bawah jawaban (bareng Tutup+Kembali) biar user bisa
+// lanjut liat fitur lain dari pesan yang sama, gak perlu mencet "❓ Fitur
+// lainnya" dari awal tiap mau liat entry lain.
+async function handleFallbackExtraSelect(interaction) {
+  const value = interaction.values[0];
+  const feature = EXTRA_FEATURES_BY_VALUE.get(value);
+  const content = !feature
+    ? "Cok, opsi itu kayaknya udah gak ada. Coba pilih lagi ya."
+    : feature.zeroParam
+      ? replyLiveCountLeaderboard()
+      : `**${feature.label}**\n${feature.detail}`;
+  await interaction.update(
+    safeReplyOptions({
+      content,
+      components: [buildExtraFeaturesSelectRow(), buildFallbackPickActionRow(pageIndexForOption("more"))],
+    }),
+  );
+}
+
 module.exports = {
   buildFallbackMenuComponents,
   replyFallbackMenu,
@@ -600,4 +758,5 @@ module.exports = {
   handleWatchConfirmButton,
   handleFallbackMenuButton,
   handleFallbackMemberSelect,
+  handleFallbackExtraSelect,
 };

@@ -13,6 +13,7 @@ const {
   handleWatchConfirmButton,
   handleFallbackMenuButton,
   handleFallbackMemberSelect,
+  handleFallbackExtraSelect,
 } = require("../src/chat/menu");
 const { markMenuShown, tryHandleMenuShortcut } = require("../src/chat/pendingState");
 
@@ -513,33 +514,43 @@ test("handleFallbackMenuButton - '📖 Daftar alias' (fallback_menu:aliaslist) j
   assert.equal(interaction.updates[0].components.length, 2, "menu (2 baris) ditempel ulang biar bisa lanjut mencet opsi lain");
 });
 
-test("handleFallbackMenuButton - '❓ Fitur lainnya' (fallback_menu:more) nunjukkin replyHelp() lengkap (embed), plus tombol Tutup+Kembali (BUKAN menu ditempel ulang)", async () => {
+// BUG/permintaan owner: dulu "❓ Fitur lainnya" nunjukkin replyHelp() APA
+// ADANYA (daftar LENGKAP ~20 baris command, termasuk yang UDAH ada tombolnya
+// sendiri di menu ini) - owner minta dirombak jadi DROPDOWN, TAPI cuma buat
+// fitur yang BENERAN belum ada tombolnya di manapun (lihat EXTRA_FEATURES di
+// menu.js buat daftar kurasinya beserta alasan tiap exclude). replyHelp()
+// SENDIRI gak diubah/dihapus - tetep dipanggil dari "cok bantuan" (test
+// terpisah di tests/replies.test.js & tests/router.test.js), cuma gak
+// dipanggil dari tombol ini lagi.
+test("handleFallbackMenuButton - '❓ Fitur lainnya' (fallback_menu:more) nunjukkin DROPDOWN fitur keyword-only (bukan replyHelp() lengkap lagi), plus tombol Tutup+Kembali", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:more" });
   await handleFallbackMenuButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
-  // replyHelp() sekarang balikin OBJECT {content, embeds} (dipecah dari
-  // content polos - kepanjangan, ngelewatin batas 2000 karakter Discord,
-  // itu bug "Fitur lainnya kok kayak rusak" yang dilaporin owner). Daftar
-  // command lengkapnya (termasuk fitur keyword-only) ada di embeds[0].description,
-  // ini SATU-SATUNYA tempat fitur itu bisa kelihat dari menu tanpa ngetik
-  // "cok bantuan".
-  assert.ok(interaction.updates[0].embeds, "harus ada embed (bukan content polos - kena limit 2000 karakter Discord)");
-  assert.match(interaction.updates[0].embeds[0].description, /cok streak/i);
-  assert.match(interaction.updates[0].embeds[0].description, /cok tambah alias/i);
-  assert.match(interaction.updates[0].embeds[0].description, /cok bandingin/i);
-  assert.ok(interaction.updates[0].content.length < 2000, "content-nya sendiri (di luar embed) harus jauh di bawah batas 2000 karakter Discord");
-  assert.equal(interaction.updates[0].components.length, 1, "cuma 1 baris (Tutup+Kembali), bukan menu ditempel ulang");
-  const actionRow = interaction.updates[0].components[0];
+  assert.match(interaction.updates[0].content, /cok bantuan/i, "tetep nunjuk ke 'cok bantuan' buat yang mau liat SEMUA command sekaligus");
+  assert.equal(interaction.updates[0].embeds, undefined, "bukan lagi embed replyHelp()");
+  assert.equal(interaction.updates[0].components.length, 2, "baris dropdown + baris Tutup/Kembali");
+
+  const selectRow = interaction.updates[0].components[0];
+  const selectMenu = selectRow.components[0];
+  assert.equal(selectMenu.data.custom_id, "fallback_extra_select");
+  const values = selectMenu.options.map((o) => o.data.value);
+  // Cuma fitur yang GAK ada tombolnya - "cek member"/"cek top gifter"/"daftar
+  // alias"/"daftar prioritas" (yang UDAH ada tombol sendiri) sengaja gak ikut.
+  assert.ok(values.includes("streak"), "streak harus ada (gak ada tombolnya)");
+  assert.ok(values.includes("bandingin"), "bandingin harus ada (gak ada tombolnya)");
+  assert.ok(values.includes("countboard"), "leaderboard paling sering live harus ada (zero-param, gak ada tombolnya)");
+
+  const actionRow = interaction.updates[0].components[1];
   assert.equal(actionRow.components[0].data.custom_id, "fallback_menu:close");
   assert.equal(actionRow.components[0].data.label, "Tutup");
   assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back:3", "'Kembali' balik ke HALAMAN TERAKHIR (asal tombol 'Fitur lainnya')");
   assert.equal(actionRow.components[1].data.label, "Kembali");
 });
 
-test("handleFallbackMenuButton - tombol 'Kembali' di bawah replyHelp() ('❓ Fitur lainnya') EDIT balik ke HALAMAN TERAKHIR (bukan halaman 1)", async () => {
+test("handleFallbackMenuButton - tombol 'Kembali' di bawah dropdown '❓ Fitur lainnya' EDIT balik ke HALAMAN TERAKHIR (bukan halaman 1)", async () => {
   const helpInteraction = fakeInteraction({ customId: "fallback_menu:more" });
   await handleFallbackMenuButton(helpInteraction);
-  assert.match(helpInteraction.updates[0].embeds[0].description, /cok streak/i);
+  assert.equal(helpInteraction.updates[0].components[0].components[0].data.custom_id, "fallback_extra_select");
 
   const backInteraction = fakeInteraction({ customId: "fallback_menu:back:3" });
   await handleFallbackMenuButton(backInteraction);
@@ -547,6 +558,39 @@ test("handleFallbackMenuButton - tombol 'Kembali' di bawah replyHelp() ('❓ Fit
   assert.equal(backInteraction.updates[0].components.length, 2);
   const optionIds = backInteraction.updates[0].components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(optionIds, ["fallback_menu:notlive", "fallback_menu:aliaslist", "fallback_menu:more"]);
+});
+
+// handleFallbackExtraSelect - diklik abis milih salah satu fitur dari
+// dropdown "fallback_extra_select" (EXTRA_FEATURES di menu.js). Kebanyakan
+// entry butuh nama member sebagai argumen (gak dibawa dropdown ini, yang
+// dipilih cuma FITUR-nya) jadi cuma dikasih tau CARA PAKENYA, bukan
+// dieksekusi - "countboard" (leaderboard "paling sering live") beda karena
+// zero-parameter, jadi dieksekusi LANGSUNG sama kayak opsi notlive/aliaslist.
+test("handleFallbackExtraSelect - entry yang butuh nama (mis. 'streak') cuma dikasih tau CARA PAKENYA, dropdown+Tutup/Kembali ditempel ulang", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_extra_select", values: ["streak"] });
+  await handleFallbackExtraSelect(interaction);
+  assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
+  assert.match(interaction.updates[0].content, /cok streak <nama member>/);
+  assert.equal(interaction.updates[0].components.length, 2, "dropdown + baris Tutup/Kembali ditempel ulang");
+  assert.equal(interaction.updates[0].components[0].components[0].data.custom_id, "fallback_extra_select");
+  const actionRow = interaction.updates[0].components[1];
+  assert.equal(actionRow.components[1].data.custom_id, "fallback_menu:back:3", "'Kembali' tetep balik ke halaman TERAKHIR");
+});
+
+test("handleFallbackExtraSelect - entry ZERO-PARAMETER ('countboard', paling sering live) DIEKSEKUSI LANGSUNG, bukan cuma dikasih tau caranya", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_extra_select", values: ["countboard"] });
+  await handleFallbackExtraSelect(interaction);
+  // replyLiveCountLeaderboard() beneran manggil data asli, bukan teks
+  // instruksi "ketik cok ..." - cukup pastiin BUKAN teks instruksi generik.
+  assert.doesNotMatch(interaction.updates[0].content, /^Ketik `cok/);
+  assert.equal(interaction.updates[0].components.length, 2);
+});
+
+test("handleFallbackExtraSelect - value yang gak dikenal (harusnya gak mungkin lewat UI beneran) -> pesan fallback, bukan crash", async () => {
+  const interaction = fakeInteraction({ customId: "fallback_extra_select", values: ["value-ngawur-gak-ada"] });
+  await handleFallbackExtraSelect(interaction);
+  assert.match(interaction.updates[0].content, /udah gak ada/);
+  assert.equal(interaction.updates[0].components.length, 2);
 });
 
 // Opsi 8 (rekap hari ini) balikin object {content, components} yang UDAH
