@@ -42,6 +42,8 @@ const {
   replyRecapSpecificDate,
   replyRecapWeekdayPicker,
   parseSpecificDateFromText,
+  parseRelativePeriodFromText,
+  replyUnsupportedPeriod,
   parseMonthOnlyFromText,
   parseWeekdayFromText,
   tryHandleRecapPageShortcut,
@@ -87,7 +89,12 @@ const BARE_KEYWORD_HINTS = {
   streak: 'Ketik `streak <nama member>` ya, contoh: "streak nala".',
   jadwal: 'Ketik `jadwal <nama member>` ya (atau "kapan <nama> biasanya live?"), contoh: "jadwal nala".',
   gifter: 'Ketik `gifter <nama member>` ya, contoh: "gifter nala".',
-  ingetin: 'Ketik `ingetin <nama member>` ya - nanti kamu di-tag pas dia mulai live. Contoh: "ingetin nala".',
+  ingetin:
+    'Ketik `ingetin <nama member>` ya - nanti kamu di-tag pas dia mulai live. Contoh: "ingetin nala" (atau beberapa sekaligus: "ingetin nala dan lily").',
+  "berhenti ingetin":
+    'Ketik `berhenti ingetin <nama member>` ya, contoh: "berhenti ingetin nala". Mau liat daftar reminder kamu? Ketik "reminder aku".',
+  "tambah prioritas": 'Khusus owner: ketik `tambah prioritas <nama member>`, contoh: "tambah prioritas kimmy".',
+  "hapus prioritas": 'Khusus owner: ketik `hapus prioritas <nama member>`, contoh: "hapus prioritas kimmy".',
 };
 
 // Kata umum yang bisa nyangkut di posisi "nama" pola status-member
@@ -143,6 +150,12 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // apapun yang ada sebelum kata kunci itu (termasuk "cok") gak pernah ikut
   // ke-capture.
   const commandText = text.replace(/^cok[,.!?]?\s+/, "");
+
+  // "minggu lalu" gak didukung - ditolak EKSPLISIT di sini (sebelum semua
+  // cabang rekap/export/paling-lama/paling-rame di bawah), soalnya dulu
+  // diam-diam dijawab pake data "minggu ini" tanpa tanda apapun.
+  const asksPeriodStat = ["rekap", "export", "paling", "viewer", "penonton"].some((w) => containsWholeWord(text, w));
+  if (asksPeriodStat && parseRelativePeriodFromText(text)?.kind === "unsupported") return replyUnsupportedPeriod();
 
   const addPriorityMatch = text.match(/tambah(?:in|kan)?\s+prioritas\s+(.+)/);
   if (addPriorityMatch) {
@@ -372,6 +385,14 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // "rekap per tanggal 25 september", ngandung "tanggal" DAN tanggal
   // spesifik) ketangkep sama check yang paling ngerti maksud usernya.
   if (containsWholeWord(text, "rekap")) {
+    // "kemarin"/"bulan lalu" DULUAN (BUG: "rekap kemarin" dulu dianggep NAMA
+    // MEMBER "kemarin" dan nembak IDN, "rekap hari kemarin" malah dijawab
+    // rekap HARI INI, dan "rekap bulan lalu" dijawab bulan INI) - dicek
+    // sebelum weekday/hari/bulan di bawah yang cuma liat kata "hari"/"bulan"-nya.
+    const relative = parseRelativePeriodFromText(text);
+    if (relative?.kind === "date") return await replyRecapSpecificDate(relative.date, channelId, authorId);
+    if (relative?.kind === "month") return await replyRecapMonth(relative.month, channelId, authorId);
+
     // "rekap hari senin"/"rekap senin" dkk - weekday DULUAN (sebelum "rekap
     // minggu" biasa), soalnya kata "minggu" (Minggu) sendiri BISA ketangkep
     // di sini juga (lewat parseWeekdayFromText's "hari"+"minggu" khusus) -

@@ -38,12 +38,15 @@ const {
   replyRecapDatePicker,
   buildRecapMonthSelectRow,
   parseSpecificDateFromText,
+  parseRelativePeriodFromText,
+  replyUnsupportedPeriod,
   parseMonthOnlyFromText,
   parseWeekdayFromText,
   resolveStatRangeFromText,
   buildExportCsv,
   handleSubscribe,
   handleUnsubscribe,
+  replyMySubscriptions,
   isOwner,
   handleAddPriority,
   handleRemovePriority,
@@ -2561,4 +2564,71 @@ test("handleRecapMemberModalSubmit - nama valid -> NGE-EDIT pesan menu jadi tabe
   } finally {
     global.fetch = original;
   }
+});
+
+// ==== Debug pass: kata waktu relatif, tanggal ISO, ingetin banyak nama ====
+
+test("parseSpecificDateFromText - bentuk ISO (YYYY-MM-DD) dikenali, tanggal ngaco ditolak", () => {
+  assert.equal(parseSpecificDateFromText("rekap 2026-09-25"), "2026-09-25");
+  assert.equal(parseSpecificDateFromText("rekap 2026-13-40"), null);
+  assert.equal(parseSpecificDateFromText("rekap 2026-02-30"), null);
+  assert.equal(parseSpecificDateFromText("rekap 2024-02-29"), "2024-02-29", "kabisat valid");
+});
+
+test("parseRelativePeriodFromText - kemarin / bulan lalu / minggu lalu (dan variasinya), teks lain -> null", () => {
+  const today = getTodayWIB();
+  const yesterday = getDateWIB(new Date(new Date(`${today}T12:00:00+07:00`).getTime() - 24 * 3600_000));
+  assert.deepEqual(parseRelativePeriodFromText("rekap kemarin"), { kind: "date", date: yesterday });
+  assert.deepEqual(parseRelativePeriodFromText("rekap hari kemarin"), { kind: "date", date: yesterday });
+  assert.deepEqual(parseRelativePeriodFromText("paling rame kemaren"), { kind: "date", date: yesterday });
+
+  const [year, month] = today.split("-").map(Number);
+  const expectedPrev = month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`;
+  assert.deepEqual(parseRelativePeriodFromText("rekap bulan lalu"), { kind: "month", month: expectedPrev });
+  assert.deepEqual(parseRelativePeriodFromText("rekap bulan kemarin"), { kind: "month", month: expectedPrev }, "bulan kemarin bukan kemarin polos");
+
+  assert.deepEqual(parseRelativePeriodFromText("rekap minggu lalu"), { kind: "unsupported" });
+  assert.deepEqual(parseRelativePeriodFromText("rekap pekan kemarin"), { kind: "unsupported" });
+
+  assert.equal(parseRelativePeriodFromText("rekap minggu ini"), null);
+  assert.equal(parseRelativePeriodFromText("rekap nala"), null);
+  assert.match(replyUnsupportedPeriod(), /minggu lalu.*belum bisa/);
+});
+
+test("resolveStatRangeFromText - kemarin -> tanggal kemarin, bulan lalu -> bulan sebelumnya (dulu diam-diam jatuh ke hari ini / bulan ini)", () => {
+  const yesterdayRange = resolveStatRangeFromText("paling rame kemarin");
+  assert.equal(yesterdayRange.label, "kemarin");
+  assert.match(yesterdayRange.rangeDays, /^\d{4}-\d{2}-\d{2}$/);
+  assert.notEqual(yesterdayRange.rangeDays, getTodayWIB());
+
+  const lastMonth = resolveStatRangeFromText("export rekap bulan lalu");
+  assert.match(lastMonth.rangeDays, /^\d{4}-\d{2}$/);
+  assert.notEqual(lastMonth.rangeDays, getTodayWIB().slice(0, 7));
+});
+
+test("handleSubscribe - A dan B / A, B & C didaftarin SEMUANYA per nama (dulu jadi 1 keyword yang gak pernah cocok tapi dibales sukses)", () => {
+  const reply = handleSubscribe("msuba dan msubb", "u-multisub");
+  assert.match(reply, /"msuba", "msubb" mulai live/);
+  const mine = replyMySubscriptions("u-multisub");
+  assert.match(mine, /"msuba"/);
+  assert.match(mine, /"msubb"/);
+  assert.doesNotMatch(mine, /msuba dan msubb/);
+
+  const mixed = handleSubscribe("msuba, msubc & msubd", "u-multisub");
+  assert.match(mixed, /"msubc", "msubd" mulai live/);
+  assert.match(mixed, /Udah subscribe dari tadi: "msuba"/);
+  assert.match(handleSubscribe("ab dan msube", "u-multisub"), /Kependekan \(minimal 3 huruf\): "ab"/);
+});
+
+test("handleSubscribe - maksimal 5 nama sekaligus; SATU nama tetep pesan lama persis", () => {
+  assert.match(handleSubscribe("aaa1 dan bbb2 dan ccc3 dan ddd4 dan eee5 dan fff6", "u-multisub2"), /maksimal 5 member sekaligus.*ngasih 6/);
+  assert.equal(handleSubscribe("msubsingle", "u-multisub2"), '🔔 Sip, kamu bakal di-tag tiap kali "msubsingle" mulai live!');
+});
+
+test("handleUnsubscribe - A dan B berhenti dua-duanya; yang gak pernah disubscribe dilaporin terpisah", () => {
+  handleSubscribe("munsa dan munsb", "u-multiunsub");
+  const reply = handleUnsubscribe("munsa dan munsb dan munsc", "u-multiunsub");
+  assert.match(reply, /notif buat "munsa", "munsb" dimatiin/);
+  assert.match(reply, /Kamu belum subscribe "munsc"/);
+  assert.match(replyMySubscriptions("u-multiunsub"), /belum subscribe/);
 });

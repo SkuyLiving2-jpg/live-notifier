@@ -752,9 +752,9 @@ test("'cok rekap' polos dan 'cok rekap member' (tanpa nama) -> menu rekap yang s
 });
 
 test(
-  "kalimat rekap yang gak jelas ('cok rekap dong banget kemarin') gak dianggep nama member - tetep menu; nama yang gak ada -> gak nemu + menu",
+  "kalimat rekap yang gak jelas ('cok rekap dong banget pokoknya') gak dianggep nama member - tetep menu; nama yang gak ada -> gak nemu + menu",
   withFakeIdn(async () => {
-    const vague = await buildChatReply("cok rekap dong banget kemarin");
+    const vague = await buildChatReply("cok rekap dong banget pokoknya");
     assert.equal(vague.content, "Mau rekap yang mana, cok?");
 
     const unknown = await buildChatReply("cok rekap namangawurbanget");
@@ -891,5 +891,74 @@ test("replyWithFailureNotice - kirim gagal -> user tetep dapet penjelasan teks, 
     await assert.doesNotReject(replyWithFailureNotice(brokenMessage, "x", missingPermission));
   } finally {
     console.error = originalError;
+  }
+});
+
+// ==== Debug pass: rekap/export/paling-rame dengan kata waktu relatif ====
+function yesterdaySession(username, name) {
+  const end = new Date(Date.now() - 24 * 3600_000);
+  recordLiveEnded(name, username, new Date(end.getTime() - 2 * 3600_000), end, 77);
+  recordLiveCompleted(username, name);
+}
+
+test("rekap kemarin / rekap hari kemarin -> rekap TANGGAL KEMARIN (dulu: dianggep nama member kemarin dan nembak IDN, atau malah jawab rekap hari ini)", async () => {
+  yesterdaySession("jkt48_kmrnrouter", "Kmrnrouter JKT48");
+  const original = global.fetch;
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("gak boleh nembak IDN buat kata kemarin");
+  };
+  try {
+    for (const text of ["rekap kemarin", "rekap hari kemarin", "cok rekap kemarin"]) {
+      const reply = await inBotChannel(text);
+      assert.match(textOf(reply), /Rekap tanggal/, text);
+      assert.match(textOf(reply), /Kmrnrouter/, text + " harus nampilin sesi kemarin");
+      assert.doesNotMatch(textOf(reply), /hari ini \(/, text + " bukan rekap hari ini");
+    }
+    assert.equal(fetchCalls, 0);
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("rekap bulan lalu -> bulan SEBELUM bulan berjalan, bukan bulan ini", async () => {
+  const [year, month] = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 7).split("-").map(Number);
+  const prev = month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`;
+  const { formatMonthLabel } = require("../src/utils");
+  const reply = await inBotChannel("rekap bulan lalu");
+  assert.match(textOf(reply), new RegExp(formatMonthLabel(prev)));
+});
+
+test("minggu lalu ditolak EKSPLISIT di rekap/export/paling-rame (dulu diam-diam dijawab pake data minggu ini)", async () => {
+  for (const text of ["rekap minggu lalu", "export rekap minggu lalu", "paling rame minggu lalu", "paling lama live pekan lalu"]) {
+    assert.match(textOf(await inBotChannel(text)), /"minggu lalu" belum bisa dijawab/, text);
+  }
+  assert.doesNotMatch(textOf(await inBotChannel("kwrouterx minggu lalu live gak")), /belum bisa dijawab/);
+});
+
+test("paling rame kemarin / paling lama live kemarin / export rekap kemarin pake data KEMARIN (dulu diam-diam pake hari ini)", async () => {
+  yesterdaySession("jkt48_kmrnstat", "Kmrnstat JKT48");
+  assert.match(textOf(await inBotChannel("paling rame kemarin")), /kemarin/);
+  assert.match(textOf(await inBotChannel("paling lama live kemarin")), /kemarin/);
+  const exported = await inBotChannel("export rekap kemarin");
+  assert.match(textOf(exported), /kemarin/);
+  assert.ok(exported.files && exported.files.length === 1, "ada sesi kemarin -> CSV kekirim");
+});
+
+test("rekap 2026-09-25 (format ISO) kebaca sebagai tanggal, bukan jatuh ke menu", async () => {
+  const reply = await inBotChannel("rekap 2026-09-25");
+  assert.match(textOf(reply), /25 September 2026/);
+});
+
+test("keyword polos berhenti ingetin / tambah prioritas / hapus prioritas -> contoh cara pakai, bukan menu fallback", async () => {
+  for (const [text, expected] of [
+    ["berhenti ingetin", /berhenti ingetin <nama member>/],
+    ["tambah prioritas", /tambah prioritas <nama member>/],
+    ["hapus prioritas", /hapus prioritas <nama member>/],
+  ]) {
+    const reply = await inBotChannel(text);
+    assert.equal(typeof reply, "string", text);
+    assert.match(reply, expected);
   }
 });

@@ -21,7 +21,7 @@ const {
   SESSION_RETENTION_DAYS,
   getDistinctSessionDatesForMember,
 } = require("../storage/dailyLog");
-const { computeCurrentStreak } = require("../streakMath");
+const { computeCurrentStreak, shiftDateWIB } = require("../streakMath");
 const { findDurationHistoryByNameFragment, loadDurationHistory, getAverageDuration, getPreviousMaxDuration } = require("../storage/durationHistory");
 const {
   loadLiveCount,
@@ -403,6 +403,15 @@ function daysInMonth(year, monthIndex0) {
 // Intl.DateTimeFormat.format() THROW kalau dikasih itu - sama kelas bug yang
 // udah dibenerin di replySpecificMember).
 function parseSpecificDateFromText(text) {
+  // Bentuk ISO ("2026-09-25") - dulu gak dikenali sama sekali, "rekap
+  // 2026-09-25" jatuh ke menu rekap seolah gak ngerti maksudnya.
+  const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch.map(Number);
+    if (m < 1 || m > 12 || d < 1 || d > daysInMonth(y, m - 1)) return null;
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
   const dayMonthMatch = text.match(new RegExp(`\\b(\\d{1,2})\\s+(${MONTH_NAME_ALTERNATION})\\b(?:\\s+(\\d{4}))?`, "i"));
   const monthDayMatch = !dayMonthMatch && text.match(new RegExp(`\\b(${MONTH_NAME_ALTERNATION})\\s+(\\d{1,2})\\b(?:\\s+(\\d{4}))?`, "i"));
 
@@ -438,6 +447,28 @@ function parseMonthOnlyFromText(text) {
   return `${year}-${String(monthIndex0 + 1).padStart(2, "0")}`;
 }
 
+// Kata waktu relatif yang sering diketik orang tapi dulu gak dikenali: "kemarin"
+// (-> tanggal kemarin WIB), "bulan lalu" (-> bulan sebelum bulan berjalan), dan
+// "minggu lalu" ("unsupported" - rentang "7 hari yang lalu sampai 14 hari yang
+// lalu" gak ada di model rentang rekap yang cuma kenal "N hari terakhir",
+// jadi ditolak eksplisit alih-alih diam-diam dijawab pake "minggu ini").
+// "minggu/bulan kemarin" dicek DULUAN sebelum "kemarin" polos biar gak
+// kebaca jadi "kemarin" doang.
+function parseRelativePeriodFromText(text) {
+  if (/\b(?:minggu|pekan)\s+(?:lalu|kemarin|kemaren)\b/.test(text)) return { kind: "unsupported" };
+  if (/\bbulan\s+(?:lalu|kemarin|kemaren)\b/.test(text)) {
+    const [year, month] = getTodayWIB().split("-").map(Number);
+    const prev = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+    return { kind: "month", month: `${prev.year}-${String(prev.month).padStart(2, "0")}` };
+  }
+  if (/\b(?:kemarin|kemaren)\b/.test(text)) return { kind: "date", date: shiftDateWIB(getTodayWIB(), -1) };
+  return null;
+}
+
+function replyUnsupportedPeriod() {
+  return 'Cok, "minggu lalu" belum bisa dijawab. Yang tersedia: hari ini, "kemarin", "minggu ini" (7 hari terakhir), "bulan ini", "bulan lalu", atau tanggal tertentu (misal "rekap 25 september").';
+}
+
 // Index hari (konvensi Intl/JS: 0=Minggu...6=Sabtu). "senin".."sabtu" gak
 // ambigu, ditangkep begitu ketemu kata itu di mana pun di teksnya. "minggu"
 // SENGAJA beda perlakuan - itu kata yang SAMA PERSIS dipake buat "rentang 7
@@ -471,6 +502,15 @@ function parseWeekdayFromText(text) {
 // default-nya SELALU bulan berjalan begitu kata "bulan" disebut tanpa nama
 // bulan spesifik.
 function resolveStatRangeFromText(text) {
+  // "kemarin"/"bulan lalu" - BUG: dulu gak dikenali sama sekali, jadi "paling
+  // rame kemarin"/"export rekap kemarin" DIAM-DIAM dijawab pake data HARI INI
+  // (dan "bulan lalu" pake bulan ini, karena kata "bulan"-nya doang yang
+  // kebaca) - jawaban salah tanpa ada tanda apapun. "minggu lalu" gak
+  // didukung, ditolak eksplisit di router.js (replyUnsupportedPeriod).
+  const relative = parseRelativePeriodFromText(text);
+  if (relative?.kind === "date") return { rangeDays: relative.date, label: "kemarin" };
+  if (relative?.kind === "month") return { rangeDays: relative.month, label: `bulan ${formatMonthLabel(relative.month)}` };
+
   const specificDate = parseSpecificDateFromText(text);
   if (specificDate) {
     return { rangeDays: specificDate, label: `tanggal ${formatLongDateWIB(new Date(`${specificDate}T00:00:00+07:00`))}` };
@@ -2337,20 +2377,69 @@ function replyAliasList() {
 
 // Beda dari priority list (khusus owner), subscribe ini SIAPA AJA boleh -
 // personal reminder buat di-tag pas member manapun mulai live.
+// BUG: "ingetin nala dan lily" dulu didaftarin sebagai SATU keyword "nala dan
+// lily" (gak pernah cocok sama siapapun) sambil dibales "Sip, kamu bakal
+// di-tag tiap kali "nala dan lily" mulai live!" - langganan diam-diam gak
+// berguna, dan nongol di "reminder aku". Sekarang dipecah per nama (pemisah
+// "dan"/"&"/koma, maksimal MAX_SUBSCRIBE_NAMES sekaligus). Satu nama = pesan
+// lama persis, jadi perilaku biasa gak berubah.
+const MAX_SUBSCRIBE_NAMES = 5;
+
+function splitSubscribeNames(rawName) {
+  return stripTrailingLiveWord(rawName)
+    .split(/\s*(?:,|&|\bdan\b)\s*/i)
+    .map((n) => n.trim())
+    .filter(Boolean);
+}
+
 function handleSubscribe(rawName, authorId) {
-  const name = stripTrailingLiveWord(rawName);
-  const result = addSubscription(name, authorId);
-  if (!result.ok && result.reason === "too_short") return "Nama membernya kependekan, minimal 3 huruf ya.";
-  if (!result.ok && result.reason === "already") return `Kamu udah subscribe notif buat "${name}" kok.`;
-  if (!result.ok) return "Gagal subscribe, coba lagi.";
-  return `🔔 Sip, kamu bakal di-tag tiap kali "${name}" mulai live!`;
+  const names = splitSubscribeNames(rawName);
+  if (names.length > MAX_SUBSCRIBE_NAMES) return `Cok, maksimal ${MAX_SUBSCRIBE_NAMES} member sekaligus ya (kamu ngasih ${names.length}).`;
+  if (names.length <= 1) {
+    const name = names[0] || stripTrailingLiveWord(rawName);
+    const result = addSubscription(name, authorId);
+    if (!result.ok && result.reason === "too_short") return "Nama membernya kependekan, minimal 3 huruf ya.";
+    if (!result.ok && result.reason === "already") return `Kamu udah subscribe notif buat "${name}" kok.`;
+    if (!result.ok) return "Gagal subscribe, coba lagi.";
+    return `🔔 Sip, kamu bakal di-tag tiap kali "${name}" mulai live!`;
+  }
+
+  const added = [];
+  const already = [];
+  const tooShort = [];
+  for (const name of names) {
+    const result = addSubscription(name, authorId);
+    if (result.ok) added.push(name);
+    else if (result.reason === "already") already.push(name);
+    else tooShort.push(name);
+  }
+  const quote = (list) => list.map((n) => `"${n}"`).join(", ");
+  const lines = [];
+  if (added.length > 0) lines.push(`🔔 Sip, kamu bakal di-tag tiap kali ${quote(added)} mulai live!`);
+  if (already.length > 0) lines.push(`Udah subscribe dari tadi: ${quote(already)}.`);
+  if (tooShort.length > 0) lines.push(`Kependekan (minimal 3 huruf): ${quote(tooShort)}.`);
+  return lines.join("\n");
 }
 
 function handleUnsubscribe(rawName, authorId) {
-  const name = stripTrailingLiveWord(rawName);
-  const result = removeSubscription(name, authorId);
-  if (!result.ok) return `Kamu belum subscribe "${name}".`;
-  return `🔕 Oke, notif buat "${name}" dimatiin.`;
+  const names = splitSubscribeNames(rawName);
+  if (names.length <= 1) {
+    const name = names[0] || stripTrailingLiveWord(rawName);
+    const result = removeSubscription(name, authorId);
+    if (!result.ok) return `Kamu belum subscribe "${name}".`;
+    return `🔕 Oke, notif buat "${name}" dimatiin.`;
+  }
+
+  const removed = [];
+  const notFound = [];
+  for (const name of names.slice(0, MAX_SUBSCRIBE_NAMES)) {
+    (removeSubscription(name, authorId).ok ? removed : notFound).push(name);
+  }
+  const quote = (list) => list.map((n) => `"${n}"`).join(", ");
+  const lines = [];
+  if (removed.length > 0) lines.push(`🔕 Oke, notif buat ${quote(removed)} dimatiin.`);
+  if (notFound.length > 0) lines.push(`Kamu belum subscribe ${quote(notFound)}.`);
+  return lines.join("\n");
 }
 
 module.exports = {
@@ -2393,6 +2482,8 @@ module.exports = {
   replyRecapSpecificDate,
   replyRecapWeekdayPicker,
   parseSpecificDateFromText,
+  parseRelativePeriodFromText,
+  replyUnsupportedPeriod,
   parseMonthOnlyFromText,
   parseWeekdayFromText,
   getTodaySessionsForRecap,
