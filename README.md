@@ -1,6 +1,6 @@
 # JKT48 IDN Live Notifier
 
-Discord bot yang mantau IDN Live tiap 30 detik dan ngirim notifikasi otomatis pas member JKT48 mulai/selesai live, plus fitur tanya-jawab lewat chat ("cok, siapa yang live?"). 3 member prioritas (Nala/Levi/Lily, bisa ditambah lewat chat) dapet perlakuan flashy tambahan lewat DM ke pemilik bot.
+Discord bot yang mantau IDN Live tiap 30 detik dan ngirim notifikasi otomatis pas member JKT48 mulai/selesai live, plus fitur tanya-jawab lewat chat ("cok, siapa yang live?") ATAU slash command native ("/live", "/rekap", "/grafik", dst - lihat `npm run register-slash-commands` di bawah). 3 member prioritas (Nala/Levi/Lily, bisa ditambah lewat chat) dapet perlakuan flashy tambahan lewat DM ke pemilik bot.
 
 Untuk penjelasan arsitektur, data flow, dan alasan desain di balik keputusan-keputusan teknisnya, lihat **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
@@ -16,15 +16,16 @@ npm start
 
 ## Scripts
 
-| Command                | Buat apa                                                                |
-| ---------------------- | ----------------------------------------------------------------------- |
-| `npm start`            | Nyalain bot (`node src/index.js`)                                       |
-| `npm test`             | Jalanin automated test suite (`node --test`)                            |
-| `npm run lint`         | Cek gaya kode pake ESLint                                               |
-| `npm run format`       | Rapiin format kode otomatis pake Prettier                               |
-| `npm run format:check` | Cek format tanpa ngubah file (dipake CI)                                |
-| `npm run cek-gifter`   | Tool CLI manual buat cek top-gifter (lihat `scripts/cek-top-gifter.js`) |
-| `npm run backup-data`  | Tool CLI manual buat narik backup data bot ke file lokal                |
+| Command                           | Buat apa                                                                                                        |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `npm start`                       | Nyalain bot (`node src/index.js`)                                                                               |
+| `npm test`                        | Jalanin automated test suite (`node --test`)                                                                    |
+| `npm run lint`                    | Cek gaya kode pake ESLint                                                                                       |
+| `npm run format`                  | Rapiin format kode otomatis pake Prettier                                                                       |
+| `npm run format:check`            | Cek format tanpa ngubah file (dipake CI)                                                                        |
+| `npm run cek-gifter`              | Tool CLI manual buat cek top-gifter (lihat `scripts/cek-top-gifter.js`)                                         |
+| `npm run backup-data`             | Tool CLI manual buat narik backup data bot ke file lokal                                                        |
+| `npm run register-slash-commands` | Daftarin slash command ("/live", "/rekap", dst) ke Discord - jalanin ulang tiap kali daftar command-nya berubah |
 
 ## Deploy
 

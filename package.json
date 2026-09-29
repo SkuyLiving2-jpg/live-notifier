@@ -15,12 +15,15 @@
     "backfill-live-history": "node scripts/backfill-live-history.js",
     "repair-live-history": "node scripts/repair-live-history.js",
     "count-priority-notifs": "node scripts/count-priority-notifs.js",
-    "set-channel-routing": "node scripts/set-channel-routing.js"
+    "set-channel-routing": "node scripts/set-channel-routing.js",
+    "register-slash-commands": "node scripts/register-slash-commands.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.9",
+    "dejavu-fonts-ttf": "^2.37.3",
     "discord.js": "^14.27.0",
     "dotenv": "^17.4.2"
   },

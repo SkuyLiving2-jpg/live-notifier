@@ -9,6 +9,8 @@ const { replyFallbackMenu } = require("./menu");
 const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
 const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
+const { replyDurationChart } = require("./chartReply");
+const { handleSlashCommand, handleSlashAutocomplete } = require("./slashCommands");
 const {
   replyListLive,
   replyLongestLive,
@@ -182,6 +184,18 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const streakMatch = text.match(/streak\s+(.+)/);
   if (streakMatch) {
     return await replyStreak(streakMatch[1]);
+  }
+
+  // Saran fitur "iseng nambah baris" ke-2 (owner minta beneran dikerjain):
+  // "cok grafik <nama>"/"cok chart <nama>" - bar chart durasi live 10 sesi
+  // terakhir (gambar PNG, lihat chat/chartReply.js), bukan teks/embed kayak
+  // reply lain. Dicek SEBELUM stats/streak di atas? Enggak - taro SETELAH,
+  // soalnya kata "grafik"/"chart" gak nyempil di kalimat command lain manapun
+  // di file ini, jadi urutannya gak krusial, cuma ditaro deket
+  // stats/streak biar related secara tematik (dua-duanya "detail 1 member").
+  const chartMatch = text.match(/(?:grafik|chart)\s+(.+)/);
+  if (chartMatch) {
+    return await replyDurationChart(chartMatch[1]);
   }
 
   // Dua cara natural buat nanya total hitungan live, sama pola dual-arah
@@ -559,7 +573,20 @@ function wireDiscordEvents(client) {
 
   client.on("interactionCreate", async (interaction) => {
     try {
-      if (interaction.isButton() && interaction.customId.startsWith("fallback_menu:")) {
+      if (interaction.isChatInputCommand()) {
+        // Slash command ("/live", "/rekap", dst - chat/slashCommands.js).
+        // Dicek PALING ATAS (beda kelas interaction sama sekali dari
+        // button/select-menu/modal di bawah - ChatInputCommandInteraction
+        // gak punya `.customId`, jadi taro di sini biar jelas gak nyampur
+        // sama rantai if-else berbasis customId di bawahnya).
+        await handleSlashCommand(interaction);
+      } else if (interaction.isAutocomplete()) {
+        // Saran autocomplete buat opsi "member"/"target" pas user lagi
+        // ngetik di slash command manapun (lihat AUTOCOMPLETE_OPTION_NAMES
+        // di slashCommands.js) - beda method (`interaction.respond()`,
+        // BUKAN `.reply()`) dari semua interaction lain di file ini.
+        await handleSlashAutocomplete(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("fallback_menu:")) {
         await handleFallbackMenuButton(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("fallback_select:")) {
         await handleFallbackMemberSelect(interaction);

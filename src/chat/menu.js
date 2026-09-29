@@ -225,6 +225,12 @@ const EXTRA_FEATURES = [
     detail: 'Ketik `cok streak <nama member>` - lagi live berapa hari berturut-turut. Contoh: "cok streak nala".',
   },
   {
+    value: "grafik",
+    label: "📊 Grafik durasi live",
+    description: "Bar chart durasi live 10 sesi terakhir (gambar)",
+    detail: 'Ketik `cok grafik <nama member>` (atau "cok chart <nama>") - bar chart durasi live 10 sesi terakhirnya. Contoh: "cok grafik nala".',
+  },
+  {
     value: "export",
     label: "📤 Export rekap (CSV)",
     description: "Rekap dikirim jadi file yang bisa didownload",

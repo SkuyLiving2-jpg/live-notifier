@@ -60,6 +60,23 @@ console.log(
 // biasa doang di channel, kayak member lain).
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
 
+// ID Application Discord (Developer Portal > General Information > halaman
+// yang sama kayak Bot Token) DAN ID server (klik kanan nama server > Copy
+// Server ID, butuh Developer Mode - sama caranya kayak BOT_CHANNEL_ID) -
+// dua-duanya cuma dipake scripts/register-slash-commands.js buat DAFTARIN
+// slash command ("/live", "/rekap", dst) ke Discord, BUKAN dipake runtime
+// bot sehari-hari (fitur tanya-jawab teks "cok ..." gak butuh ini sama
+// sekali). Opsional - kalau kosong, slash command belum pernah didaftarin
+// (fitur teks TETEP jalan normal, cuma "/" command-nya belum nongol di
+// Discord). GUILD_ID sengaja dipake buat registrasi PER-SERVER (bukan
+// global) - propagasinya LANGSUNG kelihatan (global registration Discord
+// butuh sampai 1 jam buat nyebar), dan scope-nya kekunci ke satu server ini
+// doang (bot ini emang didesain buat satu server pribadi, bukan multi-server
+// publik - lihat BOT_CHANNEL_ID/PRIORITY_PING_USER_ID yang sama-sama single
+// value, bukan per-guild).
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "";
+const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || "";
+
 // Opsional - ID channel Discord tempat bot boleh lebih "agresif" balas
 // (hampir semua pesan yang gak dikenali dibalas menu options, gak perlu
 // nyebut "cok"/"live"). Channel lain tetap butuh wake word biar gak ganggu
@@ -213,6 +230,8 @@ module.exports = {
   API_SECRET,
   CACHE_DIR,
   DISCORD_BOT_TOKEN,
+  DISCORD_CLIENT_ID,
+  DISCORD_GUILD_ID,
   BOT_CHANNEL_ID,
   DEFAULT_ENDING_SOON_THRESHOLD_MS,
   MAX_PLAUSIBLE_LIVE_DURATION_MS,

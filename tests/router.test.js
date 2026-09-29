@@ -148,6 +148,21 @@ test("streak <nama> - dispatch ke replyStreak", async () => {
   }
 });
 
+// Fitur "grafik" (chat/chartReply.js) - "grafik" maupun "chart" dua-duanya
+// dikenalin, dan balesannya OBJECT {content, files} (PNG attachment), bukan
+// string polos kayak kebanyakan reply lain.
+test("grafik/chart <nama> - dispatch ke replyDurationChart, dua-duanya kata kunci dikenalin", async () => {
+  recordLiveDuration("jkt48_chartroutertest", "Chartroutertest", 60 * 60_000);
+
+  const reply = await buildChatReply("cok grafik chartroutertest");
+  assert.match(reply.content, /Grafik durasi live \*\*Chartroutertest\*\*/);
+  assert.equal(reply.files.length, 1);
+  assert.equal(reply.files[0].name, "grafik-jkt48_chartroutertest.png");
+
+  const replyViaChart = await buildChatReply("cok chart chartroutertest");
+  assert.match(replyViaChart.content, /Grafik durasi live \*\*Chartroutertest\*\*/);
+});
+
 test("berapa kali si <nama> live - varian dengan 'si' juga jalan", async () => {
   const reply = await buildChatReply("cok berapa kali si liveCountRoutertest2 live");
   assert.match(reply, /belum ada catatan live buat "livecountroutertest2"/);
