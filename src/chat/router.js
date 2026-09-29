@@ -10,7 +10,7 @@ const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = requir
 const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const { replyDurationChart } = require("./chartReply");
-const { handleSlashCommand, handleSlashAutocomplete } = require("./slashCommands");
+const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
 const {
   replyListLive,
@@ -75,6 +75,27 @@ const CHAT_WAKE_WORDS = ["cok"];
 // bot" kalau ada tanda tanya atau kata tanya juga di pesannya.
 const TOPIC_WORDS = ["live"];
 const QUESTION_HINTS = ["?", "siapa", "apa", "gimana", "kapan", "berapa"];
+
+const CHART_HINT = 'Ketik `grafik <nama member>` ya (atau "chart <nama>"), contoh: "grafik nala".';
+const STATS_HINT = 'Ketik `stats <nama member>` ya, contoh: "stats nala".';
+const BARE_KEYWORD_HINTS = {
+  grafik: CHART_HINT,
+  chart: CHART_HINT,
+  stats: STATS_HINT,
+  stat: STATS_HINT,
+  statistik: STATS_HINT,
+  streak: 'Ketik `streak <nama member>` ya, contoh: "streak nala".',
+  jadwal: 'Ketik `jadwal <nama member>` ya (atau "kapan <nama> biasanya live?"), contoh: "jadwal nala".',
+  gifter: 'Ketik `gifter <nama member>` ya, contoh: "gifter nala".',
+  ingetin: 'Ketik `ingetin <nama member>` ya - nanti kamu di-tag pas dia mulai live. Contoh: "ingetin nala".',
+};
+
+// Kata umum yang bisa nyangkut di posisi "nama" pola status-member
+// ("siapa yang live", "masih live?", "status bot") - bukan nama member.
+const MEMBER_QUERY_STOPWORDS = new Set([
+  "masih", "lagi", "lg", "sedang", "udah", "sudah", "yang", "siapa", "ada", "apa", "kapan",
+  "gak", "nggak", "belum", "semua", "member", "bot", "live", "cok", "dia", "kamu", "aku",
+]); // prettier-ignore
 
 async function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
@@ -317,7 +338,10 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return replySchedulePattern(stripTrailingLiveWord(jadwalMatch[1]));
   }
 
-  const kapanLiveMatch = text.match(/kapan\s+(?:biasanya\s+)?(.+?)\s+live\b/) || text.match(/kapan\s+live\s+(.+)/);
+  // "biasanya" boleh sebelum ATAU sesudah nama - BUG: format yang ditulis
+  // di bantuan sendiri ("cok kapan <nama> biasanya live?") dulu ikut
+  // nyangkutin "biasanya" ke nama member-nya ("erine biasanya").
+  const kapanLiveMatch = text.match(/kapan\s+(?:biasanya\s+)?(.+?)\s+(?:biasanya\s+)?live\b/) || text.match(/kapan\s+live\s+(.+)/);
   if (kapanLiveMatch) {
     return replySchedulePattern(kapanLiveMatch[1]);
   }
@@ -427,7 +451,10 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return replyRecapMenu();
   }
 
+  // "paling rame" polos juga diterima - itu PERSIS label tombol menunya
+  // sendiri ("Paling rame"), dulu diketik malah jatuh ke menu fallback.
   const asksTopViewers =
+    ["paling rame", "paling ramai", "terame", "teramai"].some((w) => containsWholeWord(text, w)) ||
     containsWholeWord(text, "viewer") ||
     (containsWholeWord(text, "penonton") &&
       (containsWholeWord(text, "banyak") || containsWholeWord(text, "terbanyak") || containsWholeWord(text, "rame"))) ||
@@ -455,9 +482,14 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // yang gak mensyaratkan itu) - tanpa gerbang ini, kalimat wajar kayak
   // "cok nala kok lama gak live" (nanya SATU member spesifik, bukan minta
   // leaderboard) bakal ikut kebajak juga.
+  // "paling" juga diterima gantiin "siapa" - BUG: "paling lama gak live"
+  // (PERSIS label tombol menunya, "😴 Paling lama gak live") dulu kesasar ke
+  // replyLongestLive, dan "paling jarang live" jatuh ke menu fallback. Kata
+  // superlatif "paling" udah jelas minta leaderboard, jadi "nala kok lama
+  // gak live" (gak ada "siapa"/"paling") tetep gak kebajak.
   const notLiveNegationWords = ["gak", "nggak", "enggak", "tidak", "belum"];
   const asksLongestNotLive =
-    containsWholeWord(text, "siapa") &&
+    (containsWholeWord(text, "siapa") || containsWholeWord(text, "paling")) &&
     containsWholeWord(text, "live") &&
     (containsWholeWord(text, "jarang") || (containsWholeWord(text, "lama") && notLiveNegationWords.some((w) => containsWholeWord(text, w))));
   if (asksLongestNotLive) {
@@ -493,6 +525,25 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
       containsWholeWord(text, "ada berapa"))
   ) {
     return replyListLive();
+  }
+
+  // Keyword yang diketik POLOS tanpa nama member (mis. "grafik" doang) -
+  // dulu jatuh ke menu fallback generik, kesannya command-nya gak jalan.
+  const bareKeyword = commandText.replace(/[?!.\s]+$/, "");
+  if (BARE_KEYWORD_HINTS[bareKeyword]) return BARE_KEYWORD_HINTS[bareKeyword];
+
+  // Nanya status SATU member ("erine masih live?", "apakah erine live",
+  // "cek erine", "status erine") - BUG: dulu cuma kejawab kalau member itu
+  // LAGI live atau udah punya riwayat durasi; sisanya jatuh ke menu fallback
+  // generik, dan "status <nama>" malah dijawab status BOT. Sekarang jalurnya
+  // sama persis kayak "/cek" (replyCekMember). Nama yang ketangkep harus satu
+  // kata dan bukan kata umum (MEMBER_QUERY_STOPWORDS), biar "siapa yang
+  // live"/"status bot" dkk gak kebajak.
+  const memberQueryMatch =
+    commandText.match(/^(?:cek|status)\s+(?:member\s+)?([a-z0-9]+)[?!.]*$/) ||
+    commandText.match(/^(?:apakah\s+|apa\s+)?([a-z0-9]+)\s+(?:(?:masih|lagi|lg|sedang|udah|sudah)\s+)?live\b/);
+  if (memberQueryMatch && !MEMBER_QUERY_STOPWORDS.has(memberQueryMatch[1])) {
+    return replyCekMember(memberQueryMatch[1]);
   }
 
   if (containsWholeWord(text, "status") || containsWholeWord(text, "sehat") || containsWholeWord(text, "masih jalan")) {
@@ -532,6 +583,23 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   return replyFallbackMenu();
 }
 
+// BUG YANG DILAPORIN OWNER ("grafik erine" gak keluar apa-apa): kalau kirim
+// balesan gagal, dulu cuma masuk log - user gak dapet apa-apa, kesannya
+// command-nya diem. Penyebab paling mungkin buat grafik: gambar PNG butuh
+// izin "Attach Files" (error 50013 kalau gak ada), sementara teks biasa
+// cukup "Send Messages". Jadi dicoba kirim penjelasan TEKS POLOS.
+async function replyWithFailureNotice(message, reply, error) {
+  console.error("Gagal kirim balesan chat:", error.message, "| code:", error.code);
+  const hasFiles = typeof reply === "object" && Array.isArray(reply.files) && reply.files.length > 0;
+  const notice =
+    error.code === 50013 && hasFiles
+      ? 'Cok, gambarnya gak bisa kekirim - bot belum punya izin "Attach Files" di channel ini. Minta admin nambahin izin itu ke role bot ya.'
+      : "Cok, ada error pas ngirim balesannya. Coba lagi bentar ya.";
+  await message.reply(safeReplyOptions(notice)).catch((noticeError) => {
+    console.error("Gagal kirim pesan error-nya juga:", noticeError.message, "| code:", noticeError.code);
+  });
+}
+
 // Nempelin listener pesan/tombol ke discord.js Client yang udah dibikin
 // discordClient.js's createDiscordClient() - dipanggil dari src/app.js's
 // start() setelah DISCORD_BOT_TOKEN dipastiin ada, JADI fungsi ini sendiri
@@ -561,7 +629,13 @@ function wireDiscordEvents(client) {
         authorId: message.author.id,
       });
       if (reply) {
-        const sent = await message.reply(safeReplyOptions(reply));
+        let sent;
+        try {
+          sent = await message.reply(safeReplyOptions(reply));
+        } catch (sendError) {
+          await replyWithFailureNotice(message, reply, sendError);
+          return;
+        }
         // Ketikan yang SAMA diulang lebih dari 2x -> ketikan lama + balesan
         // bot lamanya dihapus (lihat repeatedReplyGuard.js). Dipanggil abis
         // balesan kekirim, dan gak pernah throw (kegagalan hapus cuma di-log).
@@ -649,4 +723,4 @@ function wireDiscordEvents(client) {
   });
 }
 
-module.exports = { buildChatReply, wireDiscordEvents };
+module.exports = { buildChatReply, wireDiscordEvents, replyWithFailureNotice };

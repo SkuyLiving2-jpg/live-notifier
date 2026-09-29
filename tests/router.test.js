@@ -11,7 +11,7 @@ const { recordLiveDuration } = require("../src/storage/durationHistory");
 const { recordLiveCompleted } = require("../src/storage/liveCount");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
 const { saveChannelRouting } = require("../src/storage/channelRouting");
-const { buildChatReply } = require("../src/chat/router");
+const { buildChatReply, replyWithFailureNotice } = require("../src/chat/router");
 
 const OWNER = "owner-test-id";
 
@@ -799,4 +799,97 @@ test(
 test("bentuk polos '<kata biasa> & <kata biasa>' yang bukan nama member tetep gak dibajak", async () => {
   const reply = await buildChatReply("cok makan & tidur");
   assert.doesNotMatch(JSON.stringify(reply), /⚔️|compare_pick|belum pernah live|gak nemu member/);
+});
+
+// ==== Bug keyword yang dilaporin owner ("banyak keyword gak keluar") ====
+// Semua dites di bot channel (gak perlu "cok"), sama kayak cara owner ngetik.
+function inBotChannel(text, authorId = "u-keyword-regress") {
+  return buildChatReply(text, { isBotChannel: true, channelId: "c-keyword-regress", authorId });
+}
+
+function isFallbackMenu(reply) {
+  return typeof reply === "object" && /Klik salah satu di bawah/.test(reply.content || "");
+}
+
+test("status SATU member ('X masih live?', 'apakah X live', 'cek X', 'status X') -> jawaban soal member itu, BUKAN menu fallback/status bot", async () => {
+  for (const text of [
+    "kwregress masih live?",
+    "kwregress live?",
+    "kwregress lagi live gak",
+    "apakah kwregress live",
+    "cek kwregress",
+    "cek member kwregress",
+    "status kwregress",
+  ]) {
+    const reply = await inBotChannel(text);
+    assert.ok(!isFallbackMenu(reply), `"${text}" gak boleh jatuh ke menu fallback`);
+    assert.match(textOf(reply), /kwregress/, `"${text}" harus jawab soal member yang disebut`);
+    assert.doesNotMatch(textOf(reply), /Bot jalan normal/, `"${text}" bukan status bot`);
+  }
+});
+
+test("status member yang punya riwayat tapi lagi gak live -> 'lagi nggak live', kapan terakhir", async () => {
+  recordLiveDuration("jkt48_kwhistory", "Kwhistory JKT48", 30 * 60_000);
+  const reply = await inBotChannel("kwhistory masih live?");
+  assert.match(textOf(reply), /\*\*Kwhistory JKT48\*\* lagi nggak live sekarang/);
+});
+
+test("pola status-member gak ngebajak kalimat umum: 'status bot', 'status', 'siapa yang live', 'masih live?'", async () => {
+  assert.match(textOf(await inBotChannel("status bot")), /Bot jalan normal/);
+  assert.match(textOf(await inBotChannel("status")), /Bot jalan normal/);
+  assert.doesNotMatch(textOf(await inBotChannel("siapa yang live")), /nggak nemu member/);
+  assert.doesNotMatch(textOf(await inBotChannel("masih live?")), /nggak nemu member "masih"/);
+});
+
+test("'kapan <nama> biasanya live?' (format di bantuan sendiri) - 'biasanya' gak ikut nyangkut ke nama member", async () => {
+  const reply = await inBotChannel("kapan kwsched biasanya live?");
+  assert.doesNotMatch(textOf(reply), /biasanya"/);
+  assert.match(textOf(reply), /"kwsched"/);
+});
+
+test("'paling lama gak live' & 'paling jarang live' (label tombol menu sendiri) -> leaderboard gak-live, BUKAN durasi live terlama/menu fallback", async () => {
+  recordLiveCompleted("jkt48_kwnotlive", "Kwnotlive");
+  for (const text of ["paling lama gak live", "paling jarang live", "siapa yang paling lama gak live"]) {
+    assert.match(textOf(await inBotChannel(text)), /Paling lama gak live/, `"${text}"`);
+  }
+  // kalimat soal SATU member (gak ada "paling"/"siapa") tetep gak kebajak
+  assert.doesNotMatch(textOf(await inBotChannel("kwnotlive kok lama gak live")), /Paling lama gak live/);
+});
+
+test("'paling rame' (label tombol menu sendiri) -> jawaban penonton terbanyak, bukan menu fallback", async () => {
+  const reply = await inBotChannel("paling rame");
+  assert.ok(!isFallbackMenu(reply));
+  assert.match(textOf(reply), /penonton|ditonton/i);
+});
+
+test("keyword POLOS tanpa nama ('grafik', 'stats', 'streak', dst) -> contoh cara pakai, bukan menu fallback", async () => {
+  for (const keyword of ["grafik", "chart", "stats", "statistik", "streak", "jadwal", "gifter", "ingetin"]) {
+    const reply = await inBotChannel(keyword);
+    assert.equal(typeof reply, "string", `"${keyword}"`);
+    assert.match(reply, /contoh/i, `"${keyword}" harus ngasih contoh`);
+  }
+  assert.match(await buildChatReply("cok grafik", { isBotChannel: false }), /grafik <nama member>/);
+});
+
+// Kasus "grafik erine" yang gak keluar apa-apa: kirim balesan gagal (paling
+// mungkin izin "Attach Files" buat gambar grafik) dulu cuma masuk log.
+test("replyWithFailureNotice - kirim gagal -> user tetep dapet penjelasan teks, gak diem", async () => {
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const sentNotices = [];
+    const message = { reply: async (payload) => sentNotices.push(payload) };
+    const missingPermission = Object.assign(new Error("Missing Permissions"), { code: 50013 });
+
+    await replyWithFailureNotice(message, { content: "grafik", files: [{}] }, missingPermission);
+    assert.match(sentNotices[0].content, /izin "Attach Files"/);
+
+    await replyWithFailureNotice(message, "teks biasa", Object.assign(new Error("lain"), { code: 50035 }));
+    assert.match(sentNotices[1].content, /ada error pas ngirim balesannya/);
+
+    const brokenMessage = { reply: async () => { throw new Error("gak bisa kirim apa-apa"); } }; // prettier-ignore
+    await assert.doesNotReject(replyWithFailureNotice(brokenMessage, "x", missingPermission));
+  } finally {
+    console.error = originalError;
+  }
 });
