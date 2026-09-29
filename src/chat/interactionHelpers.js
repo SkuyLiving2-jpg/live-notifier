@@ -1,3 +1,5 @@
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+
 // Helper bersama buat tombol "Tutup" yang beneran NGEHAPUS pesannya (bukan
 // diedit jadi teks dismiss kayak "Oke, dibatalin."/"Terima kasih...") -
 // dipake bareng-bareng oleh chat/menu.js, chat/replies.js, DAN
@@ -35,4 +37,27 @@ async function deleteInteractionMessage(interaction) {
   await interaction.message.delete().catch(() => {});
 }
 
-module.exports = { deleteInteractionMessage };
+// Tombol "Tutup" buat balasan command yang diketik ("cok stats nala", "cok streak
+// nala", dst) - balasannya teks polos tanpa tombol apapun, jadi numpuk di
+// channel. customId "reply_close" sengaja BUKAN "recap_nav:close" (yang juga
+// ngebersihin pendingRecapPage milik user - efek samping yang gak relevan di
+// sini). `withCloseButton` nerima string ATAU objek balasan ({content, files,
+// embeds, components}); balasan yang UDAH punya tombol sendiri dibiarin apa
+// adanya.
+function buildReplyCloseRow() {
+  return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("reply_close").setLabel("Tutup").setStyle(ButtonStyle.Danger));
+}
+
+function withCloseButton(reply) {
+  if (typeof reply === "string") return { content: reply, components: [buildReplyCloseRow()] };
+  if (reply && typeof reply === "object" && !(reply.components && reply.components.length > 0)) {
+    return { ...reply, components: [buildReplyCloseRow()] };
+  }
+  return reply;
+}
+
+async function handleReplyCloseButton(interaction) {
+  await deleteInteractionMessage(interaction);
+}
+
+module.exports = { deleteInteractionMessage, buildReplyCloseRow, withCloseButton, handleReplyCloseButton };

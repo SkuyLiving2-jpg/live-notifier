@@ -139,12 +139,12 @@ test("hapus alias / daftar alias - dispatch ke handleRemoveAlias/layar daftar al
 });
 
 test("stats <nama> - dispatch ke replyMemberStats", async () => {
-  const reply = await buildChatReply("cok stats statstestmember");
+  const reply = textOf(await buildChatReply("cok stats statstestmember"));
   assert.match(reply, /belum ada data riwayat live buat "statstestmember"/);
 });
 
 test("berapa kali <nama> live - dispatch ke replyLiveCount", async () => {
-  const reply = await buildChatReply("cok berapa kali liveCountRoutertest live");
+  const reply = textOf(await buildChatReply("cok berapa kali liveCountRoutertest live"));
   assert.match(reply, /belum ada catatan live buat "livecountroutertest"/);
 });
 
@@ -153,7 +153,7 @@ test("streak <nama> - dispatch ke replyStreak", async () => {
   const original = global.fetch;
   global.fetch = async () => ({ ok: true, json: async () => ({ errors: [{ message: "User Not found" }] }) });
   try {
-    const reply = await buildChatReply("cok streak streakroutertest", { authorId: "u-streak-router" });
+    const reply = textOf(await buildChatReply("cok streak streakroutertest", { authorId: "u-streak-router" }));
     assert.match(reply, /gak nemu member JKT48 bernama "streakroutertest"/);
   } finally {
     global.fetch = original;
@@ -176,7 +176,7 @@ test("grafik/chart <nama> - dispatch ke replyDurationChart, dua-duanya kata kunc
 });
 
 test("berapa kali si <nama> live - varian dengan 'si' juga jalan", async () => {
-  const reply = await buildChatReply("cok berapa kali si liveCountRoutertest2 live");
+  const reply = textOf(await buildChatReply("cok berapa kali si liveCountRoutertest2 live"));
   assert.match(reply, /belum ada catatan live buat "livecountroutertest2"/);
 });
 
@@ -187,19 +187,19 @@ test("berapa kali si <nama> live - varian dengan 'si' juga jalan", async () => {
 // ("berapa kali <nama> live"). Ini pola sebaliknya - HARUS ketangkep
 // duluan sebagai replyLiveCount, BUKAN jatuh ke fallback member-not-live.
 test("<nama> berapa kali live - urutan NAMA duluan (laporan bug asli) dispatch ke replyLiveCount, BUKAN fallback 'lagi nggak live'", async () => {
-  const reply = await buildChatReply("livecountnamefirsttest berapa kali live?");
+  const reply = textOf(await buildChatReply("livecountnamefirsttest berapa kali live?"));
   assert.match(reply, /belum ada catatan live buat "livecountnamefirsttest"/);
   assert.doesNotMatch(reply, /lagi nggak live sekarang/);
 });
 
 test("<nama> berapa kali live - wake-word 'cok' di depan nama GAK ikut ke-capture jadi bagian nama", async () => {
-  const reply = await buildChatReply("cok livecountcoktest berapa kali live?");
+  const reply = textOf(await buildChatReply("cok livecountcoktest berapa kali live?"));
   assert.match(reply, /belum ada catatan live buat "livecountcoktest"/);
   assert.doesNotMatch(reply, /"cok /); // fragment-nya harus "livecountcoktest" doang, bukan "cok livecountcoktest"
 });
 
 test("<nama> berapa kali live - varian 'udah berapa kali live'", async () => {
-  const reply = await buildChatReply("livecountudahtest udah berapa kali live?");
+  const reply = textOf(await buildChatReply("livecountudahtest udah berapa kali live?"));
   assert.match(reply, /belum ada catatan live buat "livecountudahtest"/);
 });
 
@@ -209,12 +209,12 @@ test("gifter <nama> - dispatch ke replyGifterSnapshot", async () => {
 });
 
 test("jadwal <nama> - dispatch ke replySchedulePattern", async () => {
-  const reply = await buildChatReply("cok jadwal jadwaltestmember");
+  const reply = textOf(await buildChatReply("cok jadwal jadwaltestmember"));
   assert.match(reply, /belum ada riwayat live buat "jadwaltestmember"/);
 });
 
 test("kapan <nama> live - pola alternatif buat replySchedulePattern (nama keapit 'kapan'...'live')", async () => {
-  const reply = await buildChatReply("cok kapan kapantestmember live");
+  const reply = textOf(await buildChatReply("cok kapan kapantestmember live"));
   assert.match(reply, /belum ada riwayat live buat "kapantestmember"/);
 });
 
@@ -421,7 +421,7 @@ test("kalimat biasa ber-koma yang gak nyebut member manapun gak dibajak jadi per
 });
 
 test("'<A>, <B>, dan <A>' BARE (member yang sama muncul dobel) ditolak dengan pesan jelas, sama kayak versi berkata kunci", async () => {
-  const reply = await buildChatReply("cok zorrawx, yelvaqp, dan zorrawx");
+  const reply = textOf(await buildChatReply("cok zorrawx, yelvaqp, dan zorrawx"));
   assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
 });
 
@@ -440,11 +440,11 @@ test("bandingin dengan SATU nama doang (pasangannya belum ada) - dispatch ke flo
 
 test("member SAMA di dua sisi ('A dan A') ditolak dengan pesan jelas, baik pakai kata kunci maupun polos", async () => {
   for (const text of ["cok bandingin zorrawx dan zorrawx", "cok bandingkan zorrawx dan zorrawx", "cok zorrawx dan zorrawx"]) {
-    const reply = await buildChatReply(text);
+    const reply = textOf(await buildChatReply(text));
     assert.match(reply, /gak bisa dibandingin sama diri sendiri/, text);
   }
   // beda huruf besar/kecil + tambahan "JKT48" tetep dianggep orang yang sama
-  const withJkt48 = await buildChatReply("cok bandingin Zorrawx dan zorrawx JKT48");
+  const withJkt48 = textOf(await buildChatReply("cok bandingin Zorrawx dan zorrawx JKT48"));
   assert.match(withJkt48, /gak bisa dibandingin sama diri sendiri/);
 });
 
@@ -471,7 +471,7 @@ test("bandingin POLOS - dispatch ke flow dropdown pencarian, BUKAN fallback menu
 // sama check leaderboard yang lebih spesifik. "cok siapa yang live" (tanpa
 // "paling sering") harus TETEP jatuh ke replyListLive seperti biasa.
 test("siapa yang paling sering live - dispatch ke replyLiveCountLeaderboard, BUKAN replyListLive (siapa yang LAGI live sekarang)", async () => {
-  const reply = await buildChatReply("cok siapa yang paling sering live");
+  const reply = textOf(await buildChatReply("cok siapa yang paling sering live"));
   assert.match(reply, /Paling sering live semenjak bot ini jalan|belum ada catatan live sama sekali/);
   assert.doesNotMatch(reply, /ini yang lagi live \(urut dari paling lama\)|lagi nggak ada member JKT48 yang live nih/);
 });
@@ -779,7 +779,7 @@ test(
 );
 
 test("'&' juga kena aturan member-sama: 'zorrawx & zorrawx' ditolak", async () => {
-  const reply = await buildChatReply("cok zorrawx & zorrawx");
+  const reply = textOf(await buildChatReply("cok zorrawx & zorrawx"));
   assert.match(reply, /gak bisa dibandingin sama diri sendiri/);
 });
 
@@ -789,7 +789,7 @@ test("'&' juga kena aturan member-sama: 'zorrawx & zorrawx' ditolak", async () =
 test(
   "bentuk polos tetep kedeteksi lewat daftar prioritas walau nama itu gak ada di live-count ('lily & <nama ngawur>' -> jawaban perbandingan, BUKAN menu fallback)",
   withFakeIdn(async () => {
-    const reply = await buildChatReply("cok lily & namangawurbanget", { channelId: "c-amp2", authorId: "u-amp2" });
+    const reply = textOf(await buildChatReply("cok lily & namangawurbanget", { channelId: "c-amp2", authorId: "u-amp2" }));
     assert.equal(typeof reply, "string");
     assert.match(reply, /gak nemu member JKT48 bernama "namangawurbanget"/);
     assert.doesNotMatch(reply, /selamat (pagi|siang|sore|malam)/i);
@@ -982,4 +982,48 @@ test("rekap <nama> <tanggal mustahil> dan export/paling-rame dengan tanggal must
     assert.match(textOf(await inBotChannel(text)), /itu gak ada di kalender/, text);
   }
   assert.doesNotMatch(textOf(await inBotChannel("rekap 25 september")), /gak ada di kalender/);
+});
+
+// ==== Tombol Tutup di balasan command "Fitur lainnya" yang diketik ====
+test("balasan stats/berapa kali live/jadwal/streak/paling sering live/bandingin/export punya tombol Tutup (reply_close)", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({ errors: [{ message: "User Not found" }] }) });
+  try {
+    for (const text of [
+      "cok stats closebtnmember",
+      "cok berapa kali closebtnmember live",
+      "cok jadwal closebtnmember",
+      "cok kapan closebtnmember live",
+      "cok streak closebtnmember",
+      "cok siapa yang paling sering live",
+      "cok bandingin closebtna dan closebtnb",
+      "cok export rekap",
+    ]) {
+      const reply = await buildChatReply(text, { channelId: "c-closebtn", authorId: "u-closebtn" });
+      assert.equal(typeof reply, "object", text);
+      const ids = reply.components.flatMap((row) => row.toJSON().components.map((c) => c.custom_id));
+      assert.deepEqual(ids, ["reply_close"], text);
+    }
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("withCloseButton - balasan yang udah punya tombol sendiri gak ditimpa; file/embeds ikut kebawa", () => {
+  const { withCloseButton } = require("../src/chat/interactionHelpers");
+  const own = { content: "x", components: [{ fake: true }] };
+  assert.equal(withCloseButton(own), own);
+  const withFile = withCloseButton({ content: "x", files: ["f"] });
+  assert.deepEqual(withFile.files, ["f"]);
+  assert.equal(withFile.components.length, 1);
+});
+
+test("interaksi reply_close ngehapus pesannya (deferUpdate lalu message.delete)", async () => {
+  const { handleReplyCloseButton } = require("../src/chat/interactionHelpers");
+  const calls = [];
+  await handleReplyCloseButton({
+    deferUpdate: async () => calls.push("defer"),
+    message: { delete: async () => calls.push("delete") },
+  });
+  assert.deepEqual(calls, ["defer", "delete"]);
 });

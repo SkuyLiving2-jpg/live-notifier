@@ -9,6 +9,7 @@ const { replyFallbackMenu } = require("./menu");
 const { replyMemberChannelFallback, handleMemberChannelFallbackButton } = require("./memberChannelReply");
 const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit, handleCompareSelect } = require("./compareFlow");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
+const { withCloseButton, handleReplyCloseButton } = require("./interactionHelpers");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
@@ -227,14 +228,14 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 
   const statsMatch = text.match(/stat(?:s|istik)\s+(.+)/);
   if (statsMatch) {
-    return replyMemberStats(statsMatch[1]);
+    return withCloseButton(replyMemberStats(statsMatch[1]));
   }
 
   // Saran fitur ke-5 (§10's kelimapuluh+item): "cok streak <nama member>" -
   // berapa hari berturut-turut dia punya live.
   const streakMatch = text.match(/streak\s+(.+)/);
   if (streakMatch) {
-    return await replyStreak(streakMatch[1]);
+    return withCloseButton(await replyStreak(streakMatch[1]));
   }
 
   // Saran fitur "iseng nambah baris" ke-2 (owner minta beneran dikerjain):
@@ -261,7 +262,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const liveCountMatch =
     text.match(/berapa\s+kali\s+(?:si\s+)?(.+?)\s+live\b/) || commandText.match(/^(.+?)\s+(?:udah\s+|sudah\s+)?berapa\s+kali\s+live\b/);
   if (liveCountMatch) {
-    return replyLiveCount(liveCountMatch[1]);
+    return withCloseButton(replyLiveCount(liveCountMatch[1]));
   }
 
   const gifterMatch = text.match(/gifter\s+(.+)/);
@@ -286,7 +287,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     if (parts.length >= 2) {
       const lastIndex = parts.length - 1;
       parts[lastIndex] = parts[lastIndex].replace(/[?!.\s]+$/, "");
-      return parts.length === 2 ? await replyCompareMembers(parts[0], parts[1]) : await replyCompareMembersMulti(parts);
+      return withCloseButton(parts.length === 2 ? await replyCompareMembers(parts[0], parts[1]) : await replyCompareMembersMulti(parts));
     }
     // Koma ada tapi ujung-ujungnya cuma nyisa 1 potongan (mis. koma nyantol
     // di ujung kalimat doang, "bandingin nala,") - biarin jatuh ke
@@ -301,7 +302,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // live" ngenalin member.
   const compareMatch = text.match(/\bbanding(?:in|kan)?\s+(.+?)(?:\s+dan\s+|\s*&\s*)(.+)/);
   if (compareMatch) {
-    return await replyCompareMembers(compareMatch[1].trim(), compareMatch[2].replace(/[?!.\s]+$/, ""));
+    return withCloseButton(await replyCompareMembers(compareMatch[1].trim(), compareMatch[2].replace(/[?!.\s]+$/, "")));
   }
 
   // Kata kuncinya diketik tapi pasangannya gak lengkap (mis. "cok bandingin"
@@ -337,9 +338,9 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
       .map((p) => p.trim());
     const isBareWordList = bareListParts.length >= 2 && bareListParts.every((p) => /^[a-z0-9]+$/.test(p));
     if (isBareWordList && bareListParts.some((p) => isKnownMemberFragment(p))) {
-      return bareListParts.length === 2
-        ? await replyCompareMembers(bareListParts[0], bareListParts[1])
-        : await replyCompareMembersMulti(bareListParts);
+      return withCloseButton(
+        bareListParts.length === 2 ? await replyCompareMembers(bareListParts[0], bareListParts[1]) : await replyCompareMembersMulti(bareListParts),
+      );
     }
   }
 
@@ -352,7 +353,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // tidur") gak salah dibajak jadi perbandingan.
   const bareCompareMatch = commandText.match(/^([a-z0-9]+)(?:\s+dan\s+|\s*&\s*)([a-z0-9]+)[?!.]*$/);
   if (bareCompareMatch && (isKnownMemberFragment(bareCompareMatch[1]) || isKnownMemberFragment(bareCompareMatch[2]))) {
-    return await replyCompareMembers(bareCompareMatch[1], bareCompareMatch[2]);
+    return withCloseButton(await replyCompareMembers(bareCompareMatch[1], bareCompareMatch[2]));
   }
 
   // Dua cara natural buat nanya pola jadwal: "cok jadwal nala" (pola
@@ -360,7 +361,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // (nama-nya "keapit" di antara kata "kapan" dan "live").
   const jadwalMatch = text.match(/jadwal\s+(.+)/);
   if (jadwalMatch) {
-    return replySchedulePattern(stripTrailingLiveWord(jadwalMatch[1]));
+    return withCloseButton(replySchedulePattern(stripTrailingLiveWord(jadwalMatch[1])));
   }
 
   // "biasanya" boleh sebelum ATAU sesudah nama - BUG: format yang ditulis
@@ -368,7 +369,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // nyangkutin "biasanya" ke nama member-nya ("erine biasanya").
   const kapanLiveMatch = text.match(/kapan\s+(?:biasanya\s+)?(.+?)\s+(?:biasanya\s+)?live\b/) || text.match(/kapan\s+live\s+(.+)/);
   if (kapanLiveMatch) {
-    return replySchedulePattern(kapanLiveMatch[1]);
+    return withCloseButton(replySchedulePattern(kapanLiveMatch[1]));
   }
 
   if (
@@ -386,7 +387,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // rame ditonton" (§10's fortieth item) - "export rekap" doang (gak nyebut
   // rentang) default ke hari ini, sama kayak dua fitur itu.
   if (containsWholeWord(text, "export") && containsWholeWord(text, "rekap")) {
-    return replyExportRecap(text);
+    return withCloseButton(await replyExportRecap(text));
   }
 
   // Dicek SEBELUM "rekap" polos di bawah - kalimatnya juga ngandung "rekap"
@@ -553,7 +554,7 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
       containsWholeWord(text, "tersering") ||
       containsWholeWord(text, "terbanyak"))
   ) {
-    return replyLiveCountLeaderboard();
+    return withCloseButton(replyLiveCountLeaderboard());
   }
 
   if (
@@ -745,6 +746,8 @@ function wireDiscordEvents(client) {
         await handleCompareModalSubmit(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("compare_select:")) {
         await handleCompareSelect(interaction);
+      } else if (interaction.isButton() && interaction.customId === "reply_close") {
+        await handleReplyCloseButton(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("chart_flow:")) {
         await handleChartButton(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("alias_flow:")) {
