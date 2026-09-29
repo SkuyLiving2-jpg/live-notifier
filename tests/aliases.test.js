@@ -46,6 +46,21 @@ test("addAlias - alias/target kosong atau kependekan ditolak", () => {
   assert.deepEqual(loadAliases(), {}); // gak ada satupun yang ke-save
 });
 
+// Regresi: resolveAliasInFragment nyocokin PER KATA, jadi alias ber-spasi/
+// ber-tanda-baca dulu disimpen (dan dilaporin sukses) tapi gak pernah bisa
+// kecocokan sama sekali.
+test("addAlias - alias multi-kata/bertanda baca/kepanjangan ditolak, bukan disimpen diem-diem", () => {
+  const { addAlias, loadAliases, resolveAliasInFragment, ALIAS_MAX_LENGTH } = freshAliases();
+
+  assert.deepEqual(addAlias("kim kim", "kimmy"), { ok: false, reason: "invalid_format" });
+  assert.deepEqual(addAlias("kim-kim", "kimmy"), { ok: false, reason: "invalid_format" });
+  assert.deepEqual(addAlias("a".repeat(ALIAS_MAX_LENGTH + 1), "kimmy"), { ok: false, reason: "too_long" });
+  assert.deepEqual(loadAliases(), {});
+
+  assert.equal(addAlias("kimkim2", "kimmy").ok, true);
+  assert.equal(resolveAliasInFragment("kimkim2"), "kimmy", "alias yang lolos validasi beneran bisa kecocokan");
+});
+
 test("removeAlias - hapus yang ada -> ok, yang gak ada -> ok:false", () => {
   const { addAlias, removeAlias, loadAliases } = freshAliases();
 

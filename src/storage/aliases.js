@@ -48,11 +48,29 @@ function normalizeAliasKey(text) {
   return (text || "").trim().toLowerCase();
 }
 
+// resolveAliasInFragment di bawah nyocokin PER KATA (fragment dipecah di
+// karakter non-alfanumerik), jadi alias yang ngandung spasi/tanda baca
+// ("kim kim", "kim-kim") gak akan PERNAH kecocokan - dulu tetep disimpen dan
+// dilaporin "✅ ditambahin" padahal gak pernah jalan. Batas panjang juga
+// jaga-jaga customId/label dropdown Discord (maks 100 karakter) di
+// chat/aliasFlow.js's tombol hapus alias.
+const ALIAS_MAX_LENGTH = 32;
+
+function validateAliasKey(alias) {
+  const key = normalizeAliasKey(alias);
+  if (!key) return "empty";
+  if (key.length < 2) return "too_short";
+  if (key.length > ALIAS_MAX_LENGTH) return "too_long";
+  if (!/^[a-z0-9]+$/.test(key)) return "invalid_format";
+  return null;
+}
+
 function addAlias(alias, target) {
   const key = normalizeAliasKey(alias);
   const value = normalizeAliasKey(target);
   if (!key || !value) return { ok: false, reason: "empty" };
-  if (key.length < 2) return { ok: false, reason: "too_short" };
+  const invalidReason = validateAliasKey(key);
+  if (invalidReason) return { ok: false, reason: invalidReason };
 
   const map = loadAliases();
   const previous = map[key] || null;
@@ -93,4 +111,4 @@ function resolveAliasInFragment(fragment) {
     .join(" ");
 }
 
-module.exports = { loadAliases, saveAliases, addAlias, removeAlias, resolveAliasInFragment };
+module.exports = { loadAliases, saveAliases, addAlias, removeAlias, resolveAliasInFragment, validateAliasKey, ALIAS_MAX_LENGTH };

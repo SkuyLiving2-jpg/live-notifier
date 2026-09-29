@@ -6,6 +6,7 @@ process.env.PRIORITY_PING_USER_ID = "owner-alias-test-id";
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { MessageFlags } = require("discord.js");
 const { recordLiveCompleted } = require("../src/storage/liveCount");
 const { addAlias, loadAliases } = require("../src/storage/aliases");
 const { PRIORITY_PING_USER_ID } = require("../src/config");
@@ -16,6 +17,7 @@ const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect
 // .deferUpdate()/.message.delete()/.showModal()/.fields.getTextInputValue().
 function fakeInteraction({ customId, channelId = "c-alias", authorId = PRIORITY_PING_USER_ID, fieldValue = "", values = [] } = {}) {
   const updates = [];
+  const replies = [];
   const modals = [];
   const deferUpdateCalls = [];
   const deletedMessageIds = [];
@@ -27,13 +29,26 @@ function fakeInteraction({ customId, channelId = "c-alias", authorId = PRIORITY_
     fields: { getTextInputValue: () => fieldValue },
     message: { id: "fake-alias-msg", delete: async () => deletedMessageIds.push("fake-alias-msg") },
     update: async (payload) => updates.push(payload),
+    reply: async (payload) => replies.push(payload),
     deferUpdate: async () => deferUpdateCalls.push(true),
     showModal: async (modal) => modals.push(modal),
     updates,
+    replies,
     modals,
     deferUpdateCalls,
     deletedMessageIds,
   };
+}
+
+// Non-owner ditolak lewat balesan EPHEMERAL (cuma keliatan dia), pesan
+// wizard-nya sendiri (yang bisa aja punya owner) gak disentuh sama sekali.
+function assertRejectedEphemerally(interaction) {
+  assert.equal(interaction.replies.length, 1);
+  assert.match(interaction.replies[0].content, /cuma owner yang boleh ubah daftar alias/i);
+  assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
+  assert.equal(interaction.updates.length, 0, "pesan wizard gak boleh ke-edit");
+  assert.equal(interaction.modals.length, 0, "gak boleh munculin modal");
+  assert.equal(interaction.deletedMessageIds.length, 0, "pesan wizard gak boleh kehapus");
 }
 
 async function withFakeIdn(profiles, fn) {
@@ -68,10 +83,66 @@ test("buildAliasListBlock - ada alias -> tombol Hapus ikut muncul, prefixMessage
   assert.match(block.content, /^Hasil operasi tadi\./);
 });
 
-test("handleAliasFlowButton - action 'add' oleh NON-owner -> ditolak, balik ke layar daftar alias", async () => {
+test("handleAliasFlowButton - action 'add' oleh NON-owner -> ditolak ephemeral, pesan gak disentuh", async () => {
   const interaction = fakeInteraction({ customId: "alias_flow:add", authorId: "u-bukan-owner" });
   await handleAliasFlowButton(interaction);
-  assert.match(interaction.updates[0].content, /cuma owner yang boleh ubah daftar alias/i);
+  assertRejectedEphemerally(interaction);
+});
+
+// Regresi: tombol Discord bisa diklik SEMUA orang di channel, jadi dulu orang
+// lain bisa ngeklik tombol di tengah wizard PUNYA owner - termasuk "Ubah
+// alias" (layar konfirmasi jadi nampilin ketikan dia, tapi "Simpan" owner
+// tetep nyimpen pending punya owner = yang tampil beda dari yang disimpen)
+// dan "Tutup" (pesan owner kehapus).
+test("SEMUA tombol/modal/dropdown wizard oleh NON-owner -> ditolak ephemeral, pesan wizard owner gak disentuh", async () => {
+  const buttonIds = [
+    "alias_flow:add_confirm",
+    "alias_flow:research",
+    "alias_flow:target_confirmed:jkt48_x",
+    "alias_flow:edit_alias:jkt48_x",
+    "alias_flow:commit",
+    "alias_flow:cancel",
+    "alias_flow:close",
+    "alias_flow:remove",
+    "alias_flow:remove_confirm:x",
+  ];
+  for (const customId of buttonIds) {
+    const interaction = fakeInteraction({ customId, authorId: "u-bukan-owner" });
+    await handleAliasFlowButton(interaction);
+    assertRejectedEphemerally(interaction);
+  }
+  for (const customId of ["alias_modal:search", "alias_modal:aliastext:jkt48_x"]) {
+    const interaction = fakeInteraction({ customId, authorId: "u-bukan-owner", fieldValue: "apapun" });
+    await handleAliasFlowModalSubmit(interaction);
+    assertRejectedEphemerally(interaction);
+  }
+  for (const customId of ["alias_select:target", "alias_select:remove"]) {
+    const interaction = fakeInteraction({ customId, authorId: "u-bukan-owner", values: ["x"] });
+    await handleAliasFlowSelect(interaction);
+    assertRejectedEphemerally(interaction);
+  }
+});
+
+test("owner ngisi alias, orang lain nyoba 'Ubah alias' di tengah jalan -> yang kesimpen TETEP punya owner, sesuai yang tampil ke owner", async () => {
+  recordLiveCompleted("jkt48_afhijack", "Afhijack");
+  await withFakeIdn({ jkt48_afhijack: { name: "Afhijack JKT48" } }, async () => {
+    const ownerModal = fakeInteraction({ customId: "alias_modal:aliastext:jkt48_afhijack", fieldValue: "afownernick" });
+    await handleAliasFlowModalSubmit(ownerModal);
+    assert.match(ownerModal.updates[0].content, /"afownernick"/);
+
+    const intruderModal = fakeInteraction({
+      customId: "alias_modal:aliastext:jkt48_afhijack",
+      fieldValue: "afintrudernick",
+      authorId: "u-bukan-owner",
+    });
+    await handleAliasFlowModalSubmit(intruderModal);
+    assertRejectedEphemerally(intruderModal);
+
+    const commit = fakeInteraction({ customId: "alias_flow:commit" });
+    await handleAliasFlowButton(commit);
+    assert.equal(loadAliases().afownernick, "afhijack");
+    assert.equal(loadAliases().afintrudernick, undefined);
+  });
 });
 
 test("handleAliasFlowButton - action 'add' oleh owner -> tanya konfirmasi 'mau nambah?' dulu (Ya lanjut/Batal)", async () => {
@@ -183,19 +254,27 @@ test("handleAliasFlowButton - 'commit' beneran nyimpen lewat handleAddAlias (reu
   });
 });
 
-// Ini yang paling penting dibuktiin: si "apakah berbahaya" - biarpun tombol
-// "add"/"add_confirm" kepencet duluan, commit-nya TETEP kena owner-gate
-// (nempel DI DALEM handleAddAlias sendiri, replies.js) - non-owner yang
-// entah gimana caranya nyampe ke tombol "Simpan" TETEP ditolak di titik ini.
-test("handleAliasFlowButton - 'commit' oleh NON-owner (misal pendingnya kena rebutan channel+author lain) -> tetep ditolak handleAddAlias", async () => {
+test("handleAliasFlowButton - 'commit' oleh NON-owner -> ditolak ephemeral, alias gak kesimpen", async () => {
   recordLiveCompleted("jkt48_afcommit3", "Afcommit3");
   const modalInteraction = fakeInteraction({ customId: "alias_modal:aliastext:jkt48_afcommit3", fieldValue: "afc3nick", authorId: "u-bukan-owner" });
   await handleAliasFlowModalSubmit(modalInteraction);
 
   const commitInteraction = fakeInteraction({ customId: "alias_flow:commit", authorId: "u-bukan-owner" });
   await handleAliasFlowButton(commitInteraction);
-  assert.match(commitInteraction.updates[0].content, /cuma owner yang boleh ubah daftar alias/i);
+  assertRejectedEphemerally(commitInteraction);
   assert.equal(loadAliases().afc3nick, undefined);
+});
+
+test("handleAliasFlowButton - 'commit' alias multi-kata -> ditolak dengan alasan jelas (dulu disimpen & dibilang sukses padahal gak pernah bisa kecocokan)", async () => {
+  recordLiveCompleted("jkt48_afmultiword", "Afmultiword");
+  await withFakeIdn({ jkt48_afmultiword: { name: "Afmultiword JKT48" } }, async () => {
+    const modal = fakeInteraction({ customId: "alias_modal:aliastext:jkt48_afmultiword", fieldValue: "kim kim" });
+    await handleAliasFlowModalSubmit(modal);
+    const commit = fakeInteraction({ customId: "alias_flow:commit" });
+    await handleAliasFlowButton(commit);
+    assert.match(commit.updates[0].content, /cuma boleh SATU kata/);
+    assert.equal(loadAliases()["kim kim"], undefined);
+  });
 });
 
 test("handleAliasFlowButton - 'commit' tanpa pending sama sekali (kelamaan/gak pernah isi modal) -> pesan 'mulai lagi', gak throw", async () => {
@@ -220,10 +299,10 @@ test("handleAliasFlowButton - 'close' -> deferUpdate + message.delete (deleteInt
   assert.equal(interaction.updates.length, 0);
 });
 
-test("handleAliasFlowButton - 'remove' oleh NON-owner -> ditolak", async () => {
+test("handleAliasFlowButton - 'remove' oleh NON-owner -> ditolak ephemeral", async () => {
   const interaction = fakeInteraction({ customId: "alias_flow:remove", authorId: "u-bukan-owner" });
   await handleAliasFlowButton(interaction);
-  assert.match(interaction.updates[0].content, /cuma owner yang boleh ubah daftar alias/i);
+  assertRejectedEphemerally(interaction);
 });
 
 test("handleAliasFlowButton - 'remove' pas belum ada alias sama sekali -> pesan 'belum ada yang bisa dihapus', bukan dropdown kosong", async () => {
@@ -272,14 +351,14 @@ test("handleAliasFlowButton - 'remove_confirm:<alias>' beneran ngehapus lewat ha
   assert.equal(loadAliases().removecommittest, undefined);
 });
 
-test("handleAliasFlowButton - 'remove_confirm' oleh NON-owner -> ditolak, alias TETEP ada (owner-gate nempel di handleRemoveAlias sendiri)", async () => {
+test("handleAliasFlowButton - 'remove_confirm' oleh NON-owner -> ditolak ephemeral, alias TETEP ada", async () => {
   addAlias("removerejecttest", "targetreject");
   const interaction = fakeInteraction({
     customId: `alias_flow:remove_confirm:${encodeURIComponent("removerejecttest")}`,
     authorId: "u-bukan-owner",
   });
   await handleAliasFlowButton(interaction);
-  assert.match(interaction.updates[0].content, /cuma owner yang boleh ubah daftar alias/i);
+  assertRejectedEphemerally(interaction);
   assert.equal(loadAliases().removerejecttest, "targetreject");
 });
 

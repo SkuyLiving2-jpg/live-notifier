@@ -22,13 +22,15 @@ const OWNER = "owner-slash-test-id";
 
 // Fake ChatInputCommandInteraction - handleSlashCommand cuma pernah nyentuh
 // .commandName/.options.getString/.getSubcommand/.channelId/.user.id/
-// .reply/.followUp/.replied/.deferred, jadi gak butuh library mocking
-// discord.js beneran (sama filosofinya kayak fakeInteraction di
-// tests/menu.test.js buat button interaction).
+// .deferReply/.editReply/.reply/.replied/.deferred, jadi gak butuh library
+// mocking discord.js beneran (sama filosofinya kayak fakeInteraction di
+// tests/menu.test.js buat button interaction). `replies` nampung isi balesan
+// yang AKHIRNYA keliatan user - lewat editReply() (jalur normal abis
+// deferReply) maupun reply() (jalur command gak dikenal / defer gagal).
 function fakeCommandInteraction({ commandName, options = {}, subcommand = null, channelId = "c1", authorId = "u1" }) {
   const replies = [];
-  const followUps = [];
-  return {
+  const calls = [];
+  const interaction = {
     commandName,
     channelId,
     user: { id: authorId },
@@ -38,15 +40,22 @@ function fakeCommandInteraction({ commandName, options = {}, subcommand = null, 
       getString: (name) => (name in options ? options[name] : null),
       getSubcommand: () => subcommand,
     },
-    reply: async (payload) => {
+    deferReply: async () => {
+      calls.push("deferReply");
+      interaction.deferred = true;
+    },
+    editReply: async (payload) => {
+      calls.push("editReply");
       replies.push(payload);
     },
-    followUp: async (payload) => {
-      followUps.push(payload);
+    reply: async (payload) => {
+      calls.push("reply");
+      replies.push(payload);
     },
     replies,
-    followUps,
+    calls,
   };
+  return interaction;
 }
 
 function fakeAutocompleteInteraction({ focusedName, focusedValue = "" }) {
@@ -179,7 +188,17 @@ test("handleSlashCommand - command yang gak dikenal (harusnya gak mungkin lewat 
   assert.match(interaction.replies[0].content, /belum dikenalin bot/);
 });
 
-test("handleSlashCommand - handler yang throw -> ketangkep, balesan error generik (reply kalau belum dijawab, followUp kalau udah)", async () => {
+// Regresi: dulu langsung reply() tanpa defer - handler yang nunggu IDN
+// (timeout 2 detik) + latensi Discord bisa lewat batas 3 detik Discord buat
+// balesan pertama, user dapet "The application did not respond".
+test("handleSlashCommand - deferReply() DULUAN sebelum handler jalan, jawabannya lewat editReply()", async () => {
+  const interaction = fakeCommandInteraction({ commandName: "status" });
+  await handleSlashCommand(interaction);
+  assert.deepEqual(interaction.calls, ["deferReply", "editReply"]);
+  assert.match(interaction.replies[0].content, /Bot jalan normal/);
+});
+
+test("handleSlashCommand - handler yang throw -> ketangkep, balesan error generik (editReply kalau udah defer, reply kalau defer-nya sendiri gagal)", async () => {
   // Semua fungsi reply di replies.js udah didesain defensif (gak throw buat
   // input aneh - "cek" tanpa member pun cuma jatuh ke replyMemberNotFound
   // biasa), jadi buat mancing jalur catch di sini interaction-nya sendiri
@@ -188,19 +207,19 @@ test("handleSlashCommand - handler yang throw -> ketangkep, balesan error generi
   // manapun, murni mastiin try/catch-nya beneran nangkep APAPUN.
   const brokenOptions = { getString: () => { throw new Error("simulasi interaction rusak"); }, getSubcommand: () => null }; // prettier-ignore
 
-  const freshReply = fakeCommandInteraction({ commandName: "cek" });
-  freshReply.options = brokenOptions;
-  await handleSlashCommand(freshReply);
-  assert.equal(freshReply.replies.length, 1);
-  assert.match(freshReply.replies[0].content, /ada error pas ngejalanin command ini/);
+  const deferred = fakeCommandInteraction({ commandName: "cek" });
+  deferred.options = brokenOptions;
+  await handleSlashCommand(deferred);
+  assert.deepEqual(deferred.calls, ["deferReply", "editReply"], "udah defer -> pesan 'lagi mikir' diganti lewat editReply, bukan reply baru");
+  assert.match(deferred.replies[0].content, /ada error pas ngejalanin command ini/);
 
-  const alreadyReplied = fakeCommandInteraction({ commandName: "cek" });
-  alreadyReplied.options = brokenOptions;
-  alreadyReplied.replied = true;
-  await handleSlashCommand(alreadyReplied);
-  assert.equal(alreadyReplied.replies.length, 0, "gak boleh reply() lagi kalau udah pernah dijawab");
-  assert.equal(alreadyReplied.followUps.length, 1);
-  assert.match(alreadyReplied.followUps[0].content, /ada error pas ngejalanin command ini/);
+  const deferFailed = fakeCommandInteraction({ commandName: "cek" });
+  deferFailed.deferReply = async () => {
+    throw new Error("simulasi defer gagal");
+  };
+  await handleSlashCommand(deferFailed);
+  assert.deepEqual(deferFailed.calls, ["reply"]);
+  assert.match(deferFailed.replies[0].content, /ada error pas ngejalanin command ini/);
 });
 
 test("replyCekMember - diekspor langsung, sama perilakunya kayak lewat handleSlashCommand", () => {

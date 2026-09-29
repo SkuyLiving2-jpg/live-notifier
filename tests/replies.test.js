@@ -796,6 +796,24 @@ test("handleAddAlias - owner-gated, dan nolak alias yang nabrak nama member yang
   assert.match(await handleAddAlias("aliasshadow", "levi", "owner-id-replies-test"), /udah dikenal sebagai nama member sendiri/);
 });
 
+test("handleAddAlias - alias multi-kata/bertanda baca ditolak SEBELUM nyentuh IDN (dulu disimpen & dibilang sukses padahal gak bisa kecocokan)", async () => {
+  const original = global.fetch;
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("gak boleh sampe nembak IDN");
+  };
+  try {
+    assert.match(await handleAddAlias("kim kim", "kimmy", "owner-id-replies-test"), /cuma boleh SATU kata/);
+    assert.match(await handleAddAlias("kim-kim", "kimmy", "owner-id-replies-test"), /cuma boleh SATU kata/);
+    assert.match(await handleAddAlias("a".repeat(40), "kimmy", "owner-id-replies-test"), /kepanjangan/);
+    assert.equal(fetchCalls, 0);
+    assert.equal(loadAliases()["kim kim"], undefined);
+  } finally {
+    global.fetch = original;
+  }
+});
+
 test("handleAddAlias - target yang gak ketemu di IDN ditolak, gak ke-save", async () => {
   const original = global.fetch;
   global.fetch = fakeIdnFetch({}); // semua username balikin "not found"

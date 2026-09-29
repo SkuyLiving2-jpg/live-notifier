@@ -521,7 +521,7 @@ test("handleFallbackMenuButton - '📖 Daftar alias' (fallback_menu:aliaslist) j
 });
 
 test("handleFallbackMenuButton - '📖 Daftar alias' dengan alias YANG UDAH ADA -> tombol 'Hapus alias' ikut muncul", async () => {
-  addAlias("kimkim-menutest", "kimmy");
+  addAlias("kimkimmenutest", "kimmy");
   const interaction = fakeInteraction({ customId: "fallback_menu:aliaslist" });
   await handleFallbackMenuButton(interaction);
   const aliasButtonIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);

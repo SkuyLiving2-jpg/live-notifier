@@ -2,6 +2,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -50,9 +51,16 @@ const { safeReplyOptions } = require("../utils");
 //      SAMA persis dipake command teks "cok tambah alias", bukan ditulis
 //      ulang. Sama pola keamanan yang dipake slashCommands.js: owner-gate
 //      nempel DI DALEM handleAddAlias sendiri, jadi mustahil kelupaan
-//      dipasang di jalur tombol ini (dicek jugaOWNER-gate DI SINI, lebih
-//      awal, cuma buat UX - biar non-owner gak keburu ngisi seluruh wizard
-//      dulu baru ditolak di langkah terakhir).
+//      dipasang di jalur tombol ini.
+//
+// Owner-gate KEDUA di tiap dispatcher di bawah (rejectNonOwner) - tombol
+// Discord keliatan & bisa diklik SEMUA orang di channel, jadi tanpa ini
+// orang lain bisa ngeklik "Ubah alias"/"Tutup" dkk di pesan wizard PUNYA
+// owner: pesan owner ke-edit/kehapus, dan (bug beneran) layar konfirmasi
+// bisa nampilin alias ketikan orang lain sementara "Simpan" owner nyimpen
+// alias pending punya owner sendiri - yang tampil beda dari yang disimpen.
+// Penolakannya EPHEMERAL (cuma keliatan si pengklik), pesan owner gak
+// disentuh sama sekali.
 //
 // Hapus alias: tombol "🗑️ Hapus alias" (CUMA muncul kalau daftar aliasnya gak
 // kosong) -> owner-gate -> dropdown pilih alias yang mana -> "Yakin hapus
@@ -237,11 +245,13 @@ async function searchTargetCandidates(query) {
   }
 }
 
+async function rejectNonOwner(interaction) {
+  if (isOwner(interaction.user.id)) return false;
+  await interaction.reply(safeReplyOptions({ content: "Cok, cuma owner yang boleh ubah daftar alias.", flags: MessageFlags.Ephemeral }));
+  return true;
+}
+
 async function handleAliasAddButton(interaction) {
-  if (!isOwner(interaction.user.id)) {
-    await interaction.update(safeReplyOptions(buildAliasListBlock("Cok, cuma owner yang boleh ubah daftar alias.")));
-    return;
-  }
   await interaction.update(
     safeReplyOptions({
       content: "Mau nambah alias/panggilan baru buat member? Nanti kamu cari dulu member aslinya, baru ketik alias-nya.",
@@ -335,10 +345,6 @@ async function handleAliasCloseButton(interaction) {
 }
 
 async function handleAliasRemoveButton(interaction) {
-  if (!isOwner(interaction.user.id)) {
-    await interaction.update(safeReplyOptions(buildAliasListBlock("Cok, cuma owner yang boleh ubah daftar alias.")));
-    return;
-  }
   const entries = Object.entries(loadAliases()).sort(([a], [b]) => a.localeCompare(b));
   if (entries.length === 0) {
     await interaction.update(safeReplyOptions(buildAliasListBlock("Cok, belum ada alias yang bisa dihapus.")));
@@ -392,6 +398,7 @@ async function handleAliasRemoveConfirmButton(interaction) {
 // interactionCreate lewat prefix customId ("alias_flow:"/"alias_modal:"/
 // "alias_select:"), sama pola persis kayak compareFlow.js punya.
 async function handleAliasFlowButton(interaction) {
+  if (await rejectNonOwner(interaction)) return;
   const action = interaction.customId.split(":")[1];
   if (action === "add") return handleAliasAddButton(interaction);
   if (action === "add_confirm" || action === "research") return handleAliasResearchButton(interaction);
@@ -404,12 +411,14 @@ async function handleAliasFlowButton(interaction) {
 }
 
 async function handleAliasFlowModalSubmit(interaction) {
+  if (await rejectNonOwner(interaction)) return;
   const action = interaction.customId.split(":")[1];
   if (action === "search") return handleAliasSearchModalSubmit(interaction);
   if (action === "aliastext") return handleAliasTextModalSubmit(interaction);
 }
 
 async function handleAliasFlowSelect(interaction) {
+  if (await rejectNonOwner(interaction)) return;
   const action = interaction.customId.split(":")[1];
   if (action === "target") return handleAliasTargetSelect(interaction);
   if (action === "remove") return handleAliasRemoveSelect(interaction);

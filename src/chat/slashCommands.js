@@ -293,14 +293,20 @@ async function handleSlashCommand(interaction) {
     return;
   }
 
+  // deferReply() DULUAN: Discord cuma nunggu 3 detik buat balesan pertama,
+  // sementara beberapa handler nunggu IDN (timeout 2 detik, mis. /bandingin
+  // narik avatar, /tambah-alias validasi target) - ditambah latensi Discord,
+  // bisa lewat batas dan user dapet "The application did not respond".
+  // Abis defer, batasnya jadi 15 menit, jawabannya diisi lewat editReply().
   try {
+    await interaction.deferReply();
     const reply = await handler(interaction);
-    await interaction.reply(safeReplyOptions(reply));
+    await interaction.editReply(safeReplyOptions(reply));
   } catch (error) {
     console.error(`Gagal jalanin slash command "/${interaction.commandName}":`, error.message, error.stack);
     const content = "Cok, ada error pas ngejalanin command ini. Coba lagi bentar ya.";
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(safeReplyOptions(content));
+      await interaction.editReply(safeReplyOptions(content));
     } else {
       await interaction.reply(safeReplyOptions(content));
     }

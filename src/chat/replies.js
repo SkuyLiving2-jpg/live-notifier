@@ -33,7 +33,7 @@ const {
 const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
-const { loadAliases, addAlias, removeAlias, resolveAliasInFragment } = require("../storage/aliases");
+const { loadAliases, addAlias, removeAlias, resolveAliasInFragment, validateAliasKey, ALIAS_MAX_LENGTH } = require("../storage/aliases");
 const { fetchPublicProfileByUsername, isJkt48Member } = require("../idnApi");
 const { computeSchedulePattern } = require("../schedulePattern");
 const { PRIORITY_PING_USER_ID, DAILY_RECAP_COLOR } = require("../config");
@@ -2266,12 +2266,24 @@ function handleRemovePriority(nameFragment, authorId) {
 // terbuka kayak subscribe) - alias yang salah/nyasar bisa DIEM-DIEM ngerusak
 // pencarian nama itu buat SEMUA ORANG (bukan cuma yang nambahin), jadi bukan
 // resiko yang aman dibuka ke siapa aja.
+function describeInvalidAlias(alias) {
+  const reason = validateAliasKey(alias);
+  if (reason === "too_short") return "Alias-nya kependekan, minimal 2 huruf ya.";
+  if (reason === "too_long") return `Alias-nya kepanjangan, maksimal ${ALIAS_MAX_LENGTH} huruf ya.`;
+  if (reason === "invalid_format")
+    return `Alias cuma boleh SATU kata, huruf/angka doang (tanpa spasi/tanda baca) - "${alias}" gak bakal bisa kecocokan pas dicari.`;
+  return null;
+}
+
 async function handleAddAlias(aliasFragment, targetFragment, authorId) {
   if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ubah daftar alias.";
 
   const alias = (aliasFragment || "").trim();
   const target = (targetFragment || "").trim();
   if (!alias || !target) return 'Format-nya "cok tambah alias <alias> = <nama asli>" (atau "buat"/"untuk" gantiin "=").';
+
+  const invalidAliasMessage = describeInvalidAlias(alias);
+  if (invalidAliasMessage) return invalidAliasMessage;
 
   // Alias gak boleh nabrak nama yang UDAH dikenal (nama asli member manapun)
   // - kalau dibolehin, alias itu bakal DIEM-DIEM nge-shadow lookup buat nama
@@ -2299,8 +2311,7 @@ async function handleAddAlias(aliasFragment, targetFragment, authorId) {
   }
 
   const result = addAlias(alias, targetToken);
-  if (!result.ok && result.reason === "too_short") return "Alias-nya kependekan, minimal 2 huruf ya.";
-  if (!result.ok) return "Gagal nambahin alias, coba lagi.";
+  if (!result.ok) return describeInvalidAlias(alias) || "Gagal nambahin alias, coba lagi.";
 
   const replacedNote = result.previous ? ` (gantiin target lama "${result.previous}")` : "";
   return `✅ Alias "${alias}" -> "${targetToken}" ditambahin${replacedNote}. Sekarang ketik "${alias}" bakal ke-anggep sama kayak "${targetToken}".`;
