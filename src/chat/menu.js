@@ -129,9 +129,10 @@ function buildFallbackMenuComponents(page = 0) {
 }
 
 // Baris tombol "Tutup"/"Kembali" yang nempel DI BAWAH dropdown pilih
-// member/gifter (opsi 4/9 di handleFallbackMenuButton) DAN di bawah
-// replyHelp() (opsi "more") - StringSelectMenu/embed panjang harus sendirian
-// di baris-nya, jadi ini baris terpisah yang nempel bareng. "Kembali" nyusul
+// member/gifter (opsi 4/9 di handleFallbackMenuButton) DAN di bawah dropdown
+// fitur keyword-only (opsi "more", EXTRA_FEATURES - lihat komennya) -
+// StringSelectMenu harus sendirian di baris-nya, jadi ini baris terpisah
+// yang nempel bareng. "Kembali" nyusul
 // owner minta ada cara balik ke menu awal TANPA harus nutup dulu terus
 // manggil ulang "cok bantuan" - beda dari "Tutup" yang beneran ngakhirin
 // interaksinya. `page` (dari pageIndexForOption si opsi yang lagi dijawab)
