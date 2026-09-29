@@ -207,12 +207,31 @@ function sanitizeExportFileNamePart(label) {
 // yang SAMA persis dipake "paling lama live"/"paling rame ditonton" (§10's
 // fortieth item), biar rentang yang didukung/gak didukung (mis. nama hari)
 // konsisten di ketiga fitur ini, bukan nulis parser rentang yang keempat.
-function replyExportRecap(text) {
+//
+// BUG: "export rekap nala"/"export rekap nala minggu ini" dulu MENGABAIKAN nama
+// membernya dan ngeexport semua member. Sekarang satu kata sisa (di luar kata
+// rentang/pelengkap) dianggep nama member: tanpa rentang -> semua arsip member
+// itu, dengan rentang -> sesi member itu di rentang tsb.
+async function replyExportRecap(text) {
   const range = resolveStatRangeFromText(text);
-  const rangeDays = range ? range.rangeDays : null;
-  const label = range ? range.label : "hari ini";
+  let rangeDays = range ? range.rangeDays : null;
+  let label = range ? range.label : "hari ini";
 
-  const sessions = getSessionsForRange(rangeDays);
+  const fragment = extractMemberFromPeriodText(text);
+  let member = null;
+  if (fragment) {
+    const resolved = resolveRecapMember(fragment);
+    if (resolved.status === "ambiguous") {
+      return `Cok, ada beberapa member yang cocok sama "${fragment}": ${resolved.names.join(", ")}. Ketik nama yang lebih lengkap ya.`;
+    }
+    if (resolved.status === "none") return await describeMissingMember(fragment, "diexport");
+    member = resolved;
+    label = range ? `${resolved.name} - ${range.label}` : `${resolved.name} (semua arsip ${SESSION_RETENTION_DAYS} hari)`;
+    if (!range) rangeDays = `@${resolved.username}`;
+  }
+
+  let sessions = getSessionsForRange(rangeDays);
+  if (member) sessions = sessions.filter((s) => s.username === member.username);
   if (sessions.length === 0) {
     return `Cok, belum ada data live buat diexport (${label}).`;
   }
@@ -463,6 +482,25 @@ function parseRelativePeriodFromText(text) {
   }
   if (/\b(?:kemarin|kemaren)\b/.test(text)) return { kind: "date", date: shiftDateWIB(getTodayWIB(), -1) };
   return null;
+}
+
+// Tanggal yang KELIHATAN kayak tanggal tapi mustahil ("31 februari", "2026-02-30")
+// - parseSpecificDateFromText balikin null buat itu, dan dulu "rekap 31 februari"
+// jatuh diam-diam jadi "rekap bulan Februari" (nama bulannya doang yang kebaca).
+// Balikin teks tanggalnya buat ditampilin di pesan penolakan, atau null.
+function findImpossibleDateInText(text) {
+  if (parseSpecificDateFromText(text) !== null) return null;
+  const iso = text.match(/\b\d{4}-\d{2}-\d{2}\b/);
+  if (iso) return iso[0];
+  const dayMonth = text.match(new RegExp(`\\b(\\d{1,2})\\s+(${MONTH_NAME_ALTERNATION})\\b(?:\\s+(\\d{4}))?`, "i"));
+  if (dayMonth) return dayMonth[0].replace(/\s+/g, " ");
+  const monthDay = text.match(new RegExp(`\\b(${MONTH_NAME_ALTERNATION})\\s+(\\d{1,2})\\b(?:\\s+(\\d{4}))?`, "i"));
+  if (monthDay) return monthDay[0].replace(/\s+/g, " ");
+  return null;
+}
+
+function replyImpossibleDate(shown) {
+  return `Cok, tanggal "${shown}" itu gak ada di kalender. Cek lagi ya (contoh: "rekap 25 september").`;
 }
 
 function replyUnsupportedPeriod() {
@@ -1486,6 +1524,59 @@ function extractRecapMemberFragment(text) {
   return tokens[0];
 }
 
+// Kata rentang/perintah yang bukan nama member, dipake extractMemberFromPeriodText.
+const PERIOD_TEXT_WORDS = new Set([
+  "rekap",
+  "export",
+  "csv",
+  "file",
+  "hari",
+  "ini",
+  "minggu",
+  "pekan",
+  "bulan",
+  "tanggal",
+  "tgl",
+  "per",
+  "pada",
+  "kemarin",
+  "kemaren",
+  "lalu",
+  "semua",
+  "semuanya",
+  "all",
+  "data",
+  "lengkap",
+  ...MONTH_NAMES_ID,
+  ...WEEKDAY_NAMES_ID.map((d) => d.toLowerCase()),
+]);
+
+// Buat "rekap nala minggu ini"/"export rekap nala": ambil nama member dari teks
+// yang JUGA nyebut rentang. Sisa kata setelah dibuang kata rentang, angka, dan
+// kata pelengkap harus TEPAT satu (sama ketatnya kayak extractRecapMemberFragment)
+// - lebih/kurang dari itu -> null (bukan permintaan per-member).
+function extractMemberFromPeriodText(text) {
+  const tokens = (text || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .filter((t) => !PERIOD_TEXT_WORDS.has(t) && !RECAP_MEMBER_FILLER_WORDS.has(t) && !/^\d+$/.test(t));
+  if (tokens.length !== 1 || tokens[0].length < 2) return null;
+  return tokens[0];
+}
+
+// Rentang yang disebut di "rekap <nama> <rentang>": resolveStatRangeFromText
+// (minggu/bulan/nama bulan/tanggal/kemarin) plus "hari ini" (rangeDays null).
+// null kalau gak nyebut rentang apapun, atau nyebut nama hari (butuh dropdown
+// buat milih tanggalnya - ditangani jalur lama).
+function resolveMemberPeriod(text) {
+  if (parseWeekdayFromText(text) !== null) return null;
+  const range = resolveStatRangeFromText(text);
+  if (range) return range;
+  if (containsWholeWord(text, "hari")) return { rangeDays: null, label: "hari ini" };
+  return null;
+}
+
 function firstNameOf(name) {
   return (name || "").split(/[\s|]+/)[0].toLowerCase();
 }
@@ -1555,12 +1646,17 @@ async function replyRecapMember(fragment, channelId, authorId, origin = "") {
     );
   }
 
+  const summaryLines = buildMemberSummaryLines(`📋 **Rekap live ${resolved.name}**`, sessions);
+  summaryLines.push(`_(Rekap cuma nyimpen sesi ${SESSION_RETENTION_DAYS} hari terakhir.)_`);
+
+  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, rangeDays, origin);
+  return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
+}
+
+function buildMemberSummaryLines(title, sessions) {
   const completed = sessions.filter((s) => s.endedAtUnix !== null);
   const ongoingCount = sessions.length - completed.length;
-  const summaryLines = [
-    `📋 **Rekap live ${resolved.name}**`,
-    `Total sesi: ${sessions.length}x (${completed.length} udah selesai, ${ongoingCount} masih live)`,
-  ];
+  const summaryLines = [title, `Total sesi: ${sessions.length}x (${completed.length} udah selesai, ${ongoingCount} masih live)`];
   if (completed.length > 0) {
     const totalDurationMs = completed.reduce((sum, s) => sum + s.durationMs, 0);
     const longest = completed.reduce((max, s) => (s.durationMs > max.durationMs ? s : max), completed[0]);
@@ -1568,10 +1664,41 @@ async function replyRecapMember(fragment, channelId, authorId, origin = "") {
       `Total durasi: ${formatDuration(totalDurationMs)} | Rata-rata: ${formatDuration(totalDurationMs / completed.length)} | Paling lama: ${formatDuration(longest.durationMs)}`,
     );
   }
-  summaryLines.push(`_(Rekap cuma nyimpen sesi ${SESSION_RETENTION_DAYS} hari terakhir.)_`);
+  return summaryLines;
+}
 
-  const block = buildRecapPageBlock(sessions, 0, channelId, authorId, rangeDays, origin);
-  return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
+// "rekap nala minggu ini"/"rekap nala 25 september"/"rekap nala kemarin" -
+// BUG: dulu nama membernya diabaikan dan yang keluar rekap SEMUA member di
+// rentang itu. Sekarang sesi rentang itu difilter ke satu member. Cuma halaman
+// pertama (RECAP_TABLE_PAGE_SIZE baris) + tombol Tutup - rentang + member gak
+// punya navigasi halaman sendiri; sisanya diarahin ke "rekap <nama>" (semua arsip
+// dengan navigasi lengkap).
+async function replyRecapMemberInRange(fragment, range) {
+  const shown = (fragment || "").trim();
+  const resolved = resolveRecapMember(shown);
+  if (resolved.status === "ambiguous") {
+    return withRecapMenu(`Cok, ada beberapa member yang cocok sama "${shown}": ${resolved.names.join(", ")}. Ketik nama yang lebih lengkap ya.`);
+  }
+  if (resolved.status === "none") {
+    return withRecapMenu(await describeMissingMember(shown, "direkap"));
+  }
+
+  const sessions = getSessionsForRange(range.rangeDays).filter((s) => s.username === resolved.username);
+  if (sessions.length === 0) {
+    return `Cok, **${resolved.name}** gak punya sesi live di ${range.label} (arsip cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir).`;
+  }
+
+  const summaryLines = buildMemberSummaryLines(`📋 **Rekap live ${resolved.name}** - ${range.label}`, sessions);
+  const page = buildRecapTablePage(sessions, 0);
+  if (page.hasMore) {
+    summaryLines.push(
+      `_(Nampilin ${RECAP_TABLE_PAGE_SIZE} sesi pertama dari ${sessions.length}. Ketik "rekap ${shown}" buat semua arsip dengan navigasi halaman.)_`,
+    );
+  }
+  const closeRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger),
+  );
+  return { content: [summaryLines.join("\n"), page.text].join("\n"), components: [closeRow] };
 }
 
 // Saran fitur ke-5 (§10's kelimapuluh+item): "cok streak <nama member>" -
@@ -2401,7 +2528,7 @@ function handleSubscribe(rawName, authorId) {
     if (!result.ok && result.reason === "too_short") return "Nama membernya kependekan, minimal 3 huruf ya.";
     if (!result.ok && result.reason === "already") return `Kamu udah subscribe notif buat "${name}" kok.`;
     if (!result.ok) return "Gagal subscribe, coba lagi.";
-    return `🔔 Sip, kamu bakal di-tag tiap kali "${name}" mulai live!`;
+    return `🔔 Sip, kamu bakal di-tag tiap kali "${name}" mulai live!${unknownNameWarning([name])}`;
   }
 
   const added = [];
@@ -2415,10 +2542,20 @@ function handleSubscribe(rawName, authorId) {
   }
   const quote = (list) => list.map((n) => `"${n}"`).join(", ");
   const lines = [];
-  if (added.length > 0) lines.push(`🔔 Sip, kamu bakal di-tag tiap kali ${quote(added)} mulai live!`);
+  if (added.length > 0) lines.push(`🔔 Sip, kamu bakal di-tag tiap kali ${quote(added)} mulai live!${unknownNameWarning(added)}`);
   if (already.length > 0) lines.push(`Udah subscribe dari tadi: ${quote(already)}.`);
   if (tooShort.length > 0) lines.push(`Kependekan (minimal 3 huruf): ${quote(tooShort)}.`);
   return lines.join("\n");
+}
+
+// Nama yang gak dikenal bot (belum pernah live/gak ada di data) TETEP didaftarin -
+// bisa aja member yang emang belum pernah live semenjak bot mantau - tapi user
+// dikasih tau, biar salah ketik ("nlaa") gak diem-diem jadi langganan mati.
+function unknownNameWarning(names) {
+  const unknown = names.filter((n) => !isKnownMemberFragment(n));
+  if (unknown.length === 0) return "";
+  const quoted = unknown.map((n) => `"${n}"`).join(", ");
+  return `\n⚠️ Bot belum pernah liat member ${quoted} live. Kalau salah ketik, ketik "berhenti ingetin ${unknown[0]}" lalu daftar ulang.`;
 }
 
 function handleUnsubscribe(rawName, authorId) {
@@ -2450,6 +2587,11 @@ module.exports = {
   replyTopViewersForRange,
   resolveStatRangeFromText,
   replyExportRecap,
+  replyRecapMemberInRange,
+  extractMemberFromPeriodText,
+  resolveMemberPeriod,
+  findImpossibleDateInText,
+  replyImpossibleDate,
   buildExportCsv,
   replyCompareMembers,
   replyCompareMembersByUsername,

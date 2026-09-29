@@ -44,6 +44,11 @@ const {
   parseSpecificDateFromText,
   parseRelativePeriodFromText,
   replyUnsupportedPeriod,
+  findImpossibleDateInText,
+  replyImpossibleDate,
+  extractMemberFromPeriodText,
+  resolveMemberPeriod,
+  replyRecapMemberInRange,
   parseMonthOnlyFromText,
   parseWeekdayFromText,
   tryHandleRecapPageShortcut,
@@ -156,6 +161,13 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // diam-diam dijawab pake data "minggu ini" tanpa tanda apapun.
   const asksPeriodStat = ["rekap", "export", "paling", "viewer", "penonton"].some((w) => containsWholeWord(text, w));
   if (asksPeriodStat && parseRelativePeriodFromText(text)?.kind === "unsupported") return replyUnsupportedPeriod();
+
+  // Tanggal mustahil ("31 februari") ditolak eksplisit - dulu jatuh diam-diam
+  // jadi "rekap bulan Februari" gara-gara nama bulannya doang yang kebaca.
+  if (asksPeriodStat) {
+    const impossibleDate = findImpossibleDateInText(text);
+    if (impossibleDate) return replyImpossibleDate(impossibleDate);
+  }
 
   const addPriorityMatch = text.match(/tambah(?:in|kan)?\s+prioritas\s+(.+)/);
   if (addPriorityMatch) {
@@ -385,6 +397,12 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // "rekap per tanggal 25 september", ngandung "tanggal" DAN tanggal
   // spesifik) ketangkep sama check yang paling ngerti maksud usernya.
   if (containsWholeWord(text, "rekap")) {
+    // "rekap <nama> <rentang>" (mis. "rekap nala minggu ini") DULUAN - BUG: nama
+    // membernya dulu diabaikan dan yang keluar rekap semua member di rentang itu.
+    const periodMember = extractMemberFromPeriodText(text);
+    const memberPeriod = periodMember ? resolveMemberPeriod(text) : null;
+    if (periodMember && memberPeriod) return await replyRecapMemberInRange(periodMember, memberPeriod);
+
     // "kemarin"/"bulan lalu" DULUAN (BUG: "rekap kemarin" dulu dianggep NAMA
     // MEMBER "kemarin" dan nembak IDN, "rekap hari kemarin" malah dijawab
     // rekap HARI INI, dan "rekap bulan lalu" dijawab bulan INI) - dicek

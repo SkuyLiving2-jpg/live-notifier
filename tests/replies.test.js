@@ -40,6 +40,11 @@ const {
   parseSpecificDateFromText,
   parseRelativePeriodFromText,
   replyUnsupportedPeriod,
+  findImpossibleDateInText,
+  replyImpossibleDate,
+  extractMemberFromPeriodText,
+  resolveMemberPeriod,
+  replyRecapMemberInRange,
   parseMonthOnlyFromText,
   parseWeekdayFromText,
   resolveStatRangeFromText,
@@ -1723,7 +1728,7 @@ test("replyExportRecap - ada sesi hari ini (default, gak nyebut rentang) -> bale
   const fresh = freshRepliesForRecapRange();
   fresh.recordLiveEnded("Exportme", "jkt48_exportme", new Date(Date.now() - 60_000), new Date(), 5);
 
-  const reply = fresh.replyExportRecap("cok export rekap");
+  const reply = await fresh.replyExportRecap("cok export rekap");
   assert.match(reply.content, /📄 Rekap hari ini \(1 sesi\) - diexport ke CSV, cok\./);
   assert.equal(reply.files.length, 1);
   assert.equal(reply.files[0].name, "rekap-hari-ini.csv");
@@ -1734,14 +1739,14 @@ test("replyExportRecap - rentang bulan ini (via resolveStatRangeFromText) -> nam
   const fresh = freshRepliesForRecapRange();
   fresh.recordLiveEnded("Exportmonth", "jkt48_exportmonth", new Date(Date.now() - 60_000), new Date(), 5);
 
-  const reply = fresh.replyExportRecap("cok export rekap bulan ini");
+  const reply = await fresh.replyExportRecap("cok export rekap bulan ini");
   assert.match(reply.content, /Rekap bulan .* - diexport ke CSV/);
   assert.match(reply.files[0].name, /^rekap-bulan-/);
 });
 
 test("replyExportRecap - rentang yang kosong sama sekali -> pesan 'belum ada data', TANPA file sama sekali", async () => {
   const fresh = freshRepliesForRecapRange();
-  const reply = fresh.replyExportRecap("cok export rekap minggu ini");
+  const reply = await fresh.replyExportRecap("cok export rekap minggu ini");
   assert.equal(reply, "Cok, belum ada data live buat diexport (minggu ini).");
 });
 
@@ -2622,7 +2627,7 @@ test("handleSubscribe - A dan B / A, B & C didaftarin SEMUANYA per nama (dulu ja
 
 test("handleSubscribe - maksimal 5 nama sekaligus; SATU nama tetep pesan lama persis", () => {
   assert.match(handleSubscribe("aaa1 dan bbb2 dan ccc3 dan ddd4 dan eee5 dan fff6", "u-multisub2"), /maksimal 5 member sekaligus.*ngasih 6/);
-  assert.equal(handleSubscribe("msubsingle", "u-multisub2"), '🔔 Sip, kamu bakal di-tag tiap kali "msubsingle" mulai live!');
+  assert.match(handleSubscribe("msubsingle", "u-multisub2"), /^🔔 Sip, kamu bakal di-tag tiap kali "msubsingle" mulai live!/);
 });
 
 test("handleUnsubscribe - A dan B berhenti dua-duanya; yang gak pernah disubscribe dilaporin terpisah", () => {
@@ -2631,4 +2636,88 @@ test("handleUnsubscribe - A dan B berhenti dua-duanya; yang gak pernah disubscri
   assert.match(reply, /notif buat "munsa", "munsb" dimatiin/);
   assert.match(reply, /Kamu belum subscribe "munsc"/);
   assert.match(replyMySubscriptions("u-multiunsub"), /belum subscribe/);
+});
+
+// ==== Fix sisa: rekap/export per member + rentang, tanggal mustahil, ingetin nama asing ====
+
+test("findImpossibleDateInText - 31 februari / 2026-02-30 / 30 feb ditandai; tanggal valid & teks tanpa tanggal -> null", () => {
+  assert.equal(findImpossibleDateInText("rekap 31 februari"), "31 februari");
+  assert.equal(findImpossibleDateInText("rekap 2026-02-30"), "2026-02-30");
+  assert.equal(findImpossibleDateInText("rekap februari 31"), "februari 31");
+  assert.equal(findImpossibleDateInText("rekap 25 september"), null);
+  assert.equal(findImpossibleDateInText("rekap september"), null);
+  assert.equal(findImpossibleDateInText("rekap nala"), null);
+  assert.match(replyImpossibleDate("31 februari"), /"31 februari" itu gak ada di kalender/);
+});
+
+test("extractMemberFromPeriodText - satu kata sisa = nama member; kata rentang/angka/pelengkap dibuang", () => {
+  assert.equal(extractMemberFromPeriodText("cok rekap nala minggu ini"), "nala");
+  assert.equal(extractMemberFromPeriodText("rekap nala 25 september"), "nala");
+  assert.equal(extractMemberFromPeriodText("export rekap nala"), "nala");
+  assert.equal(extractMemberFromPeriodText("export rekap 2026-09-25 nala dong"), "nala");
+  assert.equal(extractMemberFromPeriodText("cok rekap minggu ini"), null);
+  assert.equal(extractMemberFromPeriodText("cok export rekap hari ini"), null);
+  assert.equal(extractMemberFromPeriodText("rekap nala lily minggu ini"), null, "dua nama -> bukan permintaan satu member");
+  assert.equal(extractMemberFromPeriodText("export rekap senin"), null, "nama hari bukan nama member");
+});
+
+test("resolveMemberPeriod - minggu/bulan/tanggal/kemarin/hari ini dikenali; tanpa rentang atau nama hari -> null", () => {
+  assert.equal(resolveMemberPeriod("rekap nala minggu ini").rangeDays, 7);
+  assert.equal(resolveMemberPeriod("rekap nala hari ini").rangeDays, null);
+  assert.equal(resolveMemberPeriod("rekap nala hari ini").label, "hari ini");
+  assert.equal(resolveMemberPeriod("rekap nala kemarin").label, "kemarin");
+  assert.equal(resolveMemberPeriod("rekap nala 25 september").rangeDays, `${getTodayWIB().slice(0, 4)}-09-25`);
+  assert.equal(resolveMemberPeriod("rekap nala"), null);
+  assert.equal(resolveMemberPeriod("rekap nala senin"), null);
+});
+
+test("replyRecapMemberInRange - cuma sesi member itu di rentang itu (member lain gak ikut), ada tombol Tutup", async () => {
+  recordLiveEnded("Rangeone", "jkt48_rangeone", new Date(Date.now() - 3600_000), new Date(), 10);
+  recordLiveCompleted("jkt48_rangeone", "Rangeone JKT48");
+  recordLiveEnded("Rangetwo", "jkt48_rangetwo", new Date(Date.now() - 3600_000), new Date(), 10);
+  recordLiveCompleted("jkt48_rangetwo", "Rangetwo JKT48");
+
+  const reply = await replyRecapMemberInRange("rangeone", { rangeDays: 7, label: "minggu ini" });
+  assert.match(reply.content, /Rekap live Rangeone JKT48\*\* - minggu ini/);
+  assert.match(reply.content, /Rangeone/);
+  assert.doesNotMatch(reply.content, /Rangetwo/);
+  assert.equal(reply.components[0].components[0].data.custom_id, "recap_nav:close");
+});
+
+test("replyRecapMemberInRange - member ada tapi gak punya sesi di rentang itu -> pesan jelas, bukan tabel kosong", async () => {
+  recordLiveCompleted("jkt48_rangethree", "Rangethree JKT48");
+  const reply = await replyRecapMemberInRange("rangethree", { rangeDays: 7, label: "minggu ini" });
+  assert.match(reply, /Rangethree JKT48\*\* gak punya sesi live di minggu ini/);
+});
+
+test("replyExportRecap - 'export rekap <nama>' cuma ngeexport member itu (dulu nama diabaikan, semua member ikut)", async () => {
+  const fresh = freshRepliesForRecapRange();
+  fresh.recordLiveEnded("Exportaa", "jkt48_exportaa", new Date(Date.now() - 3600_000), new Date(), 5);
+  fresh.recordLiveEnded("Exportbb", "jkt48_exportbb", new Date(Date.now() - 3600_000), new Date(), 5);
+  recordLiveCompleted("jkt48_exportaa", "Exportaa JKT48");
+  recordLiveCompleted("jkt48_exportbb", "Exportbb JKT48");
+
+  const reply = await fresh.replyExportRecap("cok export rekap exportaa");
+  assert.match(reply.content, /Rekap Exportaa JKT48 \(semua arsip \d+ hari\) \(1 sesi\)/);
+  const csv = reply.files[0].attachment.toString("utf-8");
+  assert.match(csv, /Exportaa/);
+  assert.doesNotMatch(csv, /Exportbb/);
+
+  const withRange = await fresh.replyExportRecap("cok export rekap exportaa minggu ini");
+  assert.match(withRange.content, /Exportaa JKT48 - minggu ini/);
+  assert.doesNotMatch(withRange.files[0].attachment.toString("utf-8"), /Exportbb/);
+});
+
+test("handleSubscribe - nama yang gak dikenal bot tetep didaftarin tapi dikasih peringatan salah-ketik; member dikenal tanpa peringatan", () => {
+  recordLiveCompleted("jkt48_knownsub", "Knownsub JKT48");
+  const known = handleSubscribe("knownsub", "u-warnsub");
+  assert.equal(known, '🔔 Sip, kamu bakal di-tag tiap kali "knownsub" mulai live!');
+
+  const unknown = handleSubscribe("zzqxunknown", "u-warnsub");
+  assert.match(unknown, /Sip, kamu bakal di-tag.*"zzqxunknown"/);
+  assert.match(unknown, /⚠️ Bot belum pernah liat member "zzqxunknown" live/);
+  assert.match(replyMySubscriptions("u-warnsub"), /zzqxunknown/, "tetep kedaftar");
+
+  const multi = handleSubscribe("unkwarna dan zzqxunk2", "u-warnsub2");
+  assert.match(multi, /⚠️ Bot belum pernah liat member "unkwarna", "zzqxunk2" live/);
 });

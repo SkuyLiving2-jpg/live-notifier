@@ -962,3 +962,24 @@ test("keyword polos berhenti ingetin / tambah prioritas / hapus prioritas -> con
     assert.match(reply, expected);
   }
 });
+
+// ==== Fix sisa: nama member + rentang, tanggal mustahil ====
+test("rekap <nama> <rentang> (minggu ini / hari ini / kemarin) -> rekap SATU member, bukan semua member", async () => {
+  recordLiveEnded("Rtrnamea", "jkt48_rtrnamea", new Date(Date.now() - 3600_000), new Date(), 9);
+  recordLiveCompleted("jkt48_rtrnamea", "Rtrnamea JKT48");
+  recordLiveEnded("Rtrnameb", "jkt48_rtrnameb", new Date(Date.now() - 3600_000), new Date(), 9);
+  recordLiveCompleted("jkt48_rtrnameb", "Rtrnameb JKT48");
+
+  for (const text of ["rekap rtrnamea minggu ini", "cok rekap rtrnamea hari ini", "rekap minggu ini rtrnamea"]) {
+    const reply = await inBotChannel(text);
+    assert.match(textOf(reply), /Rtrnamea/, text);
+    assert.doesNotMatch(textOf(reply), /Rtrnameb/, text + " gak boleh nampilin member lain");
+  }
+});
+
+test("rekap <nama> <tanggal mustahil> dan export/paling-rame dengan tanggal mustahil ditolak eksplisit, bukan jatuh jadi rekap bulan", async () => {
+  for (const text of ["rekap 31 februari", "cok rekap 2026-02-30", "export rekap 30 februari", "paling rame 31 april"]) {
+    assert.match(textOf(await inBotChannel(text)), /itu gak ada di kalender/, text);
+  }
+  assert.doesNotMatch(textOf(await inBotChannel("rekap 25 september")), /gak ada di kalender/);
+});
