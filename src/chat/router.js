@@ -11,7 +11,7 @@ const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const { replyDurationChart } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete } = require("./slashCommands");
-const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect } = require("./aliasFlow");
+const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
 const {
   replyListLive,
   replyLongestLive,
@@ -60,7 +60,6 @@ const {
   isKnownMemberFragment,
   handleAddAlias,
   handleRemoveAlias,
-  replyAliasList,
   handleSubscribe,
   handleUnsubscribe,
 } = require("./replies");
@@ -151,8 +150,13 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     return handleRemoveAlias(removeAliasMatch[1], authorId);
   }
 
-  if (containsWholeWord(text, "alias") && (containsWholeWord(text, "daftar") || containsWholeWord(text, "list"))) {
-    return replyAliasList();
+  // Owner minta ketikan "alias" doang (tanpa harus "daftar alias") langsung
+  // jalanin fitur alias - daftar + tombol Tambah/Hapus (owner-only pas
+  // diklik) + Tutup buat yang salah ketik. Juga nangkep "tambah alias"/
+  // "hapus alias" yang formatnya belum lengkap (gak kena 2 pola di atas),
+  // jadi yang lupa format tetep bisa lanjut lewat tombol.
+  if (containsWholeWord(text, "alias")) {
+    return buildAliasListBlock();
   }
 
   // Dicek sebelum unsubscribeMatch/subscribeMatch di bawah - "reminder"

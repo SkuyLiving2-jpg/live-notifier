@@ -238,12 +238,13 @@ src/
                                  pass-through to replies.js's handleAddAlias/
                                  handleRemoveAlias (same reuse pattern as
                                  slashCommands.js) so the owner-gate can't be
-                                 forgotten on this path either; standalone
-                                 (doesn't require("./menu"), same reason as
-                                 compareFlow.js above) - "Batal" from anywhere
-                                 in the wizard lands on this module's own
-                                 self-contained list screen, not back in the
-                                 paginated menu
+                                 forgotten on this path either; "Batal" and
+                                 the final result return to wherever the
+                                 wizard started - the paginated menu's alias
+                                 screen (menu.js's buildAliasListMenuScreen,
+                                 lazily required) or the standalone screen a
+                                 typed "alias" opens (with its own "Tutup",
+                                 usable by anyone)
 data/                    JSON files (see §4) — local fallback; Railway uses a
                          mounted Volume instead (see §9)
 tests/                   automated tests (see §10) — "npm test"

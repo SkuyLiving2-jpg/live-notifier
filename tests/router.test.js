@@ -100,7 +100,19 @@ test("tambah alias - owner boleh (semua pemisah '=' / 'buat' / 'untuk'), non-own
   }
 });
 
-test("hapus alias / daftar alias - dispatch ke handleRemoveAlias/replyAliasList", async () => {
+// Owner minta ketikan "alias" doang udah cukup buat buka fitur alias, lengkap
+// sama tombol Tutup buat yang salah ketik.
+test("keyword 'alias' (polos / pake 'cok' / format tambah-hapus yang belum lengkap) -> layar daftar alias + tombol Tambah & Tutup", async () => {
+  for (const text of ["cok alias", "alias", "cok daftar alias", "cok tambah alias", "cok hapus alias"]) {
+    const reply = await buildChatReply(text, { isBotChannel: true, channelId: "c-alias-keyword", authorId: "siapa-aja" });
+    assert.ok(reply && typeof reply === "object", `"${text}" harus balikin layar interaktif`);
+    const customIds = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+    assert.ok(customIds.includes("alias_flow:add"), `"${text}" -> tombol Tambah alias`);
+    assert.ok(customIds.includes("alias_flow:close"), `"${text}" -> tombol Tutup`);
+  }
+});
+
+test("hapus alias / daftar alias - dispatch ke handleRemoveAlias/layar daftar alias", async () => {
   recordLiveCompleted("jkt48_hapusaliastarget", "Hapusaliastarget");
   const original = global.fetch;
   global.fetch = async (url, options) => {
@@ -114,7 +126,7 @@ test("hapus alias / daftar alias - dispatch ke handleRemoveAlias/replyAliasList"
     await buildChatReply("cok tambah alias hapusaliastest = hapusaliastarget", { authorId: OWNER });
 
     const listed = await buildChatReply("cok daftar alias");
-    assert.match(listed, /"hapusaliastest" -> "hapusaliastarget"/);
+    assert.match(listed.content, /"hapusaliastest" -> "hapusaliastarget"/);
 
     const asOther = await buildChatReply("cok hapus alias hapusaliastest", { authorId: "bukan-owner" });
     assert.match(asOther, /cuma owner yang boleh/);

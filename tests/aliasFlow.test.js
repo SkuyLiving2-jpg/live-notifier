@@ -93,16 +93,16 @@ test("handleAliasFlowButton - action 'add' oleh NON-owner -> ditolak ephemeral, 
 // lain bisa ngeklik tombol di tengah wizard PUNYA owner - termasuk "Ubah
 // alias" (layar konfirmasi jadi nampilin ketikan dia, tapi "Simpan" owner
 // tetep nyimpen pending punya owner = yang tampil beda dari yang disimpen)
-// dan "Tutup" (pesan owner kehapus).
+// dan "Batal" (pesan wizard owner ke-reset).
 test("SEMUA tombol/modal/dropdown wizard oleh NON-owner -> ditolak ephemeral, pesan wizard owner gak disentuh", async () => {
   const buttonIds = [
+    "alias_flow:add",
     "alias_flow:add_confirm",
     "alias_flow:research",
     "alias_flow:target_confirmed:jkt48_x",
     "alias_flow:edit_alias:jkt48_x",
     "alias_flow:commit",
     "alias_flow:cancel",
-    "alias_flow:close",
     "alias_flow:remove",
     "alias_flow:remove_confirm:x",
   ];
@@ -297,6 +297,91 @@ test("handleAliasFlowButton - 'close' -> deferUpdate + message.delete (deleteInt
   assert.equal(interaction.deferUpdateCalls.length, 1);
   assert.deepEqual(interaction.deletedMessageIds, ["fake-alias-msg"]);
   assert.equal(interaction.updates.length, 0);
+});
+
+test("handleAliasFlowButton - 'close' oleh NON-owner JUGA boleh (daftar alias read-only buat semua orang, Tutup buat yang salah ketik 'alias')", async () => {
+  const interaction = fakeInteraction({ customId: "alias_flow:close", authorId: "u-bukan-owner" });
+  await handleAliasFlowButton(interaction);
+  assert.equal(interaction.replies.length, 0, "gak ditolak");
+  assert.deepEqual(interaction.deletedMessageIds, ["fake-alias-msg"]);
+});
+
+// BUG YANG DILAPORIN OWNER: buka "📖 Daftar alias" dari menu -> "Tambah alias"
+// -> "Batal", menu halaman terakhir yang tadinya ada malah ilang (dulu
+// baliknya ke layar alias standalone yang cuma punya Tambah/Hapus + Tutup).
+function fakeMenuMessage(id) {
+  return {
+    id,
+    delete: async () => {},
+    components: [
+      { components: [{ customId: "alias_flow:add" }] },
+      { components: [{ customId: "fallback_menu:notlive" }, { customId: "fallback_menu:aliaslist" }, { customId: "fallback_menu:more" }] },
+      { components: [{ customId: "fallback_menu:delete" }, { customId: "fallback_menu:goto:2" }] },
+    ],
+  };
+}
+
+function allCustomIds(reply) {
+  return reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
+}
+
+test("wizard yang dimulai dari MENU -> 'Batal' balik ke daftar alias + menu halaman itu lagi (bukan layar standalone)", async () => {
+  const message = fakeMenuMessage("msg-from-menu");
+
+  const add = fakeInteraction({ customId: "alias_flow:add" });
+  add.message = message;
+  await handleAliasFlowButton(add);
+
+  const cancel = fakeInteraction({ customId: "alias_flow:cancel" });
+  cancel.message = message;
+  await handleAliasFlowButton(cancel);
+
+  const ids = allCustomIds(cancel.updates[0]);
+  assert.ok(ids.includes("alias_flow:add"));
+  assert.ok(ids.includes("fallback_menu:aliaslist"), "tombol menu halaman terakhir balik lagi");
+  assert.ok(ids.includes("fallback_menu:delete"), "Tutup-nya punya menu, bukan alias_flow:close");
+  assert.ok(!ids.includes("alias_flow:close"));
+});
+
+test("wizard yang dimulai dari MENU -> hasil akhir (sukses nambah) juga balik ke layar menu, bukan standalone", async () => {
+  recordLiveCompleted("jkt48_afmenuorigin", "Afmenuorigin");
+  const message = fakeMenuMessage("msg-from-menu-commit");
+  await withFakeIdn({ jkt48_afmenuorigin: { name: "Afmenuorigin JKT48" } }, async () => {
+    const add = fakeInteraction({ customId: "alias_flow:add" });
+    add.message = message;
+    await handleAliasFlowButton(add);
+
+    const modal = fakeInteraction({ customId: "alias_modal:aliastext:jkt48_afmenuorigin", fieldValue: "afmenunick" });
+    modal.message = message;
+    await handleAliasFlowModalSubmit(modal);
+
+    const commit = fakeInteraction({ customId: "alias_flow:commit" });
+    commit.message = message;
+    await handleAliasFlowButton(commit);
+
+    assert.match(commit.updates[0].content, /✅ Alias "afmenunick"/);
+    assert.ok(allCustomIds(commit.updates[0]).includes("fallback_menu:aliaslist"));
+  });
+});
+
+test("wizard yang dimulai dari ketikan 'alias' (layar standalone) -> 'Batal' tetep balik ke layar standalone + Tutup-nya sendiri", async () => {
+  const standalone = {
+    id: "msg-standalone",
+    delete: async () => {},
+    components: [{ components: [{ customId: "alias_flow:add" }, { customId: "alias_flow:close" }] }],
+  };
+
+  const add = fakeInteraction({ customId: "alias_flow:add" });
+  add.message = standalone;
+  await handleAliasFlowButton(add);
+
+  const cancel = fakeInteraction({ customId: "alias_flow:cancel" });
+  cancel.message = standalone;
+  await handleAliasFlowButton(cancel);
+
+  const ids = allCustomIds(cancel.updates[0]);
+  assert.ok(ids.includes("alias_flow:close"));
+  assert.ok(!ids.some((id) => id.startsWith("fallback_menu:")));
 });
 
 test("handleAliasFlowButton - 'remove' oleh NON-owner -> ditolak ephemeral", async () => {

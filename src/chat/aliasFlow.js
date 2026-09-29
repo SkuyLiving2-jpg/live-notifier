@@ -27,14 +27,14 @@ const { safeReplyOptions } = require("../utils");
 // kejebak kalau salah pencet. Tombol hapus CUMA muncul kalau udah ada alias
 // yang bisa dihapus (list kosong = tombol itu gak usah nongol sama sekali).
 //
-// Modul ini SENGAJA gak require("./menu") sama sekali (beda dari
-// handleFallbackMenuButton yang butuh buildFallbackPickActionRow/
-// pageIndexForOption) - sama alasan chat/compareFlow.js berdiri sendiri:
-// begitu masuk wizard ini, "Batal"/"Tutup" balik ke LAYAR DAFTAR ALIAS
-// standalone (buildAliasListBlock di bawah, tombol Tutup-nya beneran ngehapus
-// pesan), bukan ke menu 12-opsi ber-halaman. menu.js's "aliaslist" case yang
-// REQUIRE modul ini (buat buildAliasActionButtonsRow, ditempel bareng
-// buildFallbackPickActionRow-nya sendiri) - satu arah doang, gak ada siklus.
+// Layar daftar alias bisa dibuka dari DUA tempat, dan "Batal"/hasil akhir
+// wizard balik ke layar ASAL-nya (lihat buildReturnScreen):
+// - tombol "📖 Daftar alias" di menu fallback ber-halaman (menu.js's
+//   buildAliasListMenuScreen) -> balik ke daftar alias + menu halaman itu
+//   lagi. BUG YANG DILAPORIN OWNER: dulu "Batal" selalu balik ke layar
+//   standalone, jadi menu halaman terakhir yang tadinya ada tiba-tiba ilang.
+// - ketikan "alias"/"cok alias"/"cok daftar alias" (chat/router.js) ->
+//   buildAliasListBlock di bawah, standalone dengan tombol Tutup sendiri.
 //
 // Alur (semua stateless lewat customId KECUALI satu langkah - lihat
 // pendingAliasFlow di bawah buat alasannya):
@@ -55,12 +55,15 @@ const { safeReplyOptions } = require("../utils");
 //
 // Owner-gate KEDUA di tiap dispatcher di bawah (rejectNonOwner) - tombol
 // Discord keliatan & bisa diklik SEMUA orang di channel, jadi tanpa ini
-// orang lain bisa ngeklik "Ubah alias"/"Tutup" dkk di pesan wizard PUNYA
-// owner: pesan owner ke-edit/kehapus, dan (bug beneran) layar konfirmasi
-// bisa nampilin alias ketikan orang lain sementara "Simpan" owner nyimpen
-// alias pending punya owner sendiri - yang tampil beda dari yang disimpen.
+// orang lain bisa ngeklik "Ubah alias"/"Batal" dkk di pesan wizard PUNYA
+// owner: pesan owner ke-edit, dan (bug beneran) layar konfirmasi bisa
+// nampilin alias ketikan orang lain sementara "Simpan" owner nyimpen alias
+// pending punya owner sendiri - yang tampil beda dari yang disimpen.
 // Penolakannya EPHEMERAL (cuma keliatan si pengklik), pesan owner gak
-// disentuh sama sekali.
+// disentuh sama sekali. PENGECUALIAN: "Tutup" (cuma ada di layar daftar
+// alias standalone, bukan di langkah wizard manapun) boleh siapa aja - daftar
+// alias itu read-only buat semua orang, dan owner minta tombol Tutup buat
+// yang salah ketik "alias", sama kayak Tutup di menu lain di bot ini.
 //
 // Hapus alias: tombol "🗑️ Hapus alias" (CUMA muncul kalau daftar aliasnya gak
 // kosong) -> owner-gate -> dropdown pilih alias yang mana -> "Yakin hapus
@@ -122,16 +125,50 @@ function buildAliasActionButtonsRow(hasAliases) {
   return new ActionRowBuilder().addComponents(buttons);
 }
 
-// Layar "daftar alias" BERDIRI SENDIRI (tombol Tutup beneran ngehapus pesan,
-// BUKAN buildFallbackPickActionRow's menu.js punya "Kembali ke menu") - ini
-// yang jadi tujuan balik "Batal" dari manapun di dalem wizard, dan juga hasil
-// akhir sukses/gagal nambah-hapus alias. `prefixMessage` opsional (hasil
-// operasi sebelumnya) ditaro DI ATAS daftar alias-nya.
+function aliasListContent(prefixMessage) {
+  return prefixMessage ? `${prefixMessage}\n\n${replyAliasList()}` : replyAliasList();
+}
+
+function hasAnyAlias() {
+  return Object.keys(loadAliases()).length > 0;
+}
+
+// Layar "daftar alias" STANDALONE (dari ketikan "alias", lihat komen di
+// atas) - tombol Tutup-nya beneran ngehapus pesan. `prefixMessage` opsional
+// (hasil operasi sebelumnya) ditaro DI ATAS daftar alias-nya.
 function buildAliasListBlock(prefixMessage) {
-  const map = loadAliases();
-  const hasAliases = Object.keys(map).length > 0;
-  const content = prefixMessage ? `${prefixMessage}\n\n${replyAliasList()}` : replyAliasList();
-  return { content, components: [buildAliasActionButtonsRow(hasAliases), new ActionRowBuilder().addComponents(buildCloseButton())] };
+  return {
+    content: aliasListContent(prefixMessage),
+    components: [buildAliasActionButtonsRow(hasAnyAlias()), new ActionRowBuilder().addComponents(buildCloseButton())],
+  };
+}
+
+// ID pesan yang wizard-nya dimulai dari menu fallback. Dideteksi pas tombol
+// Tambah/Hapus diklik (pesannya MASIH nampilin tombol "fallback_menu:..."
+// di titik itu), soalnya langkah-langkah wizard berikutnya ngedit pesan yang
+// SAMA dan tombol menunya udah gak ada lagi buat dicek. Dihapus lagi begitu
+// balik ke layar daftar alias, jadi isinya cuma wizard yang lagi jalan.
+const menuOriginMessageIds = new Set();
+
+function isShowingFallbackMenu(message) {
+  return Boolean(message?.components?.some((row) => row.components?.some((c) => c.customId?.startsWith("fallback_menu:"))));
+}
+
+function rememberOrigin(interaction) {
+  if (interaction.message?.id && isShowingFallbackMenu(interaction.message)) menuOriginMessageIds.add(interaction.message.id);
+}
+
+// Tujuan balik "Batal" dan hasil akhir tambah/hapus - layar ASAL wizard-nya.
+// menu.js di-require LAZY (di dalem function, bukan di atas file) soalnya
+// menu.js sendiri require modul ini di atasnya - sama trik yang dipake
+// menu.js's handleFallbackMenuButton buat pendingState.js.
+function buildReturnScreen(interaction, prefixMessage) {
+  const messageId = interaction.message?.id;
+  if (messageId && menuOriginMessageIds.delete(messageId)) {
+    const { buildAliasListMenuScreen } = require("./menu");
+    return buildAliasListMenuScreen(prefixMessage);
+  }
+  return buildAliasListBlock(prefixMessage);
 }
 
 function buildAddSearchModal() {
@@ -252,6 +289,7 @@ async function rejectNonOwner(interaction) {
 }
 
 async function handleAliasAddButton(interaction) {
+  rememberOrigin(interaction);
   await interaction.update(
     safeReplyOptions({
       content: "Mau nambah alias/panggilan baru buat member? Nanti kamu cari dulu member aslinya, baru ketik alias-nya.",
@@ -326,28 +364,32 @@ async function handleAliasCommitButton(interaction) {
   const pending = getPendingAliasFlow(interaction.channelId, interaction.user.id);
   clearPendingAliasFlow(interaction.channelId, interaction.user.id);
   if (!pending) {
-    await interaction.update(safeReplyOptions(buildAliasListBlock("Cok, kelamaan mikirnya - kalau masih mau nambah alias, mulai lagi ya.")));
+    await interaction.update(
+      safeReplyOptions(buildReturnScreen(interaction, "Cok, kelamaan mikirnya - kalau masih mau nambah alias, mulai lagi ya.")),
+    );
     return;
   }
   const targetToken = pending.username.replace(/^jkt48_/, "");
   const resultMessage = await handleAddAlias(pending.aliasText, targetToken, interaction.user.id);
-  await interaction.update(safeReplyOptions(buildAliasListBlock(resultMessage)));
+  await interaction.update(safeReplyOptions(buildReturnScreen(interaction, resultMessage)));
 }
 
 async function handleAliasCancelButton(interaction) {
   clearPendingAliasFlow(interaction.channelId, interaction.user.id);
-  await interaction.update(safeReplyOptions(buildAliasListBlock()));
+  await interaction.update(safeReplyOptions(buildReturnScreen(interaction)));
 }
 
 async function handleAliasCloseButton(interaction) {
-  clearPendingAliasFlow(interaction.channelId, interaction.user.id);
+  if (isOwner(interaction.user.id)) clearPendingAliasFlow(interaction.channelId, interaction.user.id);
+  menuOriginMessageIds.delete(interaction.message?.id);
   await deleteInteractionMessage(interaction);
 }
 
 async function handleAliasRemoveButton(interaction) {
+  rememberOrigin(interaction);
   const entries = Object.entries(loadAliases()).sort(([a], [b]) => a.localeCompare(b));
   if (entries.length === 0) {
-    await interaction.update(safeReplyOptions(buildAliasListBlock("Cok, belum ada alias yang bisa dihapus.")));
+    await interaction.update(safeReplyOptions(buildReturnScreen(interaction, "Cok, belum ada alias yang bisa dihapus.")));
     return;
   }
 
@@ -369,7 +411,7 @@ async function handleAliasRemoveSelect(interaction) {
   const alias = interaction.values[0];
   const target = loadAliases()[alias];
   if (!target) {
-    await interaction.update(safeReplyOptions(buildAliasListBlock(`Cok, alias "${alias}" kayaknya udah keburu dihapus.`)));
+    await interaction.update(safeReplyOptions(buildReturnScreen(interaction, `Cok, alias "${alias}" kayaknya udah keburu dihapus.`)));
     return;
   }
   await interaction.update(
@@ -391,15 +433,16 @@ async function handleAliasRemoveSelect(interaction) {
 async function handleAliasRemoveConfirmButton(interaction) {
   const alias = decodeURIComponent(interaction.customId.split(":")[2]);
   const resultMessage = handleRemoveAlias(alias, interaction.user.id);
-  await interaction.update(safeReplyOptions(buildAliasListBlock(resultMessage)));
+  await interaction.update(safeReplyOptions(buildReturnScreen(interaction, resultMessage)));
 }
 
 // Dispatcher tunggal per jenis interaction - dipanggil router.js's
 // interactionCreate lewat prefix customId ("alias_flow:"/"alias_modal:"/
 // "alias_select:"), sama pola persis kayak compareFlow.js punya.
 async function handleAliasFlowButton(interaction) {
-  if (await rejectNonOwner(interaction)) return;
   const action = interaction.customId.split(":")[1];
+  if (action === "close") return handleAliasCloseButton(interaction);
+  if (await rejectNonOwner(interaction)) return;
   if (action === "add") return handleAliasAddButton(interaction);
   if (action === "add_confirm" || action === "research") return handleAliasResearchButton(interaction);
   if (action === "target_confirmed" || action === "edit_alias") return handleAliasTextButton(interaction);
@@ -407,7 +450,6 @@ async function handleAliasFlowButton(interaction) {
   if (action === "remove_confirm") return handleAliasRemoveConfirmButton(interaction);
   if (action === "commit") return handleAliasCommitButton(interaction);
   if (action === "cancel") return handleAliasCancelButton(interaction);
-  if (action === "close") return handleAliasCloseButton(interaction);
 }
 
 async function handleAliasFlowModalSubmit(interaction) {

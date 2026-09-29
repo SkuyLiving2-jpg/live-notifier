@@ -604,18 +604,7 @@ async function handleFallbackMenuButton(interaction) {
     return;
   }
   if (optionId === "aliaslist") {
-    // Owner minta ini gak lagi READ-ONLY doang - tombol "➕ Tambah alias"/
-    // "🗑️ Hapus alias" (buildAliasActionButtonsRow, dari aliasFlow.js) nempel
-    // di baris SENDIRI di atas Tutup/Kembali biasa, biar wizard tambah/hapus
-    // alias tetep bisa dipicu dari layar ini. Begitu wizard-nya jalan, dia
-    // BERDIRI SENDIRI (gak balik ke sini lagi via "Kembali" - lihat komen
-    // panjang di aliasFlow.js soal kenapa modul itu gak require("./menu")).
-    await interaction.update(
-      safeReplyOptions({
-        content: replyAliasList(),
-        components: [buildAliasActionButtonsRow(Object.keys(loadAliases()).length > 0), ...buildFallbackMenuComponents(pageIndexForOption(optionId))],
-      }),
-    );
+    await interaction.update(safeReplyOptions(buildAliasListMenuScreen()));
     return;
   }
 
@@ -741,6 +730,21 @@ async function handleFallbackMemberSelect(interaction) {
   );
 }
 
+// Layar "📖 Daftar alias" versi menu: daftar alias + tombol "➕ Tambah alias"/
+// "🗑️ Hapus alias" (buildAliasActionButtonsRow, dari aliasFlow.js) di baris
+// sendiri, di atas menu halaman asalnya yang ditempel ulang kayak opsi lain.
+// Dipake tombol menu-nya sendiri DAN aliasFlow.js's buildReturnScreen - wizard
+// tambah/hapus yang dimulai dari sini balik ke layar INI pas "Batal"/selesai
+// (BUG YANG DILAPORIN OWNER: dulu baliknya ke layar standalone, menu halaman
+// terakhir yang tadinya ada jadi ilang).
+function buildAliasListMenuScreen(prefixMessage) {
+  const list = replyAliasList();
+  return {
+    content: prefixMessage ? `${prefixMessage}\n\n${list}` : list,
+    components: [buildAliasActionButtonsRow(Object.keys(loadAliases()).length > 0), ...buildFallbackMenuComponents(pageIndexForOption("aliaslist"))],
+  };
+}
+
 // Diklik abis milih salah satu fitur dari dropdown yang dimunculin tombol
 // "❓ Fitur lainnya" (buildExtraFeaturesSelectRow, lihat EXTRA_FEATURES).
 // "countboard" (paling sering live) itu satu-satunya entry ZERO-PARAMETER -
@@ -779,4 +783,5 @@ module.exports = {
   handleFallbackMenuButton,
   handleFallbackMemberSelect,
   handleFallbackExtraSelect,
+  buildAliasListMenuScreen,
 };

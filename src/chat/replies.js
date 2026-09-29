@@ -291,7 +291,7 @@ function replyHelp() {
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
     '- "cok reminder aku" - lihat kamu subscribe reminder siapa aja',
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
-    '- "cok daftar alias" - lihat panggilan/nickname yang udah kedaftar, biar panggilan yang beda dari nama akun IDN-nya tetep kekenal pas dicari. (khusus owner) tombol "➕ Tambah alias"/"🗑️ Hapus alias" di layar itu (dicari & dikonfirmasi langkah-langkah), atau keyword-only "cok tambah alias <alias> = <nama asli>" / "cok hapus alias <alias>"',
+    '- "cok alias" (atau "cok daftar alias") - lihat panggilan/nickname yang udah kedaftar, biar panggilan yang beda dari nama akun IDN-nya tetep kekenal pas dicari. (khusus owner) tombol "➕ Tambah alias"/"🗑️ Hapus alias" di layar itu (dicari & dikonfirmasi langkah-langkah), atau keyword-only "cok tambah alias <alias> = <nama asli>" / "cok hapus alias <alias>"',
     "",
     'Kalau abis muncul menu tombol, kamu juga bisa cukup balas angkanya doang (misal "1" atau "4 Nala") tanpa perlu klik.',
     '💡 Notif kerasa suka telat/gak keluar? Cek setting notifikasi channel-nya - klik nama channel > Notification Settings, pastiin di "All Messages" (bukan "Only @mentions"), soalnya notif live biasa emang gak nge-tag siapa-siapa kecuali kamu subscribe ("cok ingetin <nama>").',
