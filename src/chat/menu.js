@@ -1,8 +1,10 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require("discord.js");
 const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
 const { getSortedGifterSnapshotMembers } = require("../storage/gifterSnapshot");
+const { loadAliases } = require("../storage/aliases");
 const { getGreeting, describeElapsed, YES_PATTERN, NO_PATTERN, safeReplyOptions } = require("../utils");
 const { deleteInteractionMessage } = require("./interactionHelpers");
+const { buildAliasActionButtonsRow } = require("./aliasFlow");
 const {
   replyListLive,
   replyBotStatus,
@@ -248,7 +250,7 @@ const EXTRA_FEATURES = [
     label: "🔧 Kelola alias (khusus owner)",
     description: "Tambah/hapus panggilan/nickname member",
     detail:
-      'Khusus owner: `cok tambah alias <alias> = <nama asli>` / `cok hapus alias <alias>`. Daftar yang udah ada bisa dicek semua orang lewat tombol "📖 Daftar alias".',
+      'Khusus owner: `cok tambah alias <alias> = <nama asli>` / `cok hapus alias <alias>`, ATAU lewat tombol "➕ Tambah alias"/"🗑️ Hapus alias" di layar "📖 Daftar alias" (dicari & dikonfirmasi langkah-langkah, gak perlu hafal formatnya). Daftar yang udah ada bisa dicek semua orang.',
   },
   {
     value: "priority_owner",
@@ -602,7 +604,18 @@ async function handleFallbackMenuButton(interaction) {
     return;
   }
   if (optionId === "aliaslist") {
-    await interaction.update(safeReplyOptions({ content: replyAliasList(), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }));
+    // Owner minta ini gak lagi READ-ONLY doang - tombol "➕ Tambah alias"/
+    // "🗑️ Hapus alias" (buildAliasActionButtonsRow, dari aliasFlow.js) nempel
+    // di baris SENDIRI di atas Tutup/Kembali biasa, biar wizard tambah/hapus
+    // alias tetep bisa dipicu dari layar ini. Begitu wizard-nya jalan, dia
+    // BERDIRI SENDIRI (gak balik ke sini lagi via "Kembali" - lihat komen
+    // panjang di aliasFlow.js soal kenapa modul itu gak require("./menu")).
+    await interaction.update(
+      safeReplyOptions({
+        content: replyAliasList(),
+        components: [buildAliasActionButtonsRow(Object.keys(loadAliases()).length > 0), ...buildFallbackMenuComponents(pageIndexForOption(optionId))],
+      }),
+    );
     return;
   }
 

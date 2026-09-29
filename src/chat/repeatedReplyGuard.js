@@ -7,9 +7,15 @@
 // Aturannya (generik buat command APAPUN, bukan cuma "bandingin"):
 // - "Ketikan yang sama" = teks PERSIS SAMA (lowercase+trim, sama kayak `text`
 //   yang dipake buildChatReply) dari orang yang sama di channel yang sama,
-//   berurutan (ketikan berbeda di antaranya = mulai hitungan baru), dan
-//   masih dalam REPEAT_WINDOW_MS (ngetik ulang besok gak boleh nghapus pesan
-//   kemarin).
+//   berurutan (ketikan berbeda di antaranya = mulai hitungan baru).
+// - SEBELUMNYA rangkaian ini juga kena batas waktu (REPEAT_WINDOW_MS, 10
+//   menit) - lewat dari itu dianggep rangkaian baru walau teksnya sama persis.
+//   Owner laporin ini BUG, bukan fitur: ketikan "a" jam 10, "a" jam 11, "a"
+//   jam 12 (beda jauh, tapi teksnya sama persis dan gak ada ketikan LAIN di
+//   antaranya) tetep bikin chat berantakan soalnya tiap ketikan udah lewat
+//   window-nya duluan sebelum sempet numpuk ke-3. Batas waktunya DIHAPUS -
+//   yang nentuin rangkaian sekarang MURNI "teks sama, gak keselang teks lain",
+//   gak peduli udah berapa lama jaraknya.
 // - Ketikan ke-1 dan ke-2 dibiarin (wajar ngulang sekali). Begitu diketik
 //   LEBIH DARI REPEAT_KEEP_LIMIT kali (ke-3 dst), SEMUA ketikan + balesan bot
 //   sebelumnya dalam rangkaian itu dihapus - cuma yang paling baru yang nyisa.
@@ -20,7 +26,6 @@
 // Cuma dipanggil kalau bot BENERAN ngebales pesan itu (router.js) - pesan yang
 // gak ditujukan ke bot (gak ada "cok"/di luar channel bot) gak pernah disentuh.
 const REPEAT_KEEP_LIMIT = 2;
-const REPEAT_WINDOW_MS = 10 * 60_000;
 
 // "channelId:authorId" -> { text, count, messageIds, lastAt }
 const streaks = new Map();
@@ -38,7 +43,7 @@ function keyFor(channelId, authorId) {
 function registerExchange({ channelId, authorId, text, userMessageId, botReplyId, now = Date.now() }) {
   const key = keyFor(channelId, authorId);
   const previous = streaks.get(key);
-  const continuing = previous && previous.text === text && now - previous.lastAt <= REPEAT_WINDOW_MS;
+  const continuing = previous && previous.text === text;
   const streak = continuing ? previous : { text, count: 0, messageIds: [], lastAt: now };
 
   streak.count += 1;
@@ -81,4 +86,4 @@ async function pruneRepeatedExchange(message, normalizedText, sentReply, now = D
   await Promise.all(toDelete.map((id) => message.channel.messages.delete(id).catch((error) => reportDeleteFailure(error, id))));
 }
 
-module.exports = { registerExchange, pruneRepeatedExchange, REPEAT_KEEP_LIMIT, REPEAT_WINDOW_MS };
+module.exports = { registerExchange, pruneRepeatedExchange, REPEAT_KEEP_LIMIT };

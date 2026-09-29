@@ -2,7 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { registerExchange, pruneRepeatedExchange, REPEAT_KEEP_LIMIT, REPEAT_WINDOW_MS } = require("../src/chat/repeatedReplyGuard");
+const { registerExchange, pruneRepeatedExchange, REPEAT_KEEP_LIMIT } = require("../src/chat/repeatedReplyGuard");
 
 // Fake discord.js Message - guard-nya cuma pernah nyentuh .id/.author.id/
 // .channel.id/.channel.messages.delete(), jadi gak butuh library mocking
@@ -73,17 +73,19 @@ test("orang BEDA (atau channel BEDA) yang ngetik teks sama gak saling menghapus 
   assert.deepEqual(exchange({ userMessageId: "a3", botReplyId: "ba3" }, a), ["a1", "ba1", "a2", "ba2"]);
 });
 
-test("ketikan yang jaraknya lewat REPEAT_WINDOW_MS dari yang sebelumnya dianggep rangkaian BARU (pesan lama gak disentuh)", () => {
+// Regresi (dilaporin owner): dulu rangkaian ini kena batas waktu
+// (REPEAT_WINDOW_MS, 10 menit) - ketikan "a" jam 10, "a" jam 11, "a" jam 12
+// (sama persis, gak keselang ketikan lain, tapi jaraknya JAUH) gak pernah
+// numpuk ke-3 gara-gara tiap ketikan dianggep rangkaian baru begitu lewat
+// window-nya. Sekarang MURNI soal teks sama/nggak, gak peduli jaraknya
+// berjam-jam atau berhari-hari sekalipun, selama gak keselang ketikan lain.
+test("ketikan sama yang jaraknya BERJAM-JAM (gak keselang ketikan lain) TETAP dianggep satu rangkaian - bukan lagi soal waktu, murni soal teks", () => {
   const opts = { channelId: "c-window", authorId: "u-window" };
-  exchange({ userMessageId: "u1", botReplyId: "b1", now: 1_000 }, opts);
-  exchange({ userMessageId: "u2", botReplyId: "b2", now: 2_000 }, opts);
-  // ketikan ke-3 tapi udah lewat window -> hitungan mulai dari 1 lagi
-  assert.deepEqual(exchange({ userMessageId: "u3", botReplyId: "b3", now: 2_000 + REPEAT_WINDOW_MS + 1 }, opts), []);
-  // pas di batas window masih dianggep rangkaian yang sama
-  const edge = { channelId: "c-window-edge", authorId: "u-window-edge" };
-  exchange({ userMessageId: "u1", botReplyId: "b1", now: 0 }, edge);
-  exchange({ userMessageId: "u2", botReplyId: "b2", now: REPEAT_WINDOW_MS }, edge);
-  assert.deepEqual(exchange({ userMessageId: "u3", botReplyId: "b3", now: REPEAT_WINDOW_MS * 2 }, edge), ["u1", "b1", "u2", "b2"]);
+  const HOUR_MS = 60 * 60_000;
+  assert.deepEqual(exchange({ userMessageId: "u1", botReplyId: "b1", now: 0 }, opts), []);
+  assert.deepEqual(exchange({ userMessageId: "u2", botReplyId: "b2", now: HOUR_MS }, opts), []);
+  // ketikan ke-3, sejam kemudian lagi -> tetep rangkaian yang sama, ke-1 & ke-2 dihapus
+  assert.deepEqual(exchange({ userMessageId: "u3", botReplyId: "b3", now: HOUR_MS * 2 }, opts), ["u1", "b1", "u2", "b2"]);
 });
 
 test("pruneRepeatedExchange - ketikan ke-3 beneran manggil channel.messages.delete buat semua pesan lama (ketikan user + balesan bot)", async () => {

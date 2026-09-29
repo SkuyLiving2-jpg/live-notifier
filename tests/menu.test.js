@@ -4,6 +4,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { activeLives } = require("../src/storage/activeLives");
 const { saveGifterSnapshot } = require("../src/storage/gifterSnapshot");
+const { addAlias } = require("../src/storage/aliases");
 const {
   resolveBareMenuChoice,
   memberPromptQuestion,
@@ -506,12 +507,25 @@ test("handleFallbackMenuButton - '😴 Paling lama gak live' (fallback_menu:notl
   assert.deepEqual(optionIds, ["fallback_menu:notlive", "fallback_menu:aliaslist", "fallback_menu:more"], "balik ke halaman TERAKHIR (asalnya)");
 });
 
-test("handleFallbackMenuButton - '📖 Daftar alias' (fallback_menu:aliaslist) jawab langsung, halaman terakhir ditempel ulang", async () => {
+// Owner minta layar ini gak lagi read-only doang (§10's fifty-seventh item) -
+// baris EKSTRA (buildAliasActionButtonsRow, aliasFlow.js) nempel DI ATAS menu
+// (2 baris) yang ditempel ulang seperti opsi lain, jadi 3 baris total.
+test("handleFallbackMenuButton - '📖 Daftar alias' (fallback_menu:aliaslist) jawab langsung + tombol tambah/hapus alias, halaman terakhir ditempel ulang", async () => {
   const interaction = fakeInteraction({ customId: "fallback_menu:aliaslist" });
   await handleFallbackMenuButton(interaction);
   assert.equal(interaction.calls.length, 0, "gak boleh reply() pesan baru");
   assert.match(interaction.updates[0].content, /daftar alias|belum ada alias/i);
-  assert.equal(interaction.updates[0].components.length, 2, "menu (2 baris) ditempel ulang biar bisa lanjut mencet opsi lain");
+  assert.equal(interaction.updates[0].components.length, 3, "baris tombol alias + menu (2 baris) ditempel ulang");
+  const aliasButtonIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(aliasButtonIds, ["alias_flow:add"], 'belum ada alias terdaftar -> tombol "Hapus alias" gak muncul');
+});
+
+test("handleFallbackMenuButton - '📖 Daftar alias' dengan alias YANG UDAH ADA -> tombol 'Hapus alias' ikut muncul", async () => {
+  addAlias("kimkim-menutest", "kimmy");
+  const interaction = fakeInteraction({ customId: "fallback_menu:aliaslist" });
+  await handleFallbackMenuButton(interaction);
+  const aliasButtonIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
+  assert.deepEqual(aliasButtonIds, ["alias_flow:add", "alias_flow:remove"]);
 });
 
 // BUG/permintaan owner: dulu "❓ Fitur lainnya" nunjukkin replyHelp() APA

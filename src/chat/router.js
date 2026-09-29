@@ -11,6 +11,7 @@ const { replyStartComparePick, handleComparePickButton, handleCompareModalSubmit
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const { replyDurationChart } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete } = require("./slashCommands");
+const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect } = require("./aliasFlow");
 const {
   replyListLive,
   replyLongestLive,
@@ -627,6 +628,12 @@ function wireDiscordEvents(client) {
         await handleCompareModalSubmit(interaction);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("compare_select:")) {
         await handleCompareSelect(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("alias_flow:")) {
+        await handleAliasFlowButton(interaction);
+      } else if (interaction.isModalSubmit() && interaction.customId.startsWith("alias_modal:")) {
+        await handleAliasFlowModalSubmit(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("alias_select:")) {
+        await handleAliasFlowSelect(interaction);
       }
     } catch (error) {
       console.error("Gagal proses tombol/menu Discord:", error.message);
