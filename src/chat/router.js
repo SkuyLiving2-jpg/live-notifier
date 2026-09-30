@@ -1,7 +1,7 @@
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { getUsernameForChannel } = require("../storage/channelRouting");
-const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN, ROLE_CHANNEL_ID, ROLE_WELCOME_ENABLED } = require("../config");
+const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
 const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
 const { tryHandleWatchConfirmShortcut } = require("./menu");
 const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = require("./pendingState");
@@ -14,11 +14,13 @@ const {
   handleCompareSelect,
   handleCompareCountSelect,
 } = require("./compareFlow");
+const { getDiscordClient } = require("../discordClient");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const { withCloseButton, handleReplyCloseButton } = require("./interactionHelpers");
 const {
   buildRolePanel,
-  buildWelcomeMessage,
+  syncRolePanel,
+  syncRolePanelOnBoot,
   handleRoleFlowButton,
   handleRoleFlowSelect,
   handleAddMemberRole,
@@ -205,7 +207,17 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // - klik tombolnya buka pilihan pribadi (ephemeral).
   if (/pasang\s+panel\s+role/.test(text)) {
     if (!isOwner(authorId)) return "Cok, cuma owner yang boleh masang panel role.";
-    return buildRolePanel();
+    const discordClient = getDiscordClient();
+    // Tanpa client (bot belum login) jatuh ke perilaku lama: balikin panelnya
+    // buat dikirim sebagai balasan biasa.
+    if (!discordClient || !channelId) return buildRolePanel();
+    const result = await syncRolePanel(discordClient, channelId);
+    if (!result.ok)
+      return `Cok, gagal masang panel di channel ini: ${result.error}. Cek izin bot di channel itu (View Channel, Send Messages, Read Message History).`;
+    if (result.action === "edited") return "✅ Panel role diperbarui - pesan panel yang lama di-edit, gak dobel.";
+    return result.moved
+      ? "✅ Panel role dipasang di channel ini (panel lama di channel sebelumnya dihapus)."
+      : "✅ Panel role dipasang. Selanjutnya panel ini di-edit otomatis, gak bakal numpuk.";
   }
   if (/^(?:atur\s+|ambil\s+|minta\s+)?role(?:\s+notif)?[?!.\s]*$/.test(commandText)) {
     return buildRolePanel({ closable: true });
@@ -692,6 +704,8 @@ async function replyWithFailureNotice(message, reply, error) {
 function wireDiscordEvents(client) {
   client.once("clientReady", () => {
     console.log(`Bot tanya-jawab login sebagai ${client.user.tag}`);
+    // Panel role: dipasang/di-edit otomatis tiap boot (gak numpuk).
+    syncRolePanelOnBoot(client).catch((error) => console.error("Gagal sinkron panel role pas boot:", error.message));
     // Dicetak sekali pas boot - cara paling gampang buat mastiin (lewat
     // Deploy Logs di Railway, tanpa perlu akses dashboard/CLI-nya) apakah
     // PRIORITY_PING_USER_ID keisi bener, soalnya kalau kosong DM notif
@@ -703,23 +717,6 @@ function wireDiscordEvents(client) {
         : "PRIORITY_PING_USER_ID BELUM diset - DM notif prioritas gak bakal kekirim (channel tetap dapet notif biasa).",
     );
   });
-
-  // Sambutan member BARU server di channel role (config.js's ROLE_WELCOME_ENABLED -
-  // butuh Server Members Intent). Discord gak ngasih tau bot kapan seseorang
-  // "buka" sebuah channel, jadi momen paling dekat yang bisa dideteksi ya pas
-  // dia baru gabung. Owner dan bot dilewati.
-  if (ROLE_WELCOME_ENABLED) {
-    client.on("guildMemberAdd", async (member) => {
-      try {
-        if (member.user?.bot || member.id === PRIORITY_PING_USER_ID) return;
-        const channel = await member.guild.channels.fetch(ROLE_CHANNEL_ID);
-        if (!channel?.isTextBased()) return;
-        await channel.send(buildWelcomeMessage(member.id));
-      } catch (error) {
-        console.error("Gagal kirim sambutan member baru:", error.message);
-      }
-    });
-  }
 
   client.on("messageCreate", async (message) => {
     try {

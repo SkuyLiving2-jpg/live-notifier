@@ -4,6 +4,9 @@ const { loadMemberRoles, getRoleIdFor, setRoleIdFor, clearRoleFor, ALL_MEMBERS_K
 const { fetchPublicProfileByUsername, isJkt48Member } = require("../idnApi");
 const { normalizeMemberFragment, isOwner } = require("./replies");
 const { safeReplyOptions } = require("../utils");
+const { loadRolePanelState, saveRolePanelState } = require("../storage/rolePanelState");
+const { getDiscordClient } = require("../discordClient");
+const { ROLE_CHANNEL_ID } = require("../config");
 
 // Panel role notif live. Tiap member yang punya channel privat (mis.
 // #aralie-jkt48) punya role bernama member itu (mis. "Aralie") yang OWNER
@@ -13,9 +16,11 @@ const { safeReplyOptions } = require("../utils");
 // mulai live. Ada juga role "semua member" (di-tag tiap SIAPAPUN live).
 //
 // Alurnya:
-//   1. Member baru server disambut otomatis di channel role (buildWelcomeMessage,
-//      lihat router.js's guildMemberAdd) dan owner bisa masang panel permanen
-//      ("cok pasang panel role"). Dua-duanya isinya dua tombol:
+//   1. Panel = SATU pesan permanen di channel role (syncRolePanel): bot masang
+//      sendiri pas boot dan tiap kali daftar role berubah, SELALU ngedit pesan
+//      yang sama (gak pernah numpuk). Discord gak ngasih tau bot kapan orang
+//      "buka" sebuah channel, jadi panelnya dibikin selalu ada di situ. Isinya
+//      dua tombol:
 //        🔔 Semua member       -> dapet role "semua member".
 //        🎯 Pilih member       -> layar pribadi (ephemeral) berisi dropdown
 //                                 member (25 per dropdown, maks 4) yang
@@ -58,23 +63,86 @@ function buildChoiceButtons({ closable }) {
   return new ActionRowBuilder().addComponents(buttons);
 }
 
+const PANEL_MEMBER_LIST_MAX = 1000;
+
 const PANEL_TEXT =
-  "Mau dapet notif tiap ada member JKT48 yang live? Pilih salah satu:\n" +
+  "Selamat datang! 👋 Mau dapet notif tiap ada member JKT48 yang live? Pilih salah satu:\n" +
   "🔔 **Semua member** - di-tag tiap SIAPAPUN mulai live.\n" +
   "🎯 **Pilih member tertentu** - cuma member yang kamu pilih (kamu juga dapet akses ke channel privat member itu).\n" +
   "Bisa diubah kapan aja, tinggal klik lagi.";
 
+// Daftar member yang lagi tersedia ikut ditulis di panel - jadi tiap owner
+// daftarin/lepas role, panelnya di-edit otomatis (refreshRolePanel).
 function buildRolePanel({ closable = false } = {}) {
-  return { content: `🔔 **Notif live per member**\n${PANEL_TEXT}`, components: [buildChoiceButtons({ closable })] };
+  const labels = getRoleRoster().map((m) => m.label);
+  // Dibatesin biar pesan panel gak nembus 2000 karakter kalau member-nya banyak.
+  let shown = labels;
+  while (shown.length > 1 && shown.join(", ").length > PANEL_MEMBER_LIST_MAX) shown = shown.slice(0, -1);
+  const rest = labels.length - shown.length;
+  const memberLine = labels.length > 0 ? `\n\n**Member yang tersedia:** ${shown.join(", ")}${rest > 0 ? ` dan ${rest} lainnya` : ""}` : "";
+  return { content: `🔔 **Notif live per member**\n${PANEL_TEXT}${memberLine}`, components: [buildChoiceButtons({ closable })] };
 }
 
-// Sambutan buat member BARU server (dikirim router.js pas guildMemberAdd).
-function buildWelcomeMessage(userId) {
-  return {
-    content: `👋 Selamat datang <@${userId}>! Seneng banget kamu gabung. 🎉\n\n${PANEL_TEXT}`,
-    components: [buildChoiceButtons({ closable: true })],
-    allowedMentions: { users: [userId] },
-  };
+// Pasang/perbarui panel permanen di `channelId`. Kalau panel udah ada (ID
+// pesannya tersimpan) pesan itu DI-EDIT; baru kalau belum ada/udah dihapus,
+// dibikin baru. Panel yang pindah channel: pesan lama dihapus (best-effort).
+// Balikin { ok, action: "edited" | "created", moved } atau { ok: false, error }.
+async function syncRolePanel(client, channelId) {
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased()) return { ok: false, error: "channel gak ketemu atau bukan channel teks" };
+
+    const payload = buildRolePanel();
+    const state = loadRolePanelState();
+    const sameChannel = state.channelId === channelId;
+    if (state.messageId && sameChannel) {
+      const existing = await channel.messages.fetch(state.messageId).catch(() => null);
+      if (existing) {
+        await existing.edit(payload);
+        return { ok: true, action: "edited", moved: false };
+      }
+    }
+
+    let moved = false;
+    if (state.messageId && state.channelId && !sameChannel) {
+      const oldChannel = await client.channels.fetch(state.channelId).catch(() => null);
+      const oldMessage = oldChannel ? await oldChannel.messages.fetch(state.messageId).catch(() => null) : null;
+      if (oldMessage) {
+        await oldMessage.delete().catch(() => {});
+        moved = true;
+      }
+    }
+    const sent = await channel.send(payload);
+    saveRolePanelState({ channelId, messageId: sent.id });
+    return { ok: true, action: "created", moved };
+  } catch (error) {
+    console.error("Gagal sinkron panel role:", error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+// Dipanggil pas bot boot: channel dari ROLE_CHANNEL_ID, atau channel panel yang
+// terakhir dipasang owner. Gak ada dua-duanya -> gak ngapa-ngapain.
+async function syncRolePanelOnBoot(client) {
+  const channelId = ROLE_CHANNEL_ID || loadRolePanelState().channelId;
+  if (!channelId) return null;
+  const result = await syncRolePanel(client, channelId);
+  console.log(
+    result.ok
+      ? `Panel role ${result.action === "edited" ? "diperbarui" : "dipasang"} di channel ${channelId}.`
+      : `Panel role gagal disinkron: ${result.error}`,
+  );
+  return result;
+}
+
+// Dipanggil abis daftar role berubah - best-effort, gak pernah bikin perintah
+// owner-nya gagal. Gak ada client (mis. bot belum login/tes) atau belum ada
+// panel yang dipasang -> lewat.
+async function refreshRolePanel() {
+  const client = getDiscordClient();
+  const channelId = loadRolePanelState().channelId;
+  if (!client || !channelId) return;
+  await syncRolePanel(client, channelId);
 }
 
 function memberHasRole(member, roleId) {
@@ -356,6 +424,7 @@ async function handleAddMemberRole(nameFragment, roleRef, authorId) {
   if (resolved.error) return resolved.error;
   const existing = getRoleIdFor(resolved.username);
   setRoleIdFor(resolved.username, roleId);
+  await refreshRolePanel();
   const replaced = existing && existing !== roleId ? " (gantiin role lama)" : "";
   return `✅ Role <@&${roleId}> didaftarin buat **${labelFor(resolved.username)}**${replaced}. Sekarang member ini muncul di panel role, dan role itu di-tag tiap dia mulai live.`;
 }
@@ -368,7 +437,9 @@ async function handleRemoveMemberRole(nameFragment, authorId) {
   }
   const resolved = await resolveMemberUsername(name);
   if (resolved.error) return resolved.error;
-  return clearRoleFor(resolved.username)
+  const removedOne = clearRoleFor(resolved.username);
+  if (removedOne) await refreshRolePanel();
+  return removedOne
     ? `✅ **${labelFor(resolved.username)}** dilepas dari daftar role (role di server-nya sendiri gak dihapus).`
     : `**${labelFor(resolved.username)}** emang belum didaftarin.`;
 }
@@ -385,7 +456,8 @@ function replyRoleList() {
 
 module.exports = {
   buildRolePanel,
-  buildWelcomeMessage,
+  syncRolePanel,
+  syncRolePanelOnBoot,
   buildSettingsScreen,
   handleRoleFlowButton,
   handleRoleFlowSelect,

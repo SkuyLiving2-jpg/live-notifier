@@ -10,7 +10,8 @@ const { addSubscription } = require("../src/storage/subscriptions");
 const { sendDiscordNotif } = require("../src/notify/liveNotify");
 const {
   buildRolePanel,
-  buildWelcomeMessage,
+  syncRolePanel,
+  syncRolePanelOnBoot,
   buildSettingsScreen,
   handleRoleFlowButton,
   handleRoleFlowSelect,
@@ -119,15 +120,134 @@ test("getRoleRoster - cuma member yang rolenya didaftarin owner, kunci 'semua' g
   );
 });
 
-test("panel & sambutan - dua tombol pilihan (Semua member / Pilih member tertentu); panel permanen tanpa Tutup, sambutan pakai Tutup", () => {
+test("panel - dua tombol pilihan (Semua member / Pilih member tertentu); permanen tanpa Tutup, versi 'cok role' pakai Tutup; memuat daftar member tersedia", () => {
+  seedRoles();
   assert.deepEqual(ids(buildRolePanel().components[0]), ["role_flow:all", "role_flow:open"]);
   assert.deepEqual(ids(buildRolePanel({ closable: true }).components[0]), ["role_flow:all", "role_flow:open", "reply_close"]);
+  const panel = buildRolePanel();
+  assert.match(panel.content, /Selamat datang/);
+  assert.match(panel.content, /Member yang tersedia:\*\* Rolealpha, Rolebeta/);
+  resetRoles();
+  assert.doesNotMatch(buildRolePanel().content, /Member yang tersedia/);
+});
 
-  const welcome = buildWelcomeMessage("12345");
-  assert.match(welcome.content, /Selamat datang <@12345>/);
-  assert.match(welcome.content, /Semua member/);
-  assert.deepEqual(welcome.allowedMentions, { users: ["12345"] });
-  assert.deepEqual(ids(welcome.components[0]), ["role_flow:all", "role_flow:open", "reply_close"]);
+test("panel - daftar member panjang dipotong ('dan N lainnya'), pesan tetap di bawah 2000 karakter", () => {
+  resetRoles();
+  for (let i = 0; i < 100; i++) setRoleIdFor(`jkt48_panjangbanget${String(i).padStart(3, "0")}`, `r${i}`);
+  const { content } = buildRolePanel();
+  assert.ok(content.length < 2000, `panel ${content.length} karakter`);
+  assert.match(content, /dan \d+ lainnya/);
+  resetRoles();
+});
+
+// ==== Panel permanen: selalu DI-EDIT, gak numpuk ====
+function fakeDiscordClient({ existing = {} } = {}) {
+  const messages = new Map(Object.entries(existing)); // id -> {content,...}
+  const log = { sent: [], edited: [], deleted: [], fetchedChannels: [] };
+  let nextId = 1;
+  const makeChannel = (channelId) => ({
+    isTextBased: () => true,
+    messages: {
+      fetch: async (id) => {
+        const msg = messages.get(id);
+        if (!msg || msg.channelId !== channelId) throw new Error("Unknown Message");
+        return {
+          id,
+          edit: async (payload) => {
+            log.edited.push({ id, payload });
+            return msg;
+          },
+          delete: async () => {
+            log.deleted.push(id);
+            messages.delete(id);
+          },
+        };
+      },
+    },
+    send: async (payload) => {
+      const id = `msg-${nextId++}`;
+      messages.set(id, { channelId, payload });
+      log.sent.push({ channelId, id, payload });
+      return { id };
+    },
+  });
+  return {
+    log,
+    messages,
+    channels: {
+      fetch: async (channelId) => {
+        log.fetchedChannels.push(channelId);
+        if (channelId === "chan-hilang") throw new Error("Unknown Channel");
+        return makeChannel(channelId);
+      },
+    },
+  };
+}
+
+function resetPanelState() {
+  const { saveRolePanelState } = require("../src/storage/rolePanelState");
+  saveRolePanelState({});
+}
+
+test("syncRolePanel - pertama kali: pesan panel DIKIRIM sekali dan ID-nya disimpan; sinkron berikutnya cuma NGEDIT pesan yang sama (gak numpuk)", async () => {
+  seedRoles();
+  resetPanelState();
+  const client = fakeDiscordClient();
+
+  const first = await syncRolePanel(client, "chan-role");
+  assert.deepEqual(first, { ok: true, action: "created", moved: false });
+  assert.equal(client.log.sent.length, 1);
+  assert.deepEqual(ids(client.log.sent[0].payload.components[0]), ["role_flow:all", "role_flow:open"]);
+
+  const second = await syncRolePanel(client, "chan-role");
+  const third = await syncRolePanel(client, "chan-role");
+  assert.equal(second.action, "edited");
+  assert.equal(third.action, "edited");
+  assert.equal(client.log.sent.length, 1, "TETAP cuma 1 pesan terkirim, gak numpuk");
+  assert.equal(client.log.edited.length, 2);
+  assert.equal(client.log.edited[0].id, client.log.sent[0].id);
+});
+
+test("syncRolePanel - pesan panel dihapus manual di Discord -> dibikin ulang (bukan error)", async () => {
+  seedRoles();
+  resetPanelState();
+  const client = fakeDiscordClient();
+  await syncRolePanel(client, "chan-role");
+  client.messages.clear(); // dihapus orang
+  const again = await syncRolePanel(client, "chan-role");
+  assert.equal(again.action, "created");
+  assert.equal(client.log.sent.length, 2);
+});
+
+test("syncRolePanel - panel dipindah ke channel lain -> pesan lama DIHAPUS, yang baru dibikin", async () => {
+  seedRoles();
+  resetPanelState();
+  const client = fakeDiscordClient();
+  await syncRolePanel(client, "chan-lama");
+  const moved = await syncRolePanel(client, "chan-baru");
+  assert.deepEqual(moved, { ok: true, action: "created", moved: true });
+  assert.equal(client.log.deleted.length, 1);
+  assert.equal(client.messages.size, 1);
+});
+
+test("syncRolePanel - channel gak bisa diambil -> { ok:false } dengan alasan, gak throw", async () => {
+  resetPanelState();
+  const result = await syncRolePanel(fakeDiscordClient(), "chan-hilang");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Unknown Channel/);
+});
+
+test("syncRolePanelOnBoot - pakai channel panel yang terakhir dipasang; belum ada sama sekali -> gak ngapa-ngapain", async () => {
+  seedRoles();
+  resetPanelState();
+  const client = fakeDiscordClient();
+  assert.equal(await syncRolePanelOnBoot(client), null);
+  assert.equal(client.log.fetchedChannels.length, 0);
+
+  await syncRolePanel(client, "chan-role");
+  const boot = await syncRolePanelOnBoot(client);
+  assert.equal(boot.action, "edited", "boot ngedit panel yang ada, gak kirim baru");
+  assert.equal(client.log.sent.length, 1);
 });
 
 test("buildSettingsScreen - dropdown maks 25, role yang dipunya ke-centang, 3 tombol (Tutup/Matikan semua/toggle semua), baris <= 5", () => {

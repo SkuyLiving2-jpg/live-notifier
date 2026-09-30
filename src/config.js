@@ -84,14 +84,12 @@ const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || "";
 // > Advanced, terus klik kanan nama channel-nya > Copy Channel ID.
 const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID || "";
 
-// Channel panel role notif (chat/roleFlow.js) + sambutan otomatis buat member
-// BARU server. Sambutan butuh "Server Members Intent" (privileged) DIAKTIFIN
-// dulu di Discord Developer Portal > Bot > Privileged Gateway Intents - kalau
-// belum, bot GAGAL LOGIN, makanya sambutan cuma nyala kalau ROLE_WELCOME_ENABLED
-// eksplisit "true" DAN ROLE_CHANNEL_ID keisi. Panel role sendiri (tombol) jalan
-// tanpa dua-duanya.
+// Opsional - channel panel role notif (chat/roleFlow.js). Bot masang SATU pesan
+// panel di channel ini pas boot (dan ngedit pesan yang sama tiap kali, gak
+// pernah numpuk). Kalau kosong, dipake channel tempat owner terakhir ngetik
+// "cok pasang panel role" (disimpen di role-panel.json) - jadi env ini boleh
+// dikosongin.
 const ROLE_CHANNEL_ID = process.env.ROLE_CHANNEL_ID || "";
-const ROLE_WELCOME_ENABLED = process.env.ROLE_WELCOME_ENABLED === "true" && Boolean(ROLE_CHANNEL_ID);
 
 // Perkiraan "kemungkinan mendekati akhir" buat member prioritas dipicu kalau
 // durasi live udah ngelewatin ambang ini (kalau belum ada riwayat durasi
@@ -243,7 +241,6 @@ module.exports = {
   DISCORD_GUILD_ID,
   BOT_CHANNEL_ID,
   ROLE_CHANNEL_ID,
-  ROLE_WELCOME_ENABLED,
   DEFAULT_ENDING_SOON_THRESHOLD_MS,
   MAX_PLAUSIBLE_LIVE_DURATION_MS,
   JKT48_USERNAME_WHITELIST,

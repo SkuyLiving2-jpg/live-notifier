@@ -79,15 +79,3 @@ test("POLL_INTERVAL_MS - POLL_INTERVAL_SECONDS diisi angka lain (mis. 15) tetep 
   const { POLL_INTERVAL_MS } = freshConfig({ POLL_INTERVAL_SECONDS: "15" });
   assert.equal(POLL_INTERVAL_MS, 15 * 1000);
 });
-
-// Sambutan member baru butuh privileged intent - HARUS mati kecuali diaktifin
-// eksplisit (dan channel-nya keisi), biar bot gak gagal login gara-gara toggle
-// Developer Portal belum dinyalain.
-test("ROLE_WELCOME_ENABLED - default mati; nyala cuma kalau 'true' DAN ROLE_CHANNEL_ID keisi", () => {
-  assert.equal(freshConfig({ ROLE_WELCOME_ENABLED: undefined, ROLE_CHANNEL_ID: undefined }).ROLE_WELCOME_ENABLED, false);
-  assert.equal(freshConfig({ ROLE_WELCOME_ENABLED: "true", ROLE_CHANNEL_ID: undefined }).ROLE_WELCOME_ENABLED, false, "tanpa channel id tetap mati");
-  assert.equal(freshConfig({ ROLE_WELCOME_ENABLED: "yes", ROLE_CHANNEL_ID: "123" }).ROLE_WELCOME_ENABLED, false, "cuma 'true' persis");
-  const on = freshConfig({ ROLE_WELCOME_ENABLED: "true", ROLE_CHANNEL_ID: "123" });
-  assert.equal(on.ROLE_WELCOME_ENABLED, true);
-  assert.equal(on.ROLE_CHANNEL_ID, "123");
-});
