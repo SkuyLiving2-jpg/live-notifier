@@ -3,7 +3,6 @@ require("./helpers/setupTestEnv");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { buildNormalPayload, sendDiscordNotif } = require("../src/notify/liveNotify");
-const { getAllPriorityMembers } = require("../src/priority");
 const { formatClockWIB } = require("../src/utils");
 const { saveChannelRouting } = require("../src/storage/channelRouting");
 
@@ -11,30 +10,29 @@ const { saveChannelRouting } = require("../src/storage/channelRouting");
 const FIXED_TIME = new Date("2026-09-22T08:50:00.000Z");
 const FIXED_CLOCK = formatClockWIB(FIXED_TIME);
 
-test("buildNormalPayload - status end nyantumin jam selesai, priority gak ngaruh sama sekali", () => {
-  const nala = getAllPriorityMembers().find((m) => m.keyword === "nala");
-  const payload = buildNormalPayload("Nala", "https://idn.app/x", "end", nala, null, FIXED_TIME);
+test("buildNormalPayload - status end nyantumin jam selesai (member prioritas sama saja)", () => {
+  const payload = buildNormalPayload("Nala", "https://idn.app/x", "end", null, FIXED_TIME);
   assert.equal(payload.content, `✅ **Nala** udah selesai live di IDN Live.\nSelesai jam ${FIXED_CLOCK}`);
 });
 
 test("buildNormalPayload - status end TETEP gak ada gambar walau imageUrl dikasih (thumbnail cuma buat notif start)", () => {
-  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "end", null, "https://cdn.example/gabby.jpg", FIXED_TIME);
+  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "end", "https://cdn.example/gabby.jpg", FIXED_TIME);
   assert.equal(payload.embeds, undefined);
 });
 
 test("buildNormalPayload - status start dikasih imageUrl -> muncul embeds[0].image, content-nya nyantumin jam mulai", () => {
-  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "start", null, "https://cdn.example/gabby.jpg", FIXED_TIME);
+  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "start", "https://cdn.example/gabby.jpg", FIXED_TIME);
   assert.equal(payload.content, `🚨 **Gabby** lagi live di IDN Live!\nNonton di sini: https://idn.app/x\nMulai jam ${FIXED_CLOCK}`);
   assert.deepEqual(payload.embeds, [{ image: { url: "https://cdn.example/gabby.jpg" } }]);
 });
 
 test("buildNormalPayload - status start TANPA imageUrl (null, mis. IDN belum sempet generate thumbnail) gak nambahin embeds sama sekali", () => {
-  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "start", null, null, FIXED_TIME);
+  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "start", null, FIXED_TIME);
   assert.equal(payload.embeds, undefined);
 });
 
 test("buildNormalPayload - status start buat member BUKAN prioritas (priority null) tetep format standar + jam mulai", () => {
-  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "start", null, null, FIXED_TIME);
+  const payload = buildNormalPayload("Gabby", "https://idn.app/x", "start", null, FIXED_TIME);
   assert.equal(payload.content, `🚨 **Gabby** lagi live di IDN Live!\nNonton di sini: https://idn.app/x\nMulai jam ${FIXED_CLOCK}`);
 });
 
@@ -43,24 +41,35 @@ test("buildNormalPayload - timestamp default (gak dikasih argumen) tetep aman, j
   assert.match(payload.content, /\nMulai jam \d{2}\.\d{2}\.\d{2} WIB$/);
 });
 
-// Notif CHANNEL Nala tetep plain content (bukan embed/tombol - itu cuma di
-// DM, lihat priority/index.js's buildPriorityPayload) - startIntro/
-// startHashtag cuma nempel di teksnya doang, struktur pesannya sama kayak
-// member lain.
-test("buildNormalPayload - status start buat Nala nempelin startIntro/startHashtag TAPI tetep plain content, bukan embed", () => {
-  const nala = getAllPriorityMembers().find((m) => m.keyword === "nala");
-  const payload = buildNormalPayload("Nala", "https://idn.app/x", "start", nala, null, FIXED_TIME);
+// BUG yang dilaporin owner: notif channel Nala nampilin intro + "#NaLex" - itu
+// sentuhan khusus DM owner (priority/index.js), bukan buat channel publik.
+test("buildNormalPayload - status start buat Nala TIDAK bawa startIntro/#NaLex: format standar sama kayak member lain", () => {
+  const payload = buildNormalPayload("Nala", "https://idn.app/x", "start", null, FIXED_TIME);
   assert.equal(
     payload.content,
-    `Nala, si Best Friend mu lagi Live\n🚨 **Nala** lagi live di IDN Live!\nNonton di sini: https://idn.app/x #NaLex\nMulai jam ${FIXED_CLOCK}`,
+    `🚨 **Nala** lagi live di IDN Live!
+Nonton di sini: https://idn.app/x
+Mulai jam ${FIXED_CLOCK}`,
   );
+  assert.doesNotMatch(payload.content, /NaLex|Best Friend/);
   assert.equal(payload.embeds, undefined, "notif channel harus tetep plain content, bukan embed");
 });
 
-test("buildNormalPayload - status start buat Levi (prioritas tapi TANPA startIntro/startHashtag) tetep format standar + jam mulai", () => {
-  const levi = getAllPriorityMembers().find((m) => m.keyword === "levi");
-  const payload = buildNormalPayload("Levi", "https://idn.app/x", "start", levi, null, FIXED_TIME);
-  assert.equal(payload.content, `🚨 **Levi** lagi live di IDN Live!\nNonton di sini: https://idn.app/x\nMulai jam ${FIXED_CLOCK}`);
+test("sendDiscordNotif - live Nala (prioritas) ke channel: gak ada #NaLex/intro, format standar; versi flashy tetap cuma buat DM", async () => {
+  const bodies = [];
+  const original = global.fetch;
+  global.fetch = async (url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await sendDiscordNotif("Nala JKT48", "jkt48_nala", "slug", "start", null, null);
+  } finally {
+    global.fetch = original;
+  }
+  assert.equal(bodies.length, 1);
+  assert.doesNotMatch(bodies[0].content, /NaLex|Best Friend/);
+  assert.match(bodies[0].content, /^🚨 \*\*Nala JKT48\*\* lagi live di IDN Live!/);
 });
 
 // Regresi: live_at datang MENTAH dari API IDN (idnApi.js gak validasi

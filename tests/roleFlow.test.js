@@ -313,7 +313,7 @@ test("tombol 'all' (dari panel/sambutan) - role 'semua member' dibikin bot (ment
   assert.equal(getRoleIdFor(ALL_MEMBERS_KEY), guild.created[0].id);
   assert.deepEqual(member.calls.add, [[guild.created[0].id]]);
   const edit = interaction.log.edits[0];
-  assert.match(edit.content, /di-tag tiap SIAPAPUN/);
+  assert.match(edit.content, /tanpa di-tag/);
   assert.match(edit.components[edit.components.length - 1].toJSON().components[2].label, /Semua member: AKTIF/);
 });
 
@@ -519,21 +519,20 @@ test("sendDiscordNotif - member yang punya role -> notif START nge-ping role itu
   assert.doesNotMatch(end.content, /<@&555>/);
 });
 
-test("sendDiscordNotif - role 'semua member' di-ping buat SIAPAPUN yang live, gabung sama role member dalam satu baris (gak dobel kalau sama)", async () => {
+test("sendDiscordNotif - role 'semua member' (all-live) TIDAK PERNAH di-ping: cuma akses channel, bukan tag (laporan owner: live Nala nge-tag semua member)", async () => {
   resetRoles();
   setRoleIdFor(ALL_MEMBERS_KEY, "999");
   const [plain] = await captureNotif("Anyone", "jkt48_anyone");
-  assert.match(plain.content, /<@&999> lagi live nih!/);
-  assert.deepEqual(plain.allowed_mentions, { roles: ["999"] });
+  assert.doesNotMatch(plain.content, /<@&/);
+  assert.doesNotMatch(plain.content, /lagi live nih/);
+  assert.deepEqual(plain.allowed_mentions, { parse: [] });
 
+  // Member yang punya role sendiri: cuma role member itu yang di-ping, all-live tetap enggak.
   setRoleIdFor("jkt48_bothroles", "555");
   const [both] = await captureNotif("Bothroles", "jkt48_bothroles");
-  assert.match(both.content, /<@&555> <@&999> lagi live nih!/);
-  assert.deepEqual(both.allowed_mentions, { roles: ["555", "999"] });
-
-  setRoleIdFor("jkt48_samerole", "999");
-  const [same] = await captureNotif("Samerole", "jkt48_samerole");
-  assert.deepEqual(same.allowed_mentions, { roles: ["999"] });
+  assert.match(both.content, /<@&555> lagi live nih!/);
+  assert.doesNotMatch(both.content, /<@&999>/);
+  assert.deepEqual(both.allowed_mentions, { roles: ["555"] });
 });
 
 test("sendDiscordNotif - role + subscriber 'cok ingetin' -> dua-duanya di-ping, allowed_mentions bawa users DAN roles", async () => {
@@ -613,7 +612,7 @@ test("'Ya, sekalian semua member' - role all-live dikasih, ada link channel live
   assert.equal(guild.created[0].name, "all-live");
   assert.deepEqual(member.calls.add, [[guild.created[0].id]]);
   const edit = interaction.log.edits[0];
-  assert.match(edit.content, /dapet notif live SEMUA member/);
+  assert.match(edit.content, /bisa lihat live SEMUA member/);
   assert.match(edit.content, /<#chan-all-live>/);
   assert.match(edit.components[edit.components.length - 1].toJSON().components[2].label, /Semua member: AKTIF/);
 });
@@ -686,7 +685,7 @@ test("konfirmasi 'Ya' - role all-live dikasih, pesan di-edit jadi hasil + link c
   await handleRoleFlowButton(interaction);
   assert.equal(member.calls.add.length, 1);
   const edit = interaction.log.edits[0];
-  assert.match(edit.content, /Sekarang kamu dapet notif live SEMUA member/);
+  assert.match(edit.content, /Sekarang kamu bisa lihat live SEMUA member/);
   assert.match(edit.content, /<#chan-all-live>/);
   assert.deepEqual(ids(edit.components[0]), ["reply_close"]);
 
@@ -782,7 +781,7 @@ async function captureByUrl(name, username) {
   return byUrl;
 }
 
-test("member PUNYA channel khusus: channel gabungan cuma nge-ping all-live, channel khusus (#aralie) cuma nge-ping role member - all-live GAK ikut ke channel khusus", async () => {
+test("member PUNYA channel khusus: channel gabungan TANPA role ping sama sekali (cuma info), channel khusus (#aralie) nge-ping role member itu doang", async () => {
   resetRoles();
   setRoleIdFor(ALL_MEMBERS_KEY, "900");
   setRoleIdFor("jkt48_splitping", "800");
@@ -792,9 +791,8 @@ test("member PUNYA channel khusus: channel gabungan cuma nge-ping all-live, chan
     const shared = byUrl[process.env.DISCORD_WEBHOOK_URL][0];
     const dedicated = byUrl["https://discord.com/api/webhooks/777/dedicated-splitping"][0];
 
-    assert.match(shared.content, /<@&900> lagi live nih!/);
-    assert.doesNotMatch(shared.content, /<@&800>/);
-    assert.deepEqual(shared.allowed_mentions, { roles: ["900"] });
+    assert.doesNotMatch(shared.content, /<@&/, "channel gabungan cuma ngasih tau, gak nge-tag role apapun");
+    assert.deepEqual(shared.allowed_mentions, { parse: [] });
 
     assert.match(dedicated.content, /<@&800> lagi live nih!/);
     assert.doesNotMatch(dedicated.content, /<@&900>/, "all-live gak boleh nongol di channel khusus member");
@@ -804,7 +802,7 @@ test("member PUNYA channel khusus: channel gabungan cuma nge-ping all-live, chan
   }
 });
 
-test("member PUNYA channel khusus tapi belum ada role member: channel khusus gak nge-ping role apapun; gabungan tetap all-live", async () => {
+test("member PUNYA channel khusus tapi belum ada role member: gak ada role yang di-ping di channel manapun (all-live gak pernah di-ping)", async () => {
   resetRoles();
   setRoleIdFor(ALL_MEMBERS_KEY, "900");
   saveChannelRouting({ jkt48_norolededicated: "https://discord.com/api/webhooks/778/dedicated-norole" });
@@ -813,13 +811,13 @@ test("member PUNYA channel khusus tapi belum ada role member: channel khusus gak
     const dedicated = byUrl["https://discord.com/api/webhooks/778/dedicated-norole"][0];
     assert.doesNotMatch(dedicated.content, /<@&/);
     assert.deepEqual(dedicated.allowed_mentions, { parse: [] });
-    assert.match(byUrl[process.env.DISCORD_WEBHOOK_URL][0].content, /<@&900>/);
+    assert.doesNotMatch(byUrl[process.env.DISCORD_WEBHOOK_URL][0].content, /<@&/);
   } finally {
     saveChannelRouting({});
   }
 });
 
-test("subscriber 'cok ingetin' tetap di-tag di KEDUA channel (tag pribadi), sementara role dipisah per channel", async () => {
+test("subscriber 'cok ingetin' tetap di-tag di KEDUA channel (tag pribadi); role member cuma di channel khusus, all-live tidak di mana pun", async () => {
   resetRoles();
   setRoleIdFor(ALL_MEMBERS_KEY, "900");
   setRoleIdFor("jkt48_subsplit", "800");
@@ -829,7 +827,7 @@ test("subscriber 'cok ingetin' tetap di-tag di KEDUA channel (tag pribadi), seme
     const byUrl = await captureByUrl("Subsplit", "jkt48_subsplit");
     const shared = byUrl[process.env.DISCORD_WEBHOOK_URL][0];
     const dedicated = byUrl["https://discord.com/api/webhooks/779/dedicated-subsplit"][0];
-    assert.deepEqual(shared.allowed_mentions, { users: ["u-subsplit"], roles: ["900"] });
+    assert.deepEqual(shared.allowed_mentions, { users: ["u-subsplit"] });
     assert.deepEqual(dedicated.allowed_mentions, { users: ["u-subsplit"], roles: ["800"] });
   } finally {
     saveChannelRouting({});

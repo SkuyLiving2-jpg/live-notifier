@@ -3,7 +3,7 @@ const { getPriorityConfig } = require("../priority");
 const { sendPriorityDM } = require("./priorityDm");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { getChannelWebhookFor } = require("../storage/channelRouting");
-const { getRoleIdFor, ALL_MEMBERS_KEY } = require("../storage/memberRoles");
+const { getRoleIdFor } = require("../storage/memberRoles");
 const { containsWholeWord, formatClockWIB } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
@@ -33,14 +33,16 @@ const { PRIORITY_PING_USER_ID } = require("../config");
 // ditempel sebagai baris TERAKHIR di content, biar backfill-live-history.js's
 // START_RE/END_RE (yang cuma ngecek AWAL string, gak ada jangkar `$` di
 // akhir) tetep bisa parsing pesan lama maupun baru tanpa perlu diubah.
-function buildNormalPayload(memberName, liveUrl, status, priority = null, imageUrl = null, timestamp = new Date()) {
+// Notif channel SELALU format standar yang sama buat semua member (termasuk
+// prioritas). startIntro/startHashtag (mis. "#NaLex" buat Nala) itu sentuhan
+// PRIBADI buat DM owner (priority/index.js's buildPriorityPayload) - dulu ikut
+// nempel di notif channel yang dilihat semua orang, itu bug yang dilaporin owner.
+function buildNormalPayload(memberName, liveUrl, status, imageUrl = null, timestamp = new Date()) {
   if (status === "end") {
     return { content: `✅ **${memberName}** udah selesai live di IDN Live.\nSelesai jam ${formatClockWIB(timestamp)}` };
   }
-  const introLine = priority?.startIntro ? `${priority.startIntro}\n` : "";
-  const hashtagSuffix = priority?.startHashtag ? ` ${priority.startHashtag}` : "";
   const payload = {
-    content: `${introLine}🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}${hashtagSuffix}\nMulai jam ${formatClockWIB(timestamp)}`,
+    content: `🚨 **${memberName}** lagi live di IDN Live!\nNonton di sini: ${liveUrl}\nMulai jam ${formatClockWIB(timestamp)}`,
   };
   if (imageUrl) {
     payload.embeds = [{ image: { url: imageUrl } }];
@@ -110,28 +112,25 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   // ikut kelewat, bukan cuma yang live_at-nya rusak).
   const parsedLiveAt = liveAt ? new Date(liveAt) : null;
   const timestamp = status === "start" && parsedLiveAt && !Number.isNaN(parsedLiveAt.getTime()) ? parsedLiveAt : new Date();
-  const payload = buildNormalPayload(memberName, liveUrl, status, priority, imageUrl, timestamp);
+  const payload = buildNormalPayload(memberName, liveUrl, status, imageUrl, timestamp);
 
   // Channel KHUSUS member ini (fitur "Q2", storage/channelRouting.js). Dihitung
   // DULUAN karena nentuin role mana yang di-ping di channel mana (di bawah).
   const dedicatedWebhookUrl = getChannelWebhookFor(username);
 
-  // Mention buat notif START (dua channel BEDA isinya, jangan disamain):
-  // - channel GABUNGAN: role "notif SEMUA member" (all-live). Role member cuma
-  //   ikut kalau member ini GAK punya channel khusus (kalau punya, role member
-  //   di-ping di channel khususnya - di gabungan orangnya belum tentu bisa
-  //   lihat).
-  // - channel KHUSUS: cuma role member itu. Dulu payload yang SAMA (termasuk
-  //   ping all-live) dikirim ke dua-duanya, jadi channel #aralie-jkt48 nge-tag
-  //   "semua member" juga.
-  // Subscriber "cok ingetin" tetep di-tag di dua-duanya (tag pribadi, bukan role).
+  // Mention buat notif START:
+  // - Role "semua member" (all-live) TIDAK PERNAH di-ping. Role itu cuma buat
+  //   AKSES ke channel gabungan (channel-nya sendiri sudah jadi pemberitahuan);
+  //   nge-tag semua pemegangnya tiap ada yang live itu spam - laporan owner.
+  // - Yang di-tag cuma yang memang mengikuti member ITU: pemegang role member-nya
+  //   (di channel khusus member itu; di channel gabungan cuma kalau member itu
+  //   belum punya channel khusus) dan subscriber "cok ingetin" (tag pribadi).
   let sharedPayload = payload;
   let dedicatedPayload = payload;
   if (status === "start") {
     const subscriberIds = getSubscribersFor(memberName, username);
     const memberRoleId = getRoleIdFor(username);
-    const allRoleId = getRoleIdFor(ALL_MEMBERS_KEY);
-    sharedPayload = withMentions(payload, subscriberIds, dedicatedWebhookUrl ? [allRoleId] : [memberRoleId, allRoleId]);
+    sharedPayload = withMentions(payload, subscriberIds, dedicatedWebhookUrl ? [] : [memberRoleId]);
     dedicatedPayload = withMentions(payload, subscriberIds, [memberRoleId]);
   }
 

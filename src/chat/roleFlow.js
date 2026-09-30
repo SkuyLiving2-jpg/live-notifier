@@ -14,7 +14,8 @@ const { deleteInteractionMessage } = require("./interactionHelpers");
 // atur: role itu boleh lihat channel privatnya, dan didaftarin ke bot lewat
 // "cok tambah role aralie @Aralie". Milih member di panel = dapet role itu =
 // dapet akses channel privat member itu + di-tag (liveNotify.js) tiap dia
-// mulai live. Ada juga role "semua member" (di-tag tiap SIAPAPUN live).
+// mulai live. Ada juga role "semua member" (all-live): cuma AKSES ke channel
+// live semua member, TIDAK pernah di-tag.
 //
 // Alurnya:
 //   1. Panel = SATU pesan permanen di channel role (syncRolePanel): bot masang
@@ -103,7 +104,7 @@ const PANEL_HEADER = "🔔 **Notif live per member**";
 
 const PANEL_TEXT =
   "Selamat datang! 👋 Mau dapet notif tiap ada member JKT48 yang live? Pilih salah satu:\n" +
-  "🔔 **Semua member** - di-tag tiap SIAPAPUN mulai live.\n" +
+  "🔔 **Semua member** - akses ke channel live semua member (notifnya muncul di sana, kamu gak di-tag).\n" +
   "🎯 **Pilih member tertentu** - cuma member yang kamu pilih (kamu juga dapet akses ke channel privat member itu).\n" +
   "Bisa diubah kapan aja, tinggal klik lagi.";
 
@@ -393,7 +394,7 @@ async function handleAllFromPanel(interaction) {
   try {
     allRoleId = await ensureAllRole(guild);
     if (!memberHasRole(member, allRoleId)) await member.roles.add(allRoleId, ROLE_REASON);
-    note = `✅ Beres! Kamu bakal di-tag tiap SIAPAPUN member mulai live.${await allLiveChannelLine()}`;
+    note = `✅ Beres! Kamu sekarang bisa lihat live semua member di channel-nya (tanpa di-tag).${await allLiveChannelLine()}`;
   } catch (error) {
     console.error("Gagal ngasih role semua member:", error.message);
     note = describeRoleError(error);
@@ -429,7 +430,7 @@ async function handleAllToggle(interaction) {
       const roleId = await ensureAllRole(guild);
       await member.roles.add(roleId, ROLE_REASON);
       finalOn = true;
-      note = `✅ "Semua member" aktif - kamu di-tag tiap SIAPAPUN mulai live.${await allLiveChannelLine()}`;
+      note = `✅ "Semua member" aktif - kamu bisa lihat live semua member di channel-nya (tanpa di-tag).${await allLiveChannelLine()}`;
     }
   } catch (error) {
     console.error("Gagal toggle role semua member:", error.message);
@@ -458,7 +459,7 @@ async function handleAllYes(interaction) {
   try {
     allRoleId = await ensureAllRole(guild);
     if (!memberHasRole(member, allRoleId)) await member.roles.add(allRoleId, ROLE_REASON);
-    note = `✅ Sip! Kamu juga dapet notif live SEMUA member.${await allLiveChannelLine()}`;
+    note = `✅ Sip! Kamu juga bisa lihat live SEMUA member di channel-nya (tanpa di-tag).${await allLiveChannelLine()}`;
   } catch (error) {
     console.error("Gagal ngasih role semua member:", error.message);
     note = describeRoleError(error);
@@ -482,7 +483,7 @@ async function handleAllNo(interaction) {
 function buildAllLiveConfirm(userId) {
   return {
     content:
-      "🔔 Yakin mau dapet notif live **SEMUA** member? Kamu bakal di-tag tiap ada member yang live, dan dapet akses ke channel live semua member. (Bisa dimatiin kapan aja lewat panel role.)",
+      "🔔 Yakin mau dapet notif live **SEMUA** member? Kamu dapet akses ke channel live semua member (notifnya muncul di sana, kamu gak di-tag). (Bisa dimatiin kapan aja lewat panel role.)",
     components: [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`role_flow:confirmyes:${userId}`).setLabel("Ya").setStyle(ButtonStyle.Success),
@@ -523,7 +524,7 @@ async function handleAllConfirm(interaction, askerId, isYes) {
       content = `Kamu udah aktif di notif live SEMUA member kok. 👍${await allLiveChannelLine()}`;
     } else {
       await member.roles.add(allRoleId, ROLE_REASON);
-      content = `✅ Beres! Sekarang kamu dapet notif live SEMUA member.${await allLiveChannelLine()}`;
+      content = `✅ Beres! Sekarang kamu bisa lihat live SEMUA member di channel-nya (tanpa di-tag).${await allLiveChannelLine()}`;
     }
   } catch (error) {
     console.error("Gagal ngasih role semua member:", error.message);
