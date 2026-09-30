@@ -3,6 +3,7 @@ const { getPriorityConfig } = require("../priority");
 const { sendPriorityDM } = require("./priorityDm");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { getChannelWebhookFor } = require("../storage/channelRouting");
+const { getRoleIdFor } = require("../storage/memberRoles");
 const { containsWholeWord, formatClockWIB } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
@@ -91,14 +92,27 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
 
   if (status === "start") {
     const subscriberIds = getSubscribersFor(memberName, username);
+    // Role notif member ini (panel role, chat/roleFlow.js) - di-ping juga kalau
+    // ada, bareng subscriber "cok ingetin" (dua jalur ini independen).
+    const roleId = getRoleIdFor(username);
+    const lines = [];
+    const allowedMentions = {};
     if (subscriberIds.length > 0) {
       const mentions = subscriberIds.map((id) => `<@${id}>`).join(" ");
-      payload.content = `${payload.content}\n${mentions} kamu subscribe notif buat member ini!`;
+      lines.push(`${mentions} kamu subscribe notif buat member ini!`);
       // Satu-satunya mention yang BENERAN dimaksud di jalur ini - scoped
       // eksplisit ke ID subscriber doang (lihat webhook.js's
       // withDefaultMentionGuard), biar CUMA mereka yang ke-ping walau
       // memberName kebetulan ngandung teks semacam "@everyone".
-      payload.allowed_mentions = { users: subscriberIds };
+      allowedMentions.users = subscriberIds;
+    }
+    if (roleId) {
+      lines.push(`<@&${roleId}> lagi live nih!`);
+      allowedMentions.roles = [roleId];
+    }
+    if (lines.length > 0) {
+      payload.content = [payload.content, ...lines].join("\n");
+      payload.allowed_mentions = allowedMentions;
     }
   }
 

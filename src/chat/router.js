@@ -16,6 +16,7 @@ const {
 } = require("./compareFlow");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const { withCloseButton, handleReplyCloseButton } = require("./interactionHelpers");
+const { buildRolePanel, handleRoleFlowButton, handleRoleFlowSelect } = require("./roleFlow");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
@@ -32,6 +33,7 @@ const {
   replyBotStatus,
   replySpecificMember,
   replyHelp,
+  isOwner,
   replyPriorityList,
   replyMySubscriptions,
   replyMemberStats,
@@ -187,6 +189,18 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const removePriorityMatch = text.match(/hapus\s+prioritas\s+(.+)/);
   if (removePriorityMatch) {
     return handleRemovePriority(removePriorityMatch[1], authorId);
+  }
+
+  // Panel role notif live (chat/roleFlow.js). "pasang panel role" = owner
+  // masang panel PERMANEN (tanpa Tutup) di channel ini; "role"/"atur role"/
+  // "role notif" polos = siapa aja boleh munculin panel sementara (ada Tutup)
+  // - klik tombolnya buka pilihan pribadi (ephemeral).
+  if (/pasang\s+panel\s+role/.test(text)) {
+    if (!isOwner(authorId)) return "Cok, cuma owner yang boleh masang panel role.";
+    return buildRolePanel();
+  }
+  if (/^(?:atur\s+|ambil\s+|minta\s+)?role(?:\s+notif)?[?!.\s]*$/.test(commandText)) {
+    return buildRolePanel({ closable: true });
   }
 
   // Saran fitur ke-5 (§10's kelimapuluh item): "cok tambah alias <alias> =
@@ -766,6 +780,10 @@ function wireDiscordEvents(client) {
         await handleReplyCloseButton(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("chart_flow:")) {
         await handleChartButton(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("role_flow:")) {
+        await handleRoleFlowButton(interaction);
+      } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("role_select:")) {
+        await handleRoleFlowSelect(interaction);
       } else if (interaction.isButton() && interaction.customId.startsWith("alias_flow:")) {
         await handleAliasFlowButton(interaction);
       } else if (interaction.isModalSubmit() && interaction.customId.startsWith("alias_modal:")) {
