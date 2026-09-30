@@ -273,7 +273,7 @@ test("getTodaySessionsForRecap - gabungin sesi yang udah selesai hari ini SAMA y
   activeLives.clear();
   try {
     const now = new Date();
-    recordLiveEnded("Levi", "jkt48_levi_test", new Date(now.getTime() - 3600_000), new Date(now.getTime() - 1800_000), 50);
+    recordLiveEnded("Levi", "jkt48_levi_test", new Date(now.getTime() - 3600_000), now, 50);
 
     activeLives.set("jkt48_nala_test", {
       name: "Nala",

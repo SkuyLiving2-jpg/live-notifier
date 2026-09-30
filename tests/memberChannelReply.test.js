@@ -61,7 +61,7 @@ test("replyMemberLiveToday - belum live hari ini -> bilang belum, gak ada tombol
 
 test("replyMemberLiveToday - udah live 1x hari ini (sesi selesai) -> ngitung bener", () => {
   const now = new Date();
-  recordLiveEnded("Mcrtoday", "jkt48_mcrtoday", new Date(now.getTime() - 3600_000), new Date(now.getTime() - 1800_000), 50);
+  recordLiveEnded("Mcrtoday", "jkt48_mcrtoday", new Date(now.getTime() - 3600_000), now, 50);
   const reply = replyMemberLiveToday("jkt48_mcrtoday");
   assert.match(reply.content, /udah live 1x hari ini/);
   assert.doesNotMatch(reply.content, /lagi berlangsung sekarang/);
@@ -69,7 +69,7 @@ test("replyMemberLiveToday - udah live 1x hari ini (sesi selesai) -> ngitung ben
 
 test("replyMemberLiveToday - gabungan sesi SELESAI hari ini + yang LAGI LIVE SEKARANG", () => {
   const now = new Date();
-  recordLiveEnded("Mcrtoday2", "jkt48_mcrtoday2", new Date(now.getTime() - 3600_000), new Date(now.getTime() - 1800_000), 50);
+  recordLiveEnded("Mcrtoday2", "jkt48_mcrtoday2", new Date(now.getTime() - 3600_000), now, 50);
   activeLives.set("jkt48_mcrtoday2", { name: "Mcrtoday2", username: "jkt48_mcrtoday2", slug: "s", liveAt: now.toISOString() });
   try {
     const reply = replyMemberLiveToday("jkt48_mcrtoday2");
