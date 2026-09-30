@@ -29,7 +29,7 @@ test("polling IDN gagal beruntun -> owner di-DM SEKALI setelah ambang menit (buk
   pollHealth.alerted = false;
   dms.length = 0;
   let idnUp = false;
-  const restore = withIdn(async (url) => {
+  const restore = withIdn(async () => {
     if (!idnUp) return { ok: false, status: 502, json: async () => ({}) };
     return { ok: true, json: async () => ({ data: { getLivestreams: [] } }) };
   });
