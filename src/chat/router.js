@@ -23,8 +23,9 @@ const {
   syncRolePanelOnBoot,
   handleRoleFlowButton,
   handleRoleFlowSelect,
-  handleAddMemberRole,
-  handleRemoveMemberRole,
+  handleAddMemberRoleCommand,
+  handleRemoveMemberRoleCommand,
+  replyRoleDiagnostics,
   replyRoleList,
   buildAllLiveConfirm,
   OWNER_NO_ALL_ROLE_NOTE,
@@ -237,10 +238,11 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // Owner daftarin role tiap member (role yang sama yang ngatur akses channel
   // privat member itu): "tambah role aralie @Aralie" / "hapus role aralie" /
   // "daftar role". "semua" = role notif semua member.
-  const addRoleMatch = text.match(/tambah(?:in|kan)?\s+role\s+(\S+)\s+(<@&\d+>|\d{15,25})/);
-  if (addRoleMatch) return await handleAddMemberRole(addRoleMatch[1], addRoleMatch[2], authorId);
-  const removeRoleMatch = text.match(/hapus\s+role\s+(\S+)/);
-  if (removeRoleMatch) return await handleRemoveMemberRole(removeRoleMatch[1], authorId);
+  const addRoleMatch = text.match(/tambah(?:in|kan)?\s+role\b(.*)$/);
+  if (addRoleMatch) return await handleAddMemberRoleCommand(addRoleMatch[1], authorId, channelId);
+  const removeRoleMatch = text.match(/hapus\s+role\b(.*)$/);
+  if (removeRoleMatch) return await handleRemoveMemberRoleCommand(removeRoleMatch[1], authorId);
+  if (/\bcek\s+(?:setup\s+)?role\b/.test(text)) return await replyRoleDiagnostics(authorId, channelId);
   if (containsWholeWord(text, "daftar") && containsWholeWord(text, "role")) return replyRoleList();
 
   // Saran fitur ke-5 (§10's kelimapuluh item): "cok tambah alias <alias> =
