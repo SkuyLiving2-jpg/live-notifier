@@ -27,6 +27,14 @@ const store = createJsonStore(DAILY_LOG_FILE, { sessions: [], recapSentDate: nul
 // nggak lagi - jadi pruning ini gantiin peran itu).
 const SESSION_RETENTION_DAYS = 35;
 
+// Tanggal-tanggal (WIB) tempat tiap member PUNYA live selesai, disimpen TERPISAH
+// dari sesi lengkap di atas dan jauh lebih lama (400 hari) - ukurannya cuma
+// string tanggal (beberapa KB), jadi murah. Dipake buat streak: dulu streak
+// dihitung dari arsip sesi (35 hari), jadi streak GAK BISA lebih dari 35 hari
+// dan milestone 50/100 hari mustahil kesentuh. Diisi recordLiveEnded (satu
+// kali simpan bareng sesinya) dan ikut ke-backup karena numpang di daily-log.json.
+const STREAK_DATES_RETENTION_DAYS = 400;
+
 // Awal & akhir "hari ini" (WIB, UTC+7 tetap sepanjang tahun - gak ada DST)
 // dalam Unix SECONDS, buat nyaring entri arsip eksternal yang live_at_unix-nya
 // jatuh di hari ini.
@@ -132,6 +140,8 @@ function loadDailyLog() {
     // BELUM terjadi, jam kirimnya juga beda), sama pola dedup-nya kayak
     // recapSentWeek/recapSentMonth di atas.
     digestSentDate: raw.digestSentDate || null,
+    // { [username]: ["YYYY-MM-DD", ...] } urut naik - lihat STREAK_DATES_RETENTION_DAYS.
+    streakDates: raw.streakDates && typeof raw.streakDates === "object" && !Array.isArray(raw.streakDates) ? raw.streakDates : {},
   };
 }
 
@@ -212,6 +222,17 @@ function getDistinctSessionDatesForMember(username, daysBack = SESSION_RETENTION
   );
 }
 
+// Gabungan tanggal live SELESAI member ini: dari arsip sesi (35 hari, sumber
+// yang sama kayak dulu) + catatan tanggal jangka panjang (streakDates). Dua-
+// duanya dipake bareng biar streak yang udah jalan SEBELUM catatan tanggal ini
+// ada tetep ke-hitung (dari arsip sesi), dan streak yang lebih panjang dari 35
+// hari kebaca penuh.
+function getStreakDatesForMember(username) {
+  const dates = getDistinctSessionDatesForMember(username);
+  for (const date of loadDailyLog().streakDates[username] || []) dates.add(date);
+  return dates;
+}
+
 // Dipanggil monitor.js pas sebuah live SELESAI. startedAtDate/endedAtDate
 // dari activeLives's liveAt (udah akurat, independen total dari file ini -
 // gak pernah kena bug rollover/reset apapun yang sempet kejadian di sini).
@@ -237,6 +258,13 @@ function recordLiveEnded(name, username, startedAtDate, endedAtDate, peakViewCou
   const cutoffUnix = Math.floor(Date.now() / 1000) - SESSION_RETENTION_DAYS * 24 * 60 * 60;
   log.sessions = log.sessions.filter((s) => s.endedAtUnix >= cutoffUnix);
 
+  // Catat tanggal live selesai buat streak (dedup + pangkas tanggal > 400 hari).
+  const endedDate = getDateWIB(endedAtDate);
+  const streakCutoffDate = getDateWIB(new Date(Date.now() - STREAK_DATES_RETENTION_DAYS * 24 * 60 * 60 * 1000));
+  const dates = new Set(log.streakDates[username] || []);
+  dates.add(endedDate);
+  log.streakDates[username] = [...dates].filter((d) => d >= streakCutoffDate).sort();
+
   saveDailyLog(log);
 }
 
@@ -254,5 +282,7 @@ module.exports = {
   getDistinctSessionMonths,
   getEarliestSessionDate,
   getDistinctSessionDatesForMember,
+  getStreakDatesForMember,
+  STREAK_DATES_RETENTION_DAYS,
   recordLiveEnded,
 };

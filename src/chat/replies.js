@@ -21,9 +21,9 @@ const {
   getEarliestSessionDate,
   fetchExternalTodayLiveHistory,
   SESSION_RETENTION_DAYS,
-  getDistinctSessionDatesForMember,
+  getStreakDatesForMember,
 } = require("../storage/dailyLog");
-const { computeCurrentStreak, shiftDateWIB } = require("../streakMath");
+const { computeCurrentStreak, computeStreakStartDate, shiftDateWIB } = require("../streakMath");
 const { findDurationHistoryByNameFragment, loadDurationHistory, getAverageDuration, getPreviousMaxDuration } = require("../storage/durationHistory");
 const {
   loadLiveCount,
@@ -1786,15 +1786,25 @@ async function replyStreak(fragment) {
     return await describeMissingMember(shown, "dicek streak live-nya");
   }
 
-  const dates = getDistinctSessionDatesForMember(resolved.username);
+  const dates = getStreakDatesForMember(resolved.username);
   const isLiveNow = activeLives.has(resolved.username);
-  const streak = computeCurrentStreak(dates, getTodayWIB(), isLiveNow);
+  const today = getTodayWIB();
+  const streak = computeCurrentStreak(dates, today, isLiveNow);
 
   if (streak === 0) {
     return `Cok, **${resolved.name}** lagi nggak dalam streak (kemarin maupun hari ini belum ada live yang kecatet).`;
   }
   const liveNowNote = isLiveNow ? " (lagi live sekarang, ikut ke-hitung)" : "";
-  return `🔥 **${resolved.name}** lagi streak **${streak} hari** berturut-turut live${liveNowNote}! _(Dihitung dari arsip ${SESSION_RETENTION_DAYS} hari terakhir.)_`;
+  // Streak yang "mentok" di tanggal tertua yang kita punya bisa aja sebenarnya
+  // lebih panjang - dikasih tau jujur, bukan diam-diam dianggap pasti.
+  const oldestKnown = [...dates].sort()[0];
+  const startDate = computeStreakStartDate(dates, today, isLiveNow);
+  const truncatedNote =
+    startDate && startDate === oldestKnown
+      ? ` _(Data live ${resolved.name} baru kecatet sejak ${formatLongDateWIB(new Date(`${oldestKnown}T12:00:00+07:00`))}, jadi streak aslinya bisa lebih panjang.)_`
+      : "";
+  const sinceNote = startDate ? ` Mulai ${formatLongDateWIB(new Date(`${startDate}T12:00:00+07:00`))}.` : "";
+  return `🔥 **${resolved.name}** lagi streak **${streak} hari** berturut-turut live${liveNowNote}!${sinceNote}${truncatedNote}`;
 }
 
 // Submit modal "Rekap member" (dibuka tombol menu "recap_menu:member") -

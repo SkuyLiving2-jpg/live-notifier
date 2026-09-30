@@ -93,6 +93,7 @@ test("GET /api/backup - request yang di-sign bener balikin agregasi semua storag
       recapSentWeek: null,
       recapSentMonth: null,
       digestSentDate: null, // §10's kelimapuluh+item, saran fitur ke-6
+      streakDates: {}, // catatan tanggal live jangka panjang buat streak
     });
     assert.deepEqual(data.customPriority, []);
     assert.deepEqual(data.subscriptions, {});

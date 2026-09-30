@@ -51,10 +51,21 @@ function computeCurrentStreak(sessionDates, todayWIB, isLiveNow = false) {
   return streak;
 }
 
+// Tanggal (WIB) hari PERTAMA streak yang lagi jalan, atau null kalau streak-nya 0.
+// Logika "hari ini keisi" SAMA persis kayak computeCurrentStreak (dipake buat
+// nentuin apakah datanya "mentok" di tanggal tertua yang kita punya).
+function computeStreakStartDate(sessionDates, todayWIB, isLiveNow = false) {
+  const streak = computeCurrentStreak(sessionDates, todayWIB, isLiveNow);
+  if (streak === 0) return null;
+  const dates = sessionDates instanceof Set ? sessionDates : new Set(sessionDates);
+  const anchor = isLiveNow || dates.has(todayWIB) ? todayWIB : shiftDateWIB(todayWIB, -1);
+  return shiftDateWIB(anchor, -(streak - 1));
+}
+
 // Ambang perayaan streak (hari) - notify/publicAlerts.js's
 // maybeAnnounceStreakMilestone cuma ngirim alert SEKALI per angka ini per
 // "putaran" streak yang lagi jalan (lihat storage/streaks.js's
 // lastAlertedStreak, yang direset begitu streak-nya keputus).
-const STREAK_MILESTONES = [3, 5, 7, 14, 21, 30, 50, 100];
+const STREAK_MILESTONES = [3, 5, 7, 14, 21, 30, 50, 100, 200, 365];
 
-module.exports = { computeCurrentStreak, shiftDateWIB, STREAK_MILESTONES };
+module.exports = { computeCurrentStreak, computeStreakStartDate, shiftDateWIB, STREAK_MILESTONES };

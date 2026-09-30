@@ -7,7 +7,7 @@ const {
   getCompletedSessionsToday,
   getCompletedSessionsSince,
   getCompletedSessionsForMonth,
-  getDistinctSessionDatesForMember,
+  getStreakDatesForMember,
 } = require("../storage/dailyLog");
 const { activeLives, saveActiveLives } = require("../storage/activeLives");
 const { loadSubscriptions } = require("../storage/subscriptions");
@@ -388,7 +388,7 @@ async function sendStreakMilestoneAlert(memberName, streak) {
 }
 
 async function maybeAnnounceStreakMilestone(username, memberName) {
-  const dates = getDistinctSessionDatesForMember(username);
+  const dates = getStreakDatesForMember(username);
   const streak = computeCurrentStreak(dates, getTodayWIB());
 
   // CATATAN: `streak === 0` di titik INI (tepat setelah monitor.js manggil
@@ -444,7 +444,7 @@ async function maybeCleanupBrokenStreaks() {
   const today = getTodayWIB();
   for (const username of Object.keys(alerts)) {
     if (activeLives.has(username)) continue;
-    const dates = getDistinctSessionDatesForMember(username);
+    const dates = getStreakDatesForMember(username);
     const streak = computeCurrentStreak(dates, today);
     if (streak === 0) clearStreakAlert(username);
   }
