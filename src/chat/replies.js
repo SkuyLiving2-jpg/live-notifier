@@ -9,6 +9,7 @@ const {
   AttachmentBuilder,
 } = require("discord.js");
 const { deleteInteractionMessage } = require("./interactionHelpers");
+const { pollHealth } = require("../pollHealth");
 const { getScheduleDigestCandidates, buildScheduleDigestPayload } = require("../notify/publicAlerts");
 const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
 const {
@@ -255,6 +256,11 @@ async function replyExportRecap(text) {
 }
 
 function replyBotStatus() {
+  // Bot hidup tapi polling IDN lagi gagal berturut-turut = notif live GAK bakal
+  // kekirim - "jalan normal" bakal bohong.
+  if (pollHealth.failures >= 3) {
+    return `⚠️ Bot hidup, TAPI polling ke IDN lagi gagal ${pollHealth.failures}x berturut-turut - live baru belum bisa kedeteksi sampai pulih. Lagi mantau ${activeLives.size} member yang live sekarang.`;
+  }
   return `✅ Bot jalan normal. Lagi mantau ${activeLives.size} member yang live sekarang.`;
 }
 

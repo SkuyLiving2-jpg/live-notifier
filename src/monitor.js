@@ -18,6 +18,8 @@ const {
   maybeAnnounceStreakMilestone,
   maybeCleanupBrokenStreaks,
 } = require("./notify/publicAlerts");
+const { sendOwnerDM } = require("./notify/ownerAlert");
+const { pollHealth } = require("./pollHealth");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
 // Berapa siklus polling BERTURUT-TURUT (~POLL_INTERVAL_MS/siklus, default 20
@@ -39,9 +41,47 @@ const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config")
 // sebelumnya).
 const ENDED_GRACE_POLLS = 2;
 
+// Polling IDN yang gagal itu cuma masuk log - kalau IDN berubah skema atau
+// down lama, bot DIAM-DIAM berhenti nyium live baru dan gak ada yang tau
+// sampai ada yang komplain. Setelah POLL_FAILURE_ALERT_MINUTES menit gagal
+// BERTURUT-TURUT, owner dikasih DM sekali (dan sekali lagi pas pulih).
+const POLL_FAILURE_ALERT_MINUTES = 5;
+
+function pollFailureThreshold() {
+  return Math.max(3, Math.ceil((POLL_FAILURE_ALERT_MINUTES * 60 * 1000) / POLL_INTERVAL_MS));
+}
+
+async function notePollFailure(error) {
+  pollHealth.failures += 1;
+  if (pollHealth.alerted || pollHealth.failures < pollFailureThreshold()) return;
+  pollHealth.alerted = true;
+  const minutes = Math.round((pollHealth.failures * POLL_INTERVAL_MS) / 60000);
+  await sendOwnerDM(
+    `⚠️ **Polling IDN gagal ${pollHealth.failures}x berturut-turut (~${minutes} menit).** Selama ini bot gak bisa mendeteksi live baru, jadi notif gak kekirim.
+Error terakhir: \`${String(error?.message || error).slice(0, 300)}\`
+Bot terus nyoba tiap siklus dan bakal ngabarin lagi pas pulih.`,
+  );
+}
+
+async function notePollSuccess() {
+  const wasAlerted = pollHealth.alerted;
+  const failures = pollHealth.failures;
+  pollHealth.failures = 0;
+  pollHealth.alerted = false;
+  pollHealth.lastSuccessAt = Date.now();
+  if (wasAlerted) await sendOwnerDM(`✅ Polling IDN pulih lagi (sempat gagal ${failures}x berturut-turut). Deteksi live jalan normal.`);
+}
+
 async function checkLiveMembers() {
   try {
-    const currentLives = await fetchAllLivestreams();
+    let currentLives;
+    try {
+      currentLives = await fetchAllLivestreams();
+    } catch (error) {
+      await notePollFailure(error);
+      throw error; // tetap dicatat catch luar di bawah, siklus ini berhenti
+    }
+    await notePollSuccess();
     const currentLiveUsernames = new Set();
     // Dibaca sekali per siklus polling (bukan sekali per member yang live)
     // biar nggak buka file yang sama berkali-kali kalau lagi banyak yang live.
@@ -249,4 +289,4 @@ function stopPolling() {
   }
 }
 
-module.exports = { checkLiveMembers, pollLoop, stopPolling, computeNextPollDelay };
+module.exports = { checkLiveMembers, pollLoop, stopPolling, computeNextPollDelay, pollHealth, pollFailureThreshold };

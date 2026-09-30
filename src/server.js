@@ -2,6 +2,7 @@ const http = require("http");
 const { requireSignedRequest } = require("./security");
 const { API_SECRET, PORT, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 const { activeLives } = require("./storage/activeLives");
+const { pollHealth } = require("./pollHealth");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
 const { loadDurationHistory, saveDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
 const { loadDailyLog, saveDailyLog, recordLiveEnded } = require("./storage/dailyLog");
@@ -34,6 +35,8 @@ function handleProtectedStatus(req, res) {
     JSON.stringify({
       status: "ok",
       uptimeSeconds: Math.floor(process.uptime()),
+      consecutivePollFailures: pollHealth.failures,
+      lastSuccessfulPollAt: pollHealth.lastSuccessAt ? new Date(pollHealth.lastSuccessAt).toISOString() : null,
       activeLivesCount: activeLives.size,
       activeLives: [...activeLives.values()].map((entry) => ({
         name: entry.name,
