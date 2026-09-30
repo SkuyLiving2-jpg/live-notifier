@@ -193,7 +193,22 @@ const PREV_PAGE_PATTERN = /^(mundur|balik|kembali|sebelumnya|prev|previous|back)
 // ada kasus itu di jalur chat-reply ini sekarang).
 function safeReplyOptions(reply) {
   const base = typeof reply === "string" ? { content: reply } : reply;
-  return { ...base, allowedMentions: { parse: [] } };
+  return { ...base, ...(typeof base.content === "string" ? { content: clampDiscordContent(base.content) } : {}), allowedMentions: { parse: [] } };
+}
+
+// Batas isi pesan Discord = 2000 karakter; lebih dari itu DITOLAK API tanpa
+// nampilin apa-apa ke user. Balasan bot sering nge-echo teks ketikan user
+// mentah (nama member gak ketemu, keyword, dst) - user Nitro bisa ngirim 4000
+// karakter, jadi balasannya bisa nembus batas. Dipotong di sini, satu tempat
+// yang dilewati SEMUA balasan; blok kode (```) yang kepotong ditutup biar sisa
+// pesan gak ke-render kacau.
+const DISCORD_CONTENT_LIMIT = 2000;
+
+function clampDiscordContent(content) {
+  if (content.length <= DISCORD_CONTENT_LIMIT) return content;
+  let cut = `${content.slice(0, DISCORD_CONTENT_LIMIT - 4)}…`;
+  if ((cut.match(/```/g) || []).length % 2 === 1) cut = `${content.slice(0, DISCORD_CONTENT_LIMIT - 8)}…\n\`\`\``;
+  return cut;
 }
 
 module.exports = {
@@ -221,4 +236,6 @@ module.exports = {
   NEXT_PAGE_PATTERN,
   PREV_PAGE_PATTERN,
   safeReplyOptions,
+  clampDiscordContent,
+  DISCORD_CONTENT_LIMIT,
 };

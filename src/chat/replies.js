@@ -9,6 +9,7 @@ const {
   AttachmentBuilder,
 } = require("discord.js");
 const { deleteInteractionMessage } = require("./interactionHelpers");
+const { getScheduleDigestCandidates, buildScheduleDigestPayload } = require("../notify/publicAlerts");
 const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
 const {
   getCompletedSessionsToday,
@@ -30,7 +31,7 @@ const {
   getLiveCountLeaderboard,
   getLongestNotLiveLeaderboard,
 } = require("../storage/liveCount");
-const { loadSubscriptions, addSubscription, removeSubscription } = require("../storage/subscriptions");
+const { loadSubscriptions, addSubscription, removeSubscription, KEYWORD_MAX_LENGTH } = require("../storage/subscriptions");
 const { loadGifterSnapshot, findGifterSnapshotByNameFragment } = require("../storage/gifterSnapshot");
 const { getAllPriorityMembers, addCustomPriorityMember, removeCustomPriorityMember } = require("../priority");
 const { loadAliases, addAlias, removeAlias, resolveAliasInFragment, validateAliasKey, ALIAS_MAX_LENGTH } = require("../storage/aliases");
@@ -2432,6 +2433,28 @@ function replySchedulePattern(fragment) {
   return lines.join("\n");
 }
 
+// "cok jadwal hari ini" - versi on-demand dari prediksi jadwal pagi hari
+// (notify/publicAlerts.js's maybeSendScheduleDigest, kandidat dari fungsi yang
+// sama). Sebelumnya "hari ini" kebaca sebagai NAMA member dan dijawab
+// "belum ada riwayat live buat 'hari ini'".
+const TODAY_SCHEDULE_WORDS = new Set(["hari ini", "hari", "hariini", "today", "sekarang", "nanti", "hari ini dong"]);
+
+function isTodayScheduleFragment(fragment) {
+  return TODAY_SCHEDULE_WORDS.has(
+    String(fragment || "")
+      .trim()
+      .replace(/[?!.\s]+$/, ""),
+  );
+}
+
+function replyScheduleToday(now = new Date()) {
+  const { candidates, todayWeekdayName } = getScheduleDigestCandidates(now);
+  return (
+    buildScheduleDigestPayload(candidates, todayWeekdayName) ||
+    `Cok, belum ada member yang pola jadwalnya cukup kuat buat ditebak live di hari ${todayWeekdayName} ini. Mau cek satu member? Ketik "jadwal <nama>".`
+  );
+}
+
 // PENTING: ini SNAPSHOT (foto sesaat), bukan live/real-time. Bot ini sendiri
 // nggak pernah manggil API top-gifter (butuh login pribadi) - datanya cuma
 // seakurat terakhir kali kamu jalanin "npm run cek-gifter" manual, jadi
@@ -2595,6 +2618,8 @@ function handleSubscribe(rawName, authorId) {
     const name = names[0] || stripTrailingLiveWord(rawName);
     const result = addSubscription(name, authorId);
     if (!result.ok && result.reason === "too_short") return "Nama membernya kependekan, minimal 3 huruf ya.";
+    if (!result.ok && result.reason === "too_long") return `Nama membernya kepanjangan, maksimal ${KEYWORD_MAX_LENGTH} huruf ya.`;
+    if (!result.ok && result.reason === "invalid") return "Nama itu gak bisa dipakai buat subscribe. Coba nama member yang lain ya.";
     if (!result.ok && result.reason === "already") return `Kamu udah subscribe notif buat "${name}" kok.`;
     if (!result.ok) return "Gagal subscribe, coba lagi.";
     return `🔔 Sip, kamu bakal di-tag tiap kali "${name}" mulai live!${unknownNameWarning([name])}`;
@@ -2603,10 +2628,12 @@ function handleSubscribe(rawName, authorId) {
   const added = [];
   const already = [];
   const tooShort = [];
+  const rejected = [];
   for (const name of names) {
     const result = addSubscription(name, authorId);
     if (result.ok) added.push(name);
     else if (result.reason === "already") already.push(name);
+    else if (result.reason === "too_long" || result.reason === "invalid") rejected.push(name.length > 20 ? `${name.slice(0, 20)}…` : name);
     else tooShort.push(name);
   }
   const quote = (list) => list.map((n) => `"${n}"`).join(", ");
@@ -2614,6 +2641,7 @@ function handleSubscribe(rawName, authorId) {
   if (added.length > 0) lines.push(`🔔 Sip, kamu bakal di-tag tiap kali ${quote(added)} mulai live!${unknownNameWarning(added)}`);
   if (already.length > 0) lines.push(`Udah subscribe dari tadi: ${quote(already)}.`);
   if (tooShort.length > 0) lines.push(`Kependekan (minimal 3 huruf): ${quote(tooShort)}.`);
+  if (rejected.length > 0) lines.push(`Gak valid (kepanjangan, maks ${KEYWORD_MAX_LENGTH} huruf): ${quote(rejected)}.`);
   return lines.join("\n");
 }
 
@@ -2690,6 +2718,8 @@ module.exports = {
   replyGifterSnapshot,
   replyGifterSnapshotByUsername,
   replyTodayRecapSoFar,
+  replyScheduleToday,
+  isTodayScheduleFragment,
   replyRecapRange,
   replyRecapMenu,
   replyRecapDatePicker,

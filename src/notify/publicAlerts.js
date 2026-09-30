@@ -139,9 +139,11 @@ async function maybeSendDailyRecap() {
 
   const payload = buildDailyRecapPayload(getCompletedSessionsToday(), today);
   if (payload) {
-    if (await postToWebhook(payload, "Gagal ngirim rekap harian:")) {
-      console.log("Rekap harian terkirim");
-    }
+    // Gagal kirim -> JANGAN ditandai "udah kekirim": dicoba lagi siklus
+    // berikutnya. Dulu ditandai tetap, jadi gangguan Discord sesaat di jam
+    // rekap bikin rekap hari itu hilang selamanya.
+    if (!(await postToWebhook(payload, "Gagal ngirim rekap harian:"))) return;
+    console.log("Rekap harian terkirim");
   }
 
   log.recapSentDate = today;
@@ -185,9 +187,8 @@ async function maybeSendWeeklyRecap(now = new Date()) {
 
   const payload = buildWeeklyRecapPayload(getCompletedSessionsSince(7));
   if (payload) {
-    if (await postToWebhook(payload, "Gagal ngirim rekap mingguan:")) {
-      console.log("Rekap mingguan terkirim");
-    }
+    if (!(await postToWebhook(payload, "Gagal ngirim rekap mingguan:"))) return; // dicoba lagi siklus berikutnya
+    console.log("Rekap mingguan terkirim");
   }
 
   log.recapSentWeek = todayKey;
@@ -204,9 +205,8 @@ async function maybeSendMonthlyRecap(now = new Date()) {
   const monthWIB = getTodayWIB().slice(0, 7); // bulan yang BENERAN lagi ditutup hari ini
   const payload = buildMonthlyRecapPayload(getCompletedSessionsForMonth(monthWIB), monthWIB);
   if (payload) {
-    if (await postToWebhook(payload, "Gagal ngirim rekap bulanan:")) {
-      console.log("Rekap bulanan terkirim");
-    }
+    if (!(await postToWebhook(payload, "Gagal ngirim rekap bulanan:"))) return; // dicoba lagi siklus berikutnya
+    console.log("Rekap bulanan terkirim");
   }
 
   log.recapSentMonth = todayKey;
@@ -249,13 +249,10 @@ function buildScheduleDigestPayload(candidates, todayWeekdayName) {
 // `now` opsional, sama alasannya kayak maybeSendWeeklyRecap/maybeSendMonthlyRecap
 // di atas (§10's thirty-ninth item) - biar gerbang jam/dedup-nya bisa dites
 // deterministik.
-async function maybeSendScheduleDigest(now = new Date()) {
-  if (getHourWIBOf(now) < SCHEDULE_DIGEST_HOUR) return;
-
-  const todayKey = getDateWIB(now);
-  const log = loadDailyLog();
-  if (log.digestSentDate === todayKey) return; // udah kekirim hari ini
-
+// Kandidat "kemungkinan live hari ini" - dipake digest otomatis pagi hari DAN
+// jawaban on-demand "cok jadwal hari ini" (chat/replies.js), biar dua-duanya
+// selalu sepakat soal siapa yang masuk daftar.
+function getScheduleDigestCandidates(now = new Date()) {
   const todayWeekdayName = WEEKDAY_FORMATTER_WIB.format(now);
   const history = loadDurationHistory();
   const candidates = [];
@@ -275,12 +272,21 @@ async function maybeSendScheduleDigest(now = new Date()) {
     candidates.push({ username, displayName: entries[entries.length - 1].name || username, pattern });
   }
   candidates.sort((a, b) => a.pattern.rangeMin - b.pattern.rangeMin); // yang diperkirakan PALING PAGI duluan
+  return { candidates, todayWeekdayName };
+}
 
+async function maybeSendScheduleDigest(now = new Date()) {
+  if (getHourWIBOf(now) < SCHEDULE_DIGEST_HOUR) return;
+
+  const todayKey = getDateWIB(now);
+  const log = loadDailyLog();
+  if (log.digestSentDate === todayKey) return; // udah kekirim hari ini
+
+  const { candidates, todayWeekdayName } = getScheduleDigestCandidates(now);
   const payload = buildScheduleDigestPayload(candidates, todayWeekdayName);
   if (payload) {
-    if (await postToWebhook(payload, "Gagal ngirim prediksi jadwal harian:")) {
-      console.log(`Prediksi jadwal harian terkirim (${candidates.length} member)`);
-    }
+    if (!(await postToWebhook(payload, "Gagal ngirim prediksi jadwal harian:"))) return; // dicoba lagi siklus berikutnya
+    console.log(`Prediksi jadwal harian terkirim (${candidates.length} member)`);
   }
   // Ditandai SELESAI hari ini walau `payload` null (gak ada kandidat sama
   // sekali) - sama pola-nya kayak maybeSendDailyRecap, biar gak dicoba
@@ -458,6 +464,7 @@ module.exports = {
   buildWeeklyRecapPayload,
   buildMonthlyRecapPayload,
   buildScheduleDigestPayload,
+  getScheduleDigestCandidates,
   isSundayWIB,
   isLastDayOfMonthWIB,
 };

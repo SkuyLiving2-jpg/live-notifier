@@ -56,6 +56,8 @@ const {
   replySchedulePattern,
   replyGifterSnapshot,
   replyTodayRecapSoFar,
+  replyScheduleToday,
+  isTodayScheduleFragment,
   replyRecapRange,
   replyRecapMenu,
   replyRecapDatePicker,
@@ -426,6 +428,9 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // (nama-nya "keapit" di antara kata "kapan" dan "live").
   const jadwalMatch = text.match(/jadwal\s+(.+)/);
   if (jadwalMatch) {
+    // "jadwal hari ini" = prediksi SIAPA yang kemungkinan live hari ini (bukan
+    // nama member "hari ini").
+    if (isTodayScheduleFragment(stripTrailingLiveWord(jadwalMatch[1]))) return withCloseButton(replyScheduleToday());
     return withCloseButton(replySchedulePattern(stripTrailingLiveWord(jadwalMatch[1])));
   }
 
@@ -632,7 +637,10 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     (containsWholeWord(text, "siapa") ||
       containsWholeWord(text, "list") ||
       containsWholeWord(text, "apa aja") ||
-      containsWholeWord(text, "ada berapa"))
+      containsWholeWord(text, "ada berapa") ||
+      // "ada yang live ga?" / "ada member live?" - dulu jatuh ke menu fallback
+      // padahal artinya sama persis kayak "siapa yang live".
+      /\bada\s+(?:yang|member|orang)\b/.test(text))
   ) {
     return replyListLive();
   }
@@ -649,6 +657,15 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // sama persis kayak "/cek" (replyCekMember). Nama yang ketangkep harus satu
   // kata dan bukan kata umum (MEMBER_QUERY_STOPWORDS), biar "siapa yang
   // live"/"status bot" dkk gak kebajak.
+  // "terakhir live nala kapan" / "nala terakhir live kapan" / "kapan nala terakhir
+  // live" - dulu "terakhir" kebaca sebagai NAMA member ("nggak nemu member 'terakhir'").
+  const lastLiveMatch =
+    commandText.match(/^(?:kapan\s+)?(?:terakhir|last)\s+live\s+([a-z0-9]+)/) ||
+    commandText.match(/^(?:kapan\s+)?([a-z0-9]+)\s+(?:terakhir|last)\s+live\b/);
+  if (lastLiveMatch && !MEMBER_QUERY_STOPWORDS.has(lastLiveMatch[1])) {
+    return replyCekMember(lastLiveMatch[1]);
+  }
+
   const memberQueryMatch =
     commandText.match(/^(?:cek|status)\s+(?:member\s+)?([a-z0-9]+)[?!.]*$/) ||
     commandText.match(/^(?:apakah\s+|apa\s+)?([a-z0-9]+)\s+(?:(?:masih|lagi|lg|sedang|udah|sudah)\s+)?live\b/);
@@ -715,6 +732,12 @@ async function replyWithFailureNotice(message, reply, error) {
 // start() setelah DISCORD_BOT_TOKEN dipastiin ada, JADI fungsi ini sendiri
 // gak nge-cek DISCORD_BOT_TOKEN lagi (itu tanggung jawab pemanggilnya).
 function wireDiscordEvents(client) {
+  // EventEmitter "error" TANPA listener = throw = proses mati (uncaughtException
+  // di app.js). Error koneksi gateway harus cukup dicatat - discord.js
+  // nyambung ulang sendiri.
+  client.on("error", (error) => console.error("Error koneksi Discord:", error.message));
+  client.on("shardError", (error) => console.error("Error shard Discord:", error.message));
+
   client.once("clientReady", () => {
     console.log(`Bot tanya-jawab login sebagai ${client.user.tag}`);
     // Panel role: dipasang/di-edit otomatis tiap boot (gak numpuk).

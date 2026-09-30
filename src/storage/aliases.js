@@ -44,6 +44,14 @@ function saveAliases(map) {
 // Alias/target dinormalisasi SEKALI di sini (lowercase+trim) - satu-satunya
 // tempat yang nulis ke file ini (handleAddAlias/handleRemoveAlias di
 // chat/replies.js), jadi gak perlu diulang normalisasi di pemanggil.
+// Lookup alias HARUS pakai hasOwnProperty - kata biasa kayak "constructor" atau
+// "toString" di kalimat user dulu ngambil fungsi bawaan Object ("in"/[] ikut
+// nelusur prototype) dan ketulis "function Object() { [native code] }" ke nama
+// yang dicari.
+function hasAlias(map, key) {
+  return Object.prototype.hasOwnProperty.call(map, key) && typeof map[key] === "string";
+}
+
 function normalizeAliasKey(text) {
   return (text || "").trim().toLowerCase();
 }
@@ -73,7 +81,7 @@ function addAlias(alias, target) {
   if (invalidReason) return { ok: false, reason: invalidReason };
 
   const map = loadAliases();
-  const previous = map[key] || null;
+  const previous = hasAlias(map, key) ? map[key] : null;
   map[key] = value;
   saveAliases(map);
   return { ok: true, previous };
@@ -82,7 +90,7 @@ function addAlias(alias, target) {
 function removeAlias(alias) {
   const key = normalizeAliasKey(alias);
   const map = loadAliases();
-  if (!(key in map)) return { ok: false };
+  if (!hasAlias(map, key)) return { ok: false };
   delete map[key];
   saveAliases(map);
   return { ok: true };
@@ -107,7 +115,7 @@ function resolveAliasInFragment(fragment) {
   return raw
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
-    .map((word) => map[word] || word)
+    .map((word) => (hasAlias(map, word) ? map[word] : word))
     .join(" ");
 }
 

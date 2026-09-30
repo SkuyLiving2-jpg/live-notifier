@@ -1,6 +1,31 @@
 const fs = require("fs");
 const path = require("path");
 
+// Tulis lewat file sementara lalu di-rename - kalau proses mati/kena SIGKILL di
+// TENGAH nulis (redeploy Railway, crash), file aslinya tetep utuh. Nulis
+// langsung ke file tujuan bisa ninggalin JSON setengah jadi; abis itu load()
+// nganggep file-nya "rusak", balik ke nilai default, dan tulis berikutnya
+// nimpa datanya selamanya.
+function writeFileAtomic(filePath, content) {
+  const tempPath = `${filePath}.tmp`;
+  fs.writeFileSync(tempPath, content);
+  fs.renameSync(tempPath, filePath);
+}
+
+// File ada tapi isinya bukan JSON valid: salinannya disimpen (*.corrupt-<waktu>)
+// sebelum kita fallback ke nilai default dan (nantinya) nimpa file aslinya -
+// biar datanya masih bisa diselamatin manual. File yang emang belum ada (ENOENT)
+// itu normal (pertama kali jalan), bukan korupsi.
+function preserveCorruptFile(filePath, error) {
+  if (error?.code === "ENOENT") return;
+  console.error(`File ${path.basename(filePath)} gak bisa dibaca (${error?.message}) - pakai nilai default, salinan file lama disimpen.`);
+  try {
+    fs.copyFileSync(filePath, `${filePath}.corrupt-${Date.now()}`);
+  } catch {
+    // salinan gagal dibuat - gak fatal
+  }
+}
+
 // Factory generik buat file JSON yang di-cache di memori (biar nggak baca
 // file yang sama berkali-kali dari disk) dengan fallback ke `defaultValue`
 // kalau file belum ada/rusak, dan auto-mkdir pas nulis. Dedup dari pola
@@ -21,7 +46,8 @@ function createJsonStore(filePath, defaultValue, { errorLabel } = {}) {
     if (!hasCache) {
       try {
         cache = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      } catch {
+      } catch (error) {
+        preserveCorruptFile(filePath, error);
         cache = typeof defaultValue === "function" ? defaultValue() : defaultValue;
       }
       hasCache = true;
@@ -39,7 +65,7 @@ function createJsonStore(filePath, defaultValue, { errorLabel } = {}) {
   function save(value) {
     try {
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+      writeFileAtomic(filePath, JSON.stringify(value, null, 2));
       cache = value;
       hasCache = true;
     } catch (error) {
@@ -50,4 +76,4 @@ function createJsonStore(filePath, defaultValue, { errorLabel } = {}) {
   return { load, save };
 }
 
-module.exports = { createJsonStore };
+module.exports = { createJsonStore, writeFileAtomic, preserveCorruptFile };

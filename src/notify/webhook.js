@@ -33,6 +33,9 @@ const MAX_RATE_LIMIT_RETRIES = 3;
 // (semua pemanggil postToWebhook di-await, jadi delay di sini nunda proses
 // member berikutnya di siklus yang sama juga).
 const MAX_RATE_LIMIT_WAIT_MS = 5000;
+// Batas waktu tiap request ke Discord - semua pemanggil di-await di siklus
+// polling, jadi webhook yang nyangkut gak boleh nahan deteksi live berikutnya.
+const WEBHOOK_TIMEOUT_MS = 10000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,6 +83,7 @@ async function sendWebhookRequest(method, url, body, errorLabel) {
         method,
         headers: { "Content-Type": "application/json" },
         body,
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
       });
 
       if (response.ok) return response;

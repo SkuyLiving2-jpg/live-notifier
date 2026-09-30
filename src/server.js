@@ -7,7 +7,11 @@ const { loadDurationHistory, saveDurationHistory, recordLiveDurationAt } = requi
 const { loadDailyLog, saveDailyLog, recordLiveEnded } = require("./storage/dailyLog");
 const { loadCustomPriorityMembers } = require("./storage/priorityStore");
 const { loadSubscriptions } = require("./storage/subscriptions");
-const { rebuildLiveCountFromSessions } = require("./storage/liveCount");
+const { rebuildLiveCountFromSessions, loadLiveCount } = require("./storage/liveCount");
+const { loadAliases } = require("./storage/aliases");
+const { loadStreakAlerts } = require("./storage/streaks");
+const { loadMemberRoles } = require("./storage/memberRoles");
+const { loadRolePanelState } = require("./storage/rolePanelState");
 const { loadChannelRouting, saveChannelRouting } = require("./storage/channelRouting");
 
 // Format webhook Discord yang valid - dipake buat nolak entry yang jelas
@@ -158,6 +162,14 @@ function handleBackupExport(req, res) {
       subscriptions: loadSubscriptions(),
       gifterSnapshot: loadGifterSnapshot(),
       channelRouting: loadChannelRouting(),
+      // Ditambahin belakangan - dulu gak ikut ke-backup, padahal ilang sama
+      // parahnya (total live all-time, alias, milestone streak, daftar role
+      // notif + ID pesan panel role).
+      liveCount: loadLiveCount(),
+      aliases: loadAliases(),
+      streakAlerts: loadStreakAlerts(),
+      memberRoles: loadMemberRoles(),
+      rolePanel: loadRolePanelState(),
     }),
   );
 }

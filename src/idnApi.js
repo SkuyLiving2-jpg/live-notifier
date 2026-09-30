@@ -17,6 +17,10 @@ function isJkt48Member(creator) {
 // (biasanya yang lebih baru mulai) bisa nangkring di halaman 2+ dan nggak
 // pernah kedeteksi. Jadi kita ambil terus tiap halaman sampai kosong.
 const MAX_LIVESTREAM_PAGES = 20; // jaga-jaga biar nggak infinite loop
+// Batas waktu per request ke IDN. Tanpa ini fetch yang nyangkut (IDN gak
+// jawab tapi koneksi gak putus) bisa nahan siklus polling sampai timeout
+// bawaan Node (~5 menit) - selama itu gak ada notif live yang kedeteksi.
+const LIVESTREAM_FETCH_TIMEOUT_MS = 15000;
 
 async function fetchAllLivestreams() {
   const query = `
@@ -45,6 +49,7 @@ async function fetchAllLivestreams() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ query, variables: { page } }),
+      signal: AbortSignal.timeout(LIVESTREAM_FETCH_TIMEOUT_MS),
     });
 
     if (!response.ok) {

@@ -3,6 +3,7 @@ const path = require("path");
 const { CACHE_DIR } = require("../config");
 const { matchesNameFragment } = require("../utils");
 const { resolveAliasInFragment } = require("./aliases");
+const { writeFileAtomic, preserveCorruptFile } = require("./jsonStore");
 
 // Cache buat nyimpen member yang lagi live: username -> { name, username, slug, ... }
 // Disimpan juga ke file (CACHE_FILE) biar kalau proses restart (crash, atau
@@ -20,7 +21,8 @@ function loadActiveLives() {
   try {
     const raw = fs.readFileSync(CACHE_FILE, "utf-8");
     return new Map(Object.entries(JSON.parse(raw)));
-  } catch {
+  } catch (error) {
+    preserveCorruptFile(CACHE_FILE, error);
     return new Map();
   }
 }
@@ -30,7 +32,7 @@ const activeLives = loadActiveLives();
 function saveActiveLives() {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(Object.fromEntries(activeLives), null, 2));
+    writeFileAtomic(CACHE_FILE, JSON.stringify(Object.fromEntries(activeLives), null, 2));
   } catch (error) {
     console.error("Gagal nyimpen cache ke file:", error.message);
   }

@@ -59,6 +59,10 @@ function requireSignedRequest(secret, handler) {
   return (req, res) => {
     let body = "";
     let tooLarge = false;
+    // Body di-decode sebagai UTF-8 UTUH per stream - tanpa ini, karakter
+    // multi-byte (nama member non-ASCII) yang kebetulan kepotong di batas chunk
+    // jadi rusak, dan signature HMAC-nya gak cocok (401 acak di payload besar).
+    req.setEncoding?.("utf8");
     req.on("data", (chunk) => {
       if (tooLarge) return;
       body += chunk;

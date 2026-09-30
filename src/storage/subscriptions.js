@@ -17,13 +17,27 @@ function saveSubscriptions(map) {
   store.save(map);
 }
 
+// Keyword datang dari teks bebas siapa aja di chat. Batas panjang biar file
+// gak bisa digembungin ("ingetin aaaa...3000 huruf"), dan lookup PAKAI
+// hasOwnProperty: keyword kayak "constructor"/"toString" dulu ngambil fungsi
+// bawaan Object dari `subs[keyword]` (bukan array) lalu meledak di
+// list.includes(...), sementara "__proto__" malah ngubah prototype-nya.
+const KEYWORD_MAX_LENGTH = 40;
+const RESERVED_KEYWORDS = new Set(["__proto__"]);
+
+function listFor(subs, keyword) {
+  return Object.prototype.hasOwnProperty.call(subs, keyword) && Array.isArray(subs[keyword]) ? subs[keyword] : [];
+}
+
 function addSubscription(rawKeyword, userId) {
   const keyword = (rawKeyword || "").trim().toLowerCase();
   if (!keyword) return { ok: false, reason: "empty" };
   if (keyword.length < 3) return { ok: false, reason: "too_short" };
+  if (keyword.length > KEYWORD_MAX_LENGTH) return { ok: false, reason: "too_long" };
+  if (RESERVED_KEYWORDS.has(keyword)) return { ok: false, reason: "invalid" };
 
   const subs = loadSubscriptions();
-  const list = subs[keyword] || [];
+  const list = listFor(subs, keyword);
   if (list.includes(userId)) return { ok: false, reason: "already" };
 
   list.push(userId);
@@ -35,7 +49,7 @@ function addSubscription(rawKeyword, userId) {
 function removeSubscription(rawKeyword, userId) {
   const keyword = (rawKeyword || "").trim().toLowerCase();
   const subs = loadSubscriptions();
-  const list = subs[keyword] || [];
+  const list = listFor(subs, keyword);
   const filtered = list.filter((id) => id !== userId);
   if (filtered.length === list.length) return { ok: false, reason: "not_found" };
 
@@ -45,4 +59,4 @@ function removeSubscription(rawKeyword, userId) {
   return { ok: true };
 }
 
-module.exports = { loadSubscriptions, saveSubscriptions, addSubscription, removeSubscription };
+module.exports = { loadSubscriptions, saveSubscriptions, addSubscription, removeSubscription, KEYWORD_MAX_LENGTH };

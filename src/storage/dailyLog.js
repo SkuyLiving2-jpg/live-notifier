@@ -55,16 +55,26 @@ function getTodayWIBRangeUnix() {
 // lokal doang - ini FITUR TAMBAHAN, bukan dependency yang bisa bikin bot mati.
 const EXTERNAL_LIVE_HISTORY_BASE_URL = "https://raw.githubusercontent.com/rznive/JKT48Live-Record/main/data/idn";
 
+// Fungsi ini dipanggil dari tombol/menu Discord juga (rekap hari ini), yang
+// WAJIB dijawab dalam ~3 detik - jadi timeout-nya pendek (2 detik), dan hasil
+// terakhir yang berhasil disimpen sebentar: klik berulang gak nembak GitHub
+// terus, dan kalau GitHub lagi lemot kita pakai hasil lama (kalau masih baru)
+// daripada bikin interaksinya kedaluwarsa. Arsip ini cuma pelengkap - gagal
+// total pun rekap tetap jalan dari data lokal.
+const EXTERNAL_FETCH_TIMEOUT_MS = 2000;
+const EXTERNAL_CACHE_FRESH_MS = 60 * 1000;
+const EXTERNAL_CACHE_STALE_OK_MS = 15 * 60 * 1000;
+let externalCache = null; // { monthKey, at, allEntries }
+
+function resetExternalHistoryCache() {
+  externalCache = null;
+}
+
 async function fetchExternalTodayLiveHistory() {
-  try {
-    const [year, month] = getTodayWIB().split("-");
-    const url = `${EXTERNAL_LIVE_HISTORY_BASE_URL}/${year}-${month}.json`;
-    const response = await fetch(url);
-    if (!response.ok) return null; // wajar kalau bulan berjalan belum ke-commit filenya
-
-    const allEntries = await response.json();
-    if (!Array.isArray(allEntries)) return null;
-
+  const [year, month] = getTodayWIB().split("-");
+  const monthKey = `${year}-${month}`;
+  const cachedFor = () => (externalCache && externalCache.monthKey === monthKey ? externalCache : null);
+  const filterToday = (allEntries) => {
     const { startSec, endSec } = getTodayWIBRangeUnix();
     return allEntries.filter(
       (e) =>
@@ -74,8 +84,24 @@ async function fetchExternalTodayLiveHistory() {
         e.live_at_unix >= startSec &&
         e.live_at_unix < endSec,
     );
+  };
+
+  const fresh = cachedFor();
+  if (fresh && Date.now() - fresh.at < EXTERNAL_CACHE_FRESH_MS) return filterToday(fresh.allEntries);
+
+  try {
+    const response = await fetch(`${EXTERNAL_LIVE_HISTORY_BASE_URL}/${monthKey}.json`, { signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS) });
+    if (!response.ok) return null; // wajar kalau bulan berjalan belum ke-commit filenya
+
+    const allEntries = await response.json();
+    if (!Array.isArray(allEntries)) return null;
+
+    externalCache = { monthKey, at: Date.now(), allEntries };
+    return filterToday(allEntries);
   } catch (error) {
     console.error("Gagal ambil arsip live eksternal (nggak fatal, rekap tetap jalan pakai data lokal):", error.message);
+    const stale = cachedFor();
+    if (stale && Date.now() - stale.at < EXTERNAL_CACHE_STALE_OK_MS) return filterToday(stale.allEntries);
     return null;
   }
 }
@@ -220,6 +246,7 @@ module.exports = {
   saveDailyLog,
   getTodayWIBRangeUnix,
   fetchExternalTodayLiveHistory,
+  resetExternalHistoryCache,
   getCompletedSessionsToday,
   getCompletedSessionsForDate,
   getCompletedSessionsSince,
