@@ -34,6 +34,10 @@ const MAX_MENUS = 4;
 const ROLE_REASON = "Notif live JKT48 (panel role)";
 const ALL_ROLE_NAME = "all-live";
 
+// Owner udah bisa lihat semua channel, jadi role "semua member" gak ada gunanya
+// dan gak boleh kepencet ("kepencet ke semua member" - laporan owner).
+const OWNER_NO_ALL_ROLE_NOTE = '👑 Kamu owner - udah bisa lihat semua channel, jadi gak perlu role "semua member" (gak aku kasih ya).';
+
 // Channel live semua member (buat link "<#id>" abis user aktifin notif semua).
 // Dari env ALL_LIVE_CHANNEL_ID, atau dicari dari DISCORD_WEBHOOK_URL - info
 // webhook (GET tanpa auth) ngasih channel_id-nya. Gagal -> null, link-nya aja
@@ -194,15 +198,17 @@ async function resolveRole(guild, roleId) {
 // jawab "Tidak" layar dibangun ulang dengan askAll=false (dibawa lewat suffix
 // ":q0" di customId dropdown/tombol, jadi stateless) dan gantinya cuma ada
 // petunjuk "ketik notif live semua" - gak nanya lagi terus-terusan.
-function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasRole(member, roleId), { askAll = true } = {}) {
+function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasRole(member, roleId), { askAll = true, owner = false } = {}) {
   const allOn = hasRole(getRoleIdFor(ALL_MEMBERS_KEY));
-  const showAsk = askAll && !allOn;
+  const showAsk = askAll && !allOn && !owner;
   const suffix = askAll ? "" : ":q0";
   const buttons = [
     new ButtonBuilder().setCustomId("role_flow:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`role_flow:clearall${suffix}`).setLabel("🔕 Matikan semua").setStyle(ButtonStyle.Secondary),
   ];
-  if (showAsk) {
+  if (owner) {
+    // Owner: gak ada pertanyaan/toggle "semua member" sama sekali.
+  } else if (showAsk) {
     buttons.push(
       new ButtonBuilder().setCustomId("role_flow:allyes").setLabel("✅ Ya, sekalian semua member").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("role_flow:allno").setLabel("Tidak, cukup segini").setStyle(ButtonStyle.Secondary),
@@ -248,6 +254,8 @@ function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasR
   if (showAsk) {
     extra =
       "\n\n❓ Mau sekalian dapet notif live **SEMUA** member (dan akses channel-nya)? Kalau nggak mau, gak apa-apa - kamu tetap dapet member pilihanmu.";
+  } else if (owner) {
+    extra = `\n\n👑 Kamu owner - udah bisa lihat semua channel, jadi role "semua member" gak perlu.${allOn ? ' Kamu masih megang role-nya - klik "🔕 Matikan semua" buat ngelepas.' : ""}`;
   } else if (!allOn) {
     extra = '\n\n💡 Kepo sama live member lain? Ketik "notif live semua" kapan aja, nanti ditanya lagi dan bisa langsung aktif.';
   }
@@ -291,7 +299,12 @@ function describeRoleError(error) {
 async function handleRoleFlowButton(interaction) {
   const [, action, extra] = interaction.customId.split(":");
   if (action === "open") {
-    await interaction.reply(safeReplyOptions({ ...buildSettingsScreen(interaction.member), flags: MessageFlags.Ephemeral }));
+    await interaction.reply(
+      safeReplyOptions({
+        ...buildSettingsScreen(interaction.member, "", undefined, { owner: isOwner(interaction.user.id) }),
+        flags: MessageFlags.Ephemeral,
+      }),
+    );
     return;
   }
   if (action === "close") {
@@ -313,6 +326,10 @@ async function handleAllFromPanel(interaction) {
   const { member, guild } = interaction;
   if (!member || !guild) {
     await interaction.editReply(safeReplyOptions({ content: "Cok, panel role cuma jalan di dalam server." }));
+    return;
+  }
+  if (isOwner(interaction.user.id)) {
+    await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, OWNER_NO_ALL_ROLE_NOTE, undefined, { askAll: false, owner: true })));
     return;
   }
   let note;
@@ -340,6 +357,11 @@ async function handleAllToggle(interaction) {
   }
   const currentId = getRoleIdFor(ALL_MEMBERS_KEY);
   const isOn = memberHasRole(member, currentId);
+  // Owner gak boleh NGAKTIFIN role ini (tapi kalau udah kepegang, boleh dilepas).
+  if (isOwner(interaction.user.id) && !isOn) {
+    await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, OWNER_NO_ALL_ROLE_NOTE, undefined, { askAll: false, owner: true })));
+    return;
+  }
   let note;
   let finalOn = isOn;
   try {
@@ -371,6 +393,10 @@ async function handleAllYes(interaction) {
     await interaction.editReply(safeReplyOptions({ content: "Cok, panel role cuma jalan di dalam server.", components: [] }));
     return;
   }
+  if (isOwner(interaction.user.id)) {
+    await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, OWNER_NO_ALL_ROLE_NOTE, undefined, { askAll: false, owner: true })));
+    return;
+  }
   let note;
   let allRoleId = getRoleIdFor(ALL_MEMBERS_KEY);
   try {
@@ -390,7 +416,9 @@ async function handleAllYes(interaction) {
 async function handleAllNo(interaction) {
   const note =
     'Oke, gak masalah! 👍 Kalau nanti kepo sama live member lain, tinggal ketik "notif live semua" - nanti ditanya lagi dan bisa langsung aktif.';
-  await interaction.update(safeReplyOptions(buildSettingsScreen(interaction.member, note, undefined, { askAll: false })));
+  await interaction.update(
+    safeReplyOptions(buildSettingsScreen(interaction.member, note, undefined, { askAll: false, owner: isOwner(interaction.user.id) })),
+  );
 }
 
 // Konfirmasi "notif live semua" yang DIKETIK ("Yakin?" + Ya/Tidak). customId
@@ -428,6 +456,10 @@ async function handleAllConfirm(interaction, askerId, isYes) {
   const closeRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("reply_close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
   );
+  if (isOwner(interaction.user.id)) {
+    await interaction.editReply(safeReplyOptions({ content: OWNER_NO_ALL_ROLE_NOTE, components: [closeRow] }));
+    return;
+  }
   let content;
   try {
     const allRoleId = await ensureAllRole(guild);
@@ -458,7 +490,12 @@ async function handleRoleClearAll(interaction, askAll = true) {
     owned.clear();
   }
   await interaction.editReply(
-    safeReplyOptions(buildSettingsScreen(member, note, (roleId) => memberHasRole(member, roleId) && !owned.has(roleId), { askAll })),
+    safeReplyOptions(
+      buildSettingsScreen(member, note, (roleId) => memberHasRole(member, roleId) && !owned.has(roleId), {
+        askAll,
+        owner: isOwner(interaction.user.id),
+      }),
+    ),
   );
 }
 
@@ -523,7 +560,7 @@ async function handleRoleFlowSelect(interaction) {
   const addSet = new Set(toAdd);
   const removeSet = new Set(toRemove);
   const hasRole = (roleId) => (memberHasRole(member, roleId) || addSet.has(roleId)) && !removeSet.has(roleId);
-  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole, { askAll })));
+  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole, { askAll, owner: isOwner(interaction.user.id) })));
 }
 
 // ==== Perintah owner: daftarin role member ====
@@ -605,6 +642,7 @@ module.exports = {
   syncRolePanelOnBoot,
   buildAllLiveConfirm,
   resetAllLiveChannelCache,
+  OWNER_NO_ALL_ROLE_NOTE,
   buildSettingsScreen,
   handleRoleFlowButton,
   handleRoleFlowSelect,

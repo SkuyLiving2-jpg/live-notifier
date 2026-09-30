@@ -8,6 +8,7 @@ const { recordLiveCompleted } = require("../src/storage/liveCount");
 const { loadMemberRoles, setRoleIdFor, getRoleIdFor, clearRoleFor, ALL_MEMBERS_KEY } = require("../src/storage/memberRoles");
 const { addSubscription } = require("../src/storage/subscriptions");
 const { sendDiscordNotif } = require("../src/notify/liveNotify");
+const { saveChannelRouting } = require("../src/storage/channelRouting");
 const {
   buildRolePanel,
   syncRolePanel,
@@ -74,14 +75,14 @@ function fakeMember(initialRoleIds = [], { failWith = null } = {}) {
   };
 }
 
-function fakeInteraction({ customId, values = [], member, guild } = {}) {
+function fakeInteraction({ customId, values = [], member, guild, userId = "u-role" } = {}) {
   const log = { replies: [], edits: [], updates: [], deferred: 0, deferredReply: 0 };
   return {
     customId,
     values,
     member,
     guild,
-    user: { id: "u-role" },
+    user: { id: userId },
     log,
     reply: async (p) => log.replies.push(p),
     update: async (p) => log.updates.push(p),
@@ -704,4 +705,133 @@ test("konfirmasi Ya/Tidak dari ORANG LAIN (bukan yang minta) ditolak ephemeral, 
   assert.match(interaction.log.replies[0].content, /buat orang yang minta/);
   assert.equal(member.calls.add.length, 0);
   assert.equal(interaction.log.deferred, 0);
+});
+
+// ==== Owner gak perlu (dan gak boleh kepencet) role semua member ====
+const OWNER = "owner-role";
+
+test("owner klik '🔔 Semua member' di panel -> TIDAK dapet role, dijelasin kenapa, layar tanpa pertanyaan/toggle semua", async () => {
+  seedRoles();
+  const guild = fakeGuild();
+  const member = fakeMember();
+  const interaction = fakeInteraction({ customId: "role_flow:all", member, guild, userId: OWNER });
+  await handleRoleFlowButton(interaction);
+  assert.equal(member.calls.add.length, 0);
+  assert.equal(guild.created.length, 0, "role all-live gak boleh dibikin cuma gara-gara owner klik");
+  const edit = interaction.log.edits[0];
+  assert.match(edit.content, /Kamu owner/);
+  assert.deepEqual(ids(edit.components[edit.components.length - 1]), ["role_flow:close", "role_flow:clearall:q0"]);
+  assert.doesNotMatch(edit.content, /Mau sekalian/);
+});
+
+test("owner: 'Ya sekalian', toggle (saat belum punya), dan konfirmasi 'notif live semua' semuanya ditolak tanpa nambah role", async () => {
+  seedRoles();
+  for (const [customId, isConfirm] of [
+    ["role_flow:allyes", false],
+    ["role_flow:alltoggle", false],
+    [`role_flow:confirmyes:${OWNER}`, true],
+  ]) {
+    const guild = fakeGuild();
+    const member = fakeMember();
+    const interaction = fakeInteraction({ customId, member, guild, userId: OWNER });
+    await handleRoleFlowButton(interaction);
+    assert.equal(member.calls.add.length, 0, customId);
+    assert.equal(guild.created.length, 0, customId);
+    assert.match(interaction.log.edits[0].content, /Kamu owner/, `${customId} (${isConfirm})`);
+  }
+});
+
+test("owner yang UDAH kepencet dapet role all-live: layar bilang masih megang, 'Matikan semua' melepasnya; toggle boleh dipakai buat matiin", async () => {
+  seedRoles();
+  setRoleIdFor(ALL_MEMBERS_KEY, "role-all");
+  const member = fakeMember(["role-all"]);
+
+  const open = fakeInteraction({ customId: "role_flow:open", member, guild: fakeGuild(), userId: OWNER });
+  await handleRoleFlowButton(open);
+  assert.match(open.log.replies[0].content, /masih megang role-nya/);
+
+  const clear = fakeInteraction({ customId: "role_flow:clearall", member, guild: fakeGuild(), userId: OWNER });
+  await handleRoleFlowButton(clear);
+  assert.deepEqual(member.calls.remove[0], ["role-all"]);
+  assert.equal(member.roles.cache.has("role-all"), false);
+});
+
+test("owner: dropdown pilih member tetap jalan normal (cuma role semua member yang diblok), tanpa pertanyaan 'sekalian semua'", async () => {
+  seedRoles();
+  const guild = guildWithMemberRoles();
+  const member = fakeMember();
+  const interaction = fakeInteraction({ customId: "role_select:0", values: ["jkt48_rolealpha"], member, guild, userId: OWNER });
+  await handleRoleFlowSelect(interaction);
+  assert.deepEqual(member.calls.add, [["role-alpha"]]);
+  assert.doesNotMatch(interaction.log.edits[0].content, /Mau sekalian/);
+});
+
+// ==== Ping role per channel: all-live cuma di channel gabungan, role member cuma di channel khususnya ====
+async function captureByUrl(name, username) {
+  const original = global.fetch;
+  const byUrl = {};
+  global.fetch = async (url, options) => {
+    (byUrl[url] ||= []).push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await sendDiscordNotif(name, username, "slug", "start", null, null);
+  } finally {
+    global.fetch = original;
+  }
+  return byUrl;
+}
+
+test("member PUNYA channel khusus: channel gabungan cuma nge-ping all-live, channel khusus (#aralie) cuma nge-ping role member - all-live GAK ikut ke channel khusus", async () => {
+  resetRoles();
+  setRoleIdFor(ALL_MEMBERS_KEY, "900");
+  setRoleIdFor("jkt48_splitping", "800");
+  saveChannelRouting({ jkt48_splitping: "https://discord.com/api/webhooks/777/dedicated-splitping" });
+  try {
+    const byUrl = await captureByUrl("Splitping", "jkt48_splitping");
+    const shared = byUrl[process.env.DISCORD_WEBHOOK_URL][0];
+    const dedicated = byUrl["https://discord.com/api/webhooks/777/dedicated-splitping"][0];
+
+    assert.match(shared.content, /<@&900> lagi live nih!/);
+    assert.doesNotMatch(shared.content, /<@&800>/);
+    assert.deepEqual(shared.allowed_mentions, { roles: ["900"] });
+
+    assert.match(dedicated.content, /<@&800> lagi live nih!/);
+    assert.doesNotMatch(dedicated.content, /<@&900>/, "all-live gak boleh nongol di channel khusus member");
+    assert.deepEqual(dedicated.allowed_mentions, { roles: ["800"] });
+  } finally {
+    saveChannelRouting({});
+  }
+});
+
+test("member PUNYA channel khusus tapi belum ada role member: channel khusus gak nge-ping role apapun; gabungan tetap all-live", async () => {
+  resetRoles();
+  setRoleIdFor(ALL_MEMBERS_KEY, "900");
+  saveChannelRouting({ jkt48_norolededicated: "https://discord.com/api/webhooks/778/dedicated-norole" });
+  try {
+    const byUrl = await captureByUrl("Norolededicated", "jkt48_norolededicated");
+    const dedicated = byUrl["https://discord.com/api/webhooks/778/dedicated-norole"][0];
+    assert.doesNotMatch(dedicated.content, /<@&/);
+    assert.deepEqual(dedicated.allowed_mentions, { parse: [] });
+    assert.match(byUrl[process.env.DISCORD_WEBHOOK_URL][0].content, /<@&900>/);
+  } finally {
+    saveChannelRouting({});
+  }
+});
+
+test("subscriber 'cok ingetin' tetap di-tag di KEDUA channel (tag pribadi), sementara role dipisah per channel", async () => {
+  resetRoles();
+  setRoleIdFor(ALL_MEMBERS_KEY, "900");
+  setRoleIdFor("jkt48_subsplit", "800");
+  addSubscription("subsplit", "u-subsplit");
+  saveChannelRouting({ jkt48_subsplit: "https://discord.com/api/webhooks/779/dedicated-subsplit" });
+  try {
+    const byUrl = await captureByUrl("Subsplit", "jkt48_subsplit");
+    const shared = byUrl[process.env.DISCORD_WEBHOOK_URL][0];
+    const dedicated = byUrl["https://discord.com/api/webhooks/779/dedicated-subsplit"][0];
+    assert.deepEqual(shared.allowed_mentions, { users: ["u-subsplit"], roles: ["900"] });
+    assert.deepEqual(dedicated.allowed_mentions, { users: ["u-subsplit"], roles: ["800"] });
+  } finally {
+    saveChannelRouting({});
+  }
 });

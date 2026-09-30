@@ -71,3 +71,9 @@ test("kalimat lain yang cuma MENGANDUNG 'notif live semua' TIDAK dibajak jadi ko
     assert.doesNotMatch(JSON.stringify(reply), /confirmyes/, text);
   }
 });
+
+test("owner mengetik 'notif live semua' -> dijelasin gak perlu (tanpa tombol Ya/Tidak)", async () => {
+  const reply = await buildChatReply("notif live semua", { isBotChannel: false, channelId: "c-biasa", authorId: "owner-role-test" });
+  assert.equal(typeof reply, "string");
+  assert.match(reply, /Kamu owner/);
+});

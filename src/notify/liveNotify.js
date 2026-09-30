@@ -66,6 +66,28 @@ function getSubscribersFor(memberName, username) {
   return [...ids];
 }
 
+// Salinan payload dengan baris mention: subscriber "cok ingetin" (tag pribadi)
+// dan/atau role (panel role, chat/roleFlow.js). Gak ada satupun -> payload asli.
+function withMentions(payload, subscriberIds, roleIds) {
+  const roles = roleIds.filter((id, i, all) => id && all.indexOf(id) === i);
+  const lines = [];
+  const allowedMentions = {};
+  if (subscriberIds.length > 0) {
+    lines.push(`${subscriberIds.map((id) => `<@${id}>`).join(" ")} kamu subscribe notif buat member ini!`);
+    // Satu-satunya mention yang BENERAN dimaksud di jalur ini - scoped
+    // eksplisit ke ID subscriber doang (lihat webhook.js's
+    // withDefaultMentionGuard), biar CUMA mereka yang ke-ping walau
+    // memberName kebetulan ngandung teks semacam "@everyone".
+    allowedMentions.users = subscriberIds;
+  }
+  if (roles.length > 0) {
+    lines.push(`${roles.map((id) => `<@&${id}>`).join(" ")} lagi live nih!`);
+    allowedMentions.roles = roles;
+  }
+  if (lines.length === 0) return payload;
+  return { ...payload, content: [payload.content, ...lines].join("\n"), allowed_mentions: allowedMentions };
+}
+
 // liveAt (opsional) - jam mulai ASLI dari IDN (field live_at di
 // getLivestreams, dikirim monitor.js cuma pas status "start"). Status "end"
 // gak butuh ini - jam selesainya selalu "sekarang" (kapan bot NGEDETEK live
@@ -90,37 +112,31 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   const timestamp = status === "start" && parsedLiveAt && !Number.isNaN(parsedLiveAt.getTime()) ? parsedLiveAt : new Date();
   const payload = buildNormalPayload(memberName, liveUrl, status, priority, imageUrl, timestamp);
 
+  // Channel KHUSUS member ini (fitur "Q2", storage/channelRouting.js). Dihitung
+  // DULUAN karena nentuin role mana yang di-ping di channel mana (di bawah).
+  const dedicatedWebhookUrl = getChannelWebhookFor(username);
+
+  // Mention buat notif START (dua channel BEDA isinya, jangan disamain):
+  // - channel GABUNGAN: role "notif SEMUA member" (all-live). Role member cuma
+  //   ikut kalau member ini GAK punya channel khusus (kalau punya, role member
+  //   di-ping di channel khususnya - di gabungan orangnya belum tentu bisa
+  //   lihat).
+  // - channel KHUSUS: cuma role member itu. Dulu payload yang SAMA (termasuk
+  //   ping all-live) dikirim ke dua-duanya, jadi channel #aralie-jkt48 nge-tag
+  //   "semua member" juga.
+  // Subscriber "cok ingetin" tetep di-tag di dua-duanya (tag pribadi, bukan role).
+  let sharedPayload = payload;
+  let dedicatedPayload = payload;
   if (status === "start") {
     const subscriberIds = getSubscribersFor(memberName, username);
-    // Role notif member ini (panel role, chat/roleFlow.js) - di-ping juga kalau
-    // ada, bareng subscriber "cok ingetin" (dua jalur ini independen).
-    // + role "notif SEMUA member" (kalau ada) - satu pesan, Discord cuma ngasih
-    // satu notif walau orangnya punya dua-duanya.
-    const roleIds = [getRoleIdFor(username), getRoleIdFor(ALL_MEMBERS_KEY)].filter((id, i, all) => id && all.indexOf(id) === i);
-    const lines = [];
-    const allowedMentions = {};
-    if (subscriberIds.length > 0) {
-      const mentions = subscriberIds.map((id) => `<@${id}>`).join(" ");
-      lines.push(`${mentions} kamu subscribe notif buat member ini!`);
-      // Satu-satunya mention yang BENERAN dimaksud di jalur ini - scoped
-      // eksplisit ke ID subscriber doang (lihat webhook.js's
-      // withDefaultMentionGuard), biar CUMA mereka yang ke-ping walau
-      // memberName kebetulan ngandung teks semacam "@everyone".
-      allowedMentions.users = subscriberIds;
-    }
-    if (roleIds.length > 0) {
-      lines.push(`${roleIds.map((id) => `<@&${id}>`).join(" ")} lagi live nih!`);
-      allowedMentions.roles = roleIds;
-    }
-    if (lines.length > 0) {
-      payload.content = [payload.content, ...lines].join("\n");
-      payload.allowed_mentions = allowedMentions;
-    }
+    const memberRoleId = getRoleIdFor(username);
+    const allRoleId = getRoleIdFor(ALL_MEMBERS_KEY);
+    sharedPayload = withMentions(payload, subscriberIds, dedicatedWebhookUrl ? [allRoleId] : [memberRoleId, allRoleId]);
+    dedicatedPayload = withMentions(payload, subscriberIds, [memberRoleId]);
   }
 
-  // Channel KHUSUS member ini (fitur "Q2", storage/channelRouting.js) -
-  // kalau ada, payload yang SAMA juga dikirim ke situ, DUPLIKAT (bukan
-  // pengganti) dari channel gabungan di bawah. Dijalanin BARENGAN (bukan
+  // Channel khusus: payload-nya DUPLIKAT (bukan pengganti) dari channel gabungan
+  // - kecuali baris mention di atas. Dijalanin BARENGAN (bukan
   // nunggu satu-satu) - dua-duanya independen, nunggu berurutan cuma bakal
   // dobelin latensi tiap member yang punya channel khusus di tiap siklus
   // polling monitor.js tanpa manfaat apa-apa. `terkirim` (yang nentuin
@@ -128,11 +144,10 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   // - kegagalan kirim ke channel khusus (mis. webhook-nya keburu dihapus)
   // dianggep best-effort, sama kayak sendPriorityDM di bawah, BUKAN dianggep
   // "notif ini gagal" secara keseluruhan.
-  const dedicatedWebhookUrl = getChannelWebhookFor(username);
   const [terkirim] = await Promise.all([
-    postToWebhook(payload),
+    postToWebhook(sharedPayload),
     dedicatedWebhookUrl
-      ? postToWebhook(payload, `Gagal ngirim notif ke channel khusus ${memberName}:`, dedicatedWebhookUrl).then((ok) => {
+      ? postToWebhook(dedicatedPayload, `Gagal ngirim notif ke channel khusus ${memberName}:`, dedicatedWebhookUrl).then((ok) => {
           if (ok) console.log(`Notif ${status} terkirim ke channel khusus ${memberName}`);
         })
       : null,

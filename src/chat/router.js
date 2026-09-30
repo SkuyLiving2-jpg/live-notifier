@@ -27,6 +27,7 @@ const {
   handleRemoveMemberRole,
   replyRoleList,
   buildAllLiveConfirm,
+  OWNER_NO_ALL_ROLE_NOTE,
 } = require("./roleFlow");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
@@ -172,7 +173,8 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // manapun tanpa "cok" (member baru biasanya cuma bisa ngetik di channel
   // tertentu). Dijawab konfirmasi "Yakin?" + tombol Ya/Tidak (chat/roleFlow.js).
   if (authorId && /^(?:cok[,.!?]?\s+)?(?:tolong\s+)?notif(?:ikasi)?\s+(?:live\s+)?semua(?:\s+member)?[?!.\s]*$/.test(text)) {
-    return buildAllLiveConfirm(authorId);
+    // Owner gak perlu role ini (udah lihat semua channel) - jangan ditawarin.
+    return isOwner(authorId) ? OWNER_NO_ALL_ROLE_NOTE : buildAllLiveConfirm(authorId);
   }
 
   if (!mentionsBot && !looksLikeLiveQuestion) return null;
