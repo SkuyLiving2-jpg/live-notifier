@@ -306,7 +306,7 @@ function replyHelp() {
     '- "cok gifter <nama member>" - top gifter (snapshot terakhir dari "npm run cek-gifter", bukan real-time)',
     '- "cok bandingin <nama member> dan/& <nama member>" (atau cukup "cok <nama> dan <nama>" / "cok <nama> & <nama>") - total live/rata-rata durasi/rekor terlama dua member berdampingan, plus foto profilnya. Ketik "cok bandingin" polos buat ditanya mau berapa member (2 sampai 5) lalu dicariin lewat dropdown',
     `- "cok bandingin A, B, dan C" - bisa lebih dari 2 member sekaligus (pakai koma, maks ${MAX_COMPARE_MEMBERS} orang), mis. "cok bandingin nala, levi, dan lily"`,
-    '- "cok role" - munculin tombol buat milih role notif live per member (owner: "cok pasang panel role" di channel role buat masang panel permanen)',
+    '- "cok role" - munculin tombol buat milih notif live: semua member atau member tertentu (owner: "cok pasang panel role", "cok tambah role <nama> @Role", "cok hapus role <nama>", "cok daftar role")',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
     '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',

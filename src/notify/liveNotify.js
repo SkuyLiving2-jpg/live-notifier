@@ -3,7 +3,7 @@ const { getPriorityConfig } = require("../priority");
 const { sendPriorityDM } = require("./priorityDm");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { getChannelWebhookFor } = require("../storage/channelRouting");
-const { getRoleIdFor } = require("../storage/memberRoles");
+const { getRoleIdFor, ALL_MEMBERS_KEY } = require("../storage/memberRoles");
 const { containsWholeWord, formatClockWIB } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
@@ -94,7 +94,9 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
     const subscriberIds = getSubscribersFor(memberName, username);
     // Role notif member ini (panel role, chat/roleFlow.js) - di-ping juga kalau
     // ada, bareng subscriber "cok ingetin" (dua jalur ini independen).
-    const roleId = getRoleIdFor(username);
+    // + role "notif SEMUA member" (kalau ada) - satu pesan, Discord cuma ngasih
+    // satu notif walau orangnya punya dua-duanya.
+    const roleIds = [getRoleIdFor(username), getRoleIdFor(ALL_MEMBERS_KEY)].filter((id, i, all) => id && all.indexOf(id) === i);
     const lines = [];
     const allowedMentions = {};
     if (subscriberIds.length > 0) {
@@ -106,9 +108,9 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
       // memberName kebetulan ngandung teks semacam "@everyone".
       allowedMentions.users = subscriberIds;
     }
-    if (roleId) {
-      lines.push(`<@&${roleId}> lagi live nih!`);
-      allowedMentions.roles = [roleId];
+    if (roleIds.length > 0) {
+      lines.push(`${roleIds.map((id) => `<@&${id}>`).join(" ")} lagi live nih!`);
+      allowedMentions.roles = roleIds;
     }
     if (lines.length > 0) {
       payload.content = [payload.content, ...lines].join("\n");

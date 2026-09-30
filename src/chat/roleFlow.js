@@ -1,55 +1,79 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, MessageFlags } = require("discord.js");
-const { loadLiveCount } = require("../storage/liveCount");
-const { loadMemberRoles, getRoleIdFor, setRoleIdFor } = require("../storage/memberRoles");
+const { loadLiveCount, findLiveCountByNameFragment } = require("../storage/liveCount");
+const { loadMemberRoles, getRoleIdFor, setRoleIdFor, clearRoleFor, ALL_MEMBERS_KEY } = require("../storage/memberRoles");
+const { fetchPublicProfileByUsername, isJkt48Member } = require("../idnApi");
+const { normalizeMemberFragment, isOwner } = require("./replies");
 const { safeReplyOptions } = require("../utils");
 
-// Panel role notif live: user milih member yang mau dia dapet notifnya, dan
-// bot nge-assign/cabut role per member (role "🔔 <Nama>") - liveNotify.js
-// nge-ping role itu pas member mulai live. Beda dari "cok ingetin" (tag
-// pribadi per user via ID), ini pake role Discord biasa jadi kelihatan di
-// daftar member dan gampang diatur owner dari pengaturan server.
+// Panel role notif live. Tiap member yang punya channel privat (mis.
+// #aralie-jkt48) punya role bernama member itu (mis. "Aralie") yang OWNER
+// atur: role itu boleh lihat channel privatnya, dan didaftarin ke bot lewat
+// "cok tambah role aralie @Aralie". Milih member di panel = dapet role itu =
+// dapet akses channel privat member itu + di-tag (liveNotify.js) tiap dia
+// mulai live. Ada juga role "semua member" (di-tag tiap SIAPAPUN live).
 //
 // Alurnya:
-//   1. Owner ngetik "cok pasang panel role" di channel role -> bot ngirim
-//      panel (buildRolePanel) berisi tombol "🔔 Atur notif live saya".
-//   2. User klik tombol -> pesan EPHEMERAL (cuma dia yang lihat) berisi
-//      dropdown member (25 per dropdown, maks 4 dropdown = 100 member), member
-//      yang rolenya udah dia punya udah tercentang.
-//   3. Pilih/lepas centang -> bot nambah/cabut role yang sesuai di dropdown
-//      itu. Role dibikin bot OTOMATIS (lazy) pas pertama kali ada yang milih
-//      member itu, jadi gak perlu bikin puluhan role manual.
-// State-nya stateless: yang jadi sumber kebenaran adalah role yang beneran
-// dipunya user di Discord, bukan Map di memori bot.
-//
-// Bot butuh izin "Manage Roles" di server; role bikinan bot otomatis ada di
-// bawah role tertinggi bot, jadi bot bisa nge-assign-nya.
+//   1. Member baru server disambut otomatis di channel role (buildWelcomeMessage,
+//      lihat router.js's guildMemberAdd) dan owner bisa masang panel permanen
+//      ("cok pasang panel role"). Dua-duanya isinya dua tombol:
+//        🔔 Semua member       -> dapet role "semua member".
+//        🎯 Pilih member       -> layar pribadi (ephemeral) berisi dropdown
+//                                 member (25 per dropdown, maks 4) yang
+//                                 rolenya udah didaftarin owner.
+//   2. Centang/lepas centang = bot nambah/cabut role member itu. Sumber
+//      kebenaran = role yang beneran dipunya user di Discord, bukan state bot.
+// Bot butuh izin "Manage Roles", dan role bot harus DI ATAS role-role member.
 const MEMBERS_PER_MENU = 25;
 const MAX_MENUS = 4;
 const ROLE_REASON = "Notif live JKT48 (panel role)";
+const ALL_ROLE_NAME = "🔔 Semua Member";
 
-function cleanName(name, username) {
-  return (name || username).replace(/\s*JKT48\s*$/i, "").trim() || username;
+function cleanName(name) {
+  return (name || "").replace(/\s*JKT48\s*$/i, "").trim();
 }
 
-// Daftar member yang bisa dipilih: semua yang pernah tercatat live oleh bot
-// (live-count.json), urut abjad, dibatesin 4 dropdown x 25.
+function labelFor(username) {
+  const known = cleanName(loadLiveCount()[username]?.name);
+  if (known) return known;
+  const token = username.replace(/^jkt48_/, "");
+  return token.charAt(0).toUpperCase() + token.slice(1);
+}
+
+// Member yang bisa dipilih = yang rolenya didaftarin owner (memberRoles.js,
+// tanpa kunci "semua"), urut abjad, dibatesin 4 dropdown x 25.
 function getRoleRoster() {
-  const entries = Object.entries(loadLiveCount()).map(([username, value]) => ({ username, label: cleanName(value?.name, username) }));
+  const entries = Object.keys(loadMemberRoles())
+    .filter((username) => username !== ALL_MEMBERS_KEY)
+    .map((username) => ({ username, label: labelFor(username) }));
   entries.sort((a, b) => a.label.localeCompare(b.label));
   return entries.slice(0, MEMBERS_PER_MENU * MAX_MENUS);
 }
 
-function roleNameFor(label) {
-  return `🔔 ${label}`.slice(0, 100);
+function buildChoiceButtons({ closable }) {
+  const buttons = [
+    new ButtonBuilder().setCustomId("role_flow:all").setLabel("🔔 Semua member").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("role_flow:open").setLabel("🎯 Pilih member tertentu").setStyle(ButtonStyle.Primary),
+  ];
+  if (closable) buttons.push(new ButtonBuilder().setCustomId("reply_close").setLabel("Tutup").setStyle(ButtonStyle.Danger));
+  return new ActionRowBuilder().addComponents(buttons);
 }
 
+const PANEL_TEXT =
+  "Mau dapet notif tiap ada member JKT48 yang live? Pilih salah satu:\n" +
+  "🔔 **Semua member** - di-tag tiap SIAPAPUN mulai live.\n" +
+  "🎯 **Pilih member tertentu** - cuma member yang kamu pilih (kamu juga dapet akses ke channel privat member itu).\n" +
+  "Bisa diubah kapan aja, tinggal klik lagi.";
+
 function buildRolePanel({ closable = false } = {}) {
-  const buttons = [new ButtonBuilder().setCustomId("role_flow:open").setLabel("🔔 Atur notif live saya").setStyle(ButtonStyle.Primary)];
-  if (closable) buttons.push(new ButtonBuilder().setCustomId("reply_close").setLabel("Tutup").setStyle(ButtonStyle.Danger));
+  return { content: `🔔 **Notif live per member**\n${PANEL_TEXT}`, components: [buildChoiceButtons({ closable })] };
+}
+
+// Sambutan buat member BARU server (dikirim router.js pas guildMemberAdd).
+function buildWelcomeMessage(userId) {
   return {
-    content:
-      "🔔 **Notif live per member**\nKlik tombol di bawah, pilih member yang mau kamu dapet notif live-nya. Kamu otomatis dapet role member itu dan di-tag tiap dia mulai live. Lepas centang kapan aja buat berhenti.",
-    components: [new ActionRowBuilder().addComponents(buttons)],
+    content: `👋 Selamat datang <@${userId}>! Seneng banget kamu gabung. 🎉\n\n${PANEL_TEXT}`,
+    components: [buildChoiceButtons({ closable: true })],
+    allowedMentions: { users: [userId] },
   };
 }
 
@@ -60,18 +84,28 @@ function memberHasRole(member, roleId) {
   return Boolean(roles?.cache?.has(roleId));
 }
 
-// `hasRole` (opsional) nimpa cara ngecek role - dipake abis nambah/cabut role,
-// soalnya cache role member belum tentu udah ke-update pas layar dibangun ulang.
+async function resolveRole(guild, roleId) {
+  return guild.roles.cache.get(roleId) || (await guild.roles.fetch(roleId).catch(() => null));
+}
+
+// Layar pengaturan pribadi. `hasRole` (opsional) nimpa cara ngecek role - dipake
+// abis nambah/cabut role, soalnya cache role member belum tentu udah ke-update.
 function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasRole(member, roleId)) {
-  const closeRow = new ActionRowBuilder().addComponents(
+  const allOn = hasRole(getRoleIdFor(ALL_MEMBERS_KEY));
+  const buttonRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("role_flow:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId("role_flow:clearall").setLabel("🔕 Matikan semua").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("role_flow:alltoggle")
+      .setLabel(allOn ? "🔔 Semua member: AKTIF" : "🔔 Semua member: mati")
+      .setStyle(allOn ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
+  const prefix = note ? `${note}\n\n` : "";
   const roster = getRoleRoster();
   if (roster.length === 0) {
     return {
-      content: `${note ? `${note}\n\n` : ""}Cok, belum ada member yang kecatet live, jadi belum ada yang bisa dipilih.`,
-      components: [closeRow],
+      content: `${prefix}Cok, belum ada member yang bisa dipilih (owner belum daftarin role member). Kamu masih bisa aktifin "Semua member" di bawah.`,
+      components: [buttonRow],
     };
   }
 
@@ -93,70 +127,126 @@ function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasR
     rows.push(new ActionRowBuilder().addComponents(select));
   }
 
-  const intro = `🔔 Pilih member yang mau kamu dapet notif live-nya (centang = aktif, lepas centang = berhenti). Sekarang aktif: **${active}** member.`;
-  return { content: `${note ? `${note}\n\n` : ""}${intro}`, components: [...rows, closeRow] };
+  const allNote = allOn ? ' Kamu juga lagi aktif di "Semua member".' : "";
+  const intro = `🎯 Pilih member yang mau kamu dapet notif live-nya (centang = aktif, lepas centang = berhenti). Sekarang aktif: **${active}** member.${allNote}`;
+  return { content: `${prefix}${intro}`, components: [...rows, buttonRow] };
 }
 
-// Role yang lagi dibikin (username -> Promise) - dua user yang milih member
-// yang sama BARENGAN gak boleh bikin dua role kembar.
-const inflightRoles = new Map();
+// Role "semua member": dipake yang didaftarin owner, atau dibikin bot sendiri
+// (lazy) kalau belum ada - role ini gak ngatur akses channel apapun, jadi aman
+// dibikin otomatis.
+const inflightAllRole = { promise: null };
 
-async function ensureRole(guild, entry) {
-  const known = getRoleIdFor(entry.username);
+async function ensureAllRole(guild) {
+  const known = getRoleIdFor(ALL_MEMBERS_KEY);
   if (known) {
-    const role = guild.roles.cache.get(known) || (await guild.roles.fetch(known).catch(() => null));
+    const role = await resolveRole(guild, known);
     if (role) return role.id;
   }
-  if (inflightRoles.has(entry.username)) return inflightRoles.get(entry.username);
+  if (inflightAllRole.promise) return inflightAllRole.promise;
 
-  const promise = (async () => {
+  inflightAllRole.promise = (async () => {
     try {
-      const name = roleNameFor(entry.label);
-      // Owner mungkin udah bikin role bernama sama - dipake aja, jangan dobel.
-      const existing = guild.roles.cache.find((r) => r.name === name);
-      const role = existing || (await guild.roles.create({ name, mentionable: true, reason: ROLE_REASON }));
-      setRoleIdFor(entry.username, role.id);
+      const existing = guild.roles.cache.find((r) => r.name === ALL_ROLE_NAME);
+      const role = existing || (await guild.roles.create({ name: ALL_ROLE_NAME, mentionable: true, reason: ROLE_REASON }));
+      setRoleIdFor(ALL_MEMBERS_KEY, role.id);
       return role.id;
     } finally {
-      inflightRoles.delete(entry.username);
+      inflightAllRole.promise = null;
     }
   })();
-  inflightRoles.set(entry.username, promise);
-  return promise;
+  return inflightAllRole.promise;
 }
 
 function describeRoleError(error) {
   if (error?.code === 50013) {
-    return "Cok, bot belum punya izin **Manage Roles** (atau role bot-nya terlalu rendah) di server ini, jadi gak bisa ngatur role. Minta admin nambahin izin itu ke role bot ya.";
+    return "Cok, bot belum punya izin **Manage Roles**, atau role bot-nya lebih rendah dari role yang mau di-assign, jadi gak bisa ngatur role. Minta admin naikin role bot di atas role member ya.";
   }
   return "Cok, gagal ngatur role kamu barusan. Coba lagi bentar ya.";
 }
 
-async function handleRoleOpen(interaction) {
-  await interaction.reply(safeReplyOptions({ ...buildSettingsScreen(interaction.member), flags: MessageFlags.Ephemeral }));
-}
-
 async function handleRoleFlowButton(interaction) {
   const action = interaction.customId.split(":")[1];
-  if (action === "open") return handleRoleOpen(interaction);
+  if (action === "open") {
+    await interaction.reply(safeReplyOptions({ ...buildSettingsScreen(interaction.member), flags: MessageFlags.Ephemeral }));
+    return;
+  }
   if (action === "close") {
     await interaction.update(safeReplyOptions({ content: "Oke, ditutup. 🔔", components: [] }));
     return;
   }
+  if (action === "all") return handleAllFromPanel(interaction);
+  if (action === "alltoggle") return handleAllToggle(interaction);
   if (action === "clearall") return handleRoleClearAll(interaction);
+}
+
+// Klik "🔔 Semua member" di panel/sambutan (pesan PUBLIK) -> balasan ephemeral baru.
+async function handleAllFromPanel(interaction) {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const { member, guild } = interaction;
+  if (!member || !guild) {
+    await interaction.editReply(safeReplyOptions({ content: "Cok, panel role cuma jalan di dalam server." }));
+    return;
+  }
+  let note;
+  let allRoleId = null;
+  try {
+    allRoleId = await ensureAllRole(guild);
+    if (!memberHasRole(member, allRoleId)) await member.roles.add(allRoleId, ROLE_REASON);
+    note = "✅ Beres! Kamu bakal di-tag tiap SIAPAPUN member mulai live.";
+  } catch (error) {
+    console.error("Gagal ngasih role semua member:", error.message);
+    note = describeRoleError(error);
+    allRoleId = null;
+  }
+  const hasRole = (roleId) => memberHasRole(member, roleId) || (allRoleId !== null && roleId === allRoleId);
+  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole)));
+}
+
+// Klik tombol toggle "Semua member" di layar pengaturan (pesan ephemeral) -> edit di tempat.
+async function handleAllToggle(interaction) {
+  await interaction.deferUpdate();
+  const { member, guild } = interaction;
+  if (!member || !guild) {
+    await interaction.editReply(safeReplyOptions({ content: "Cok, panel role cuma jalan di dalam server.", components: [] }));
+    return;
+  }
+  const currentId = getRoleIdFor(ALL_MEMBERS_KEY);
+  const isOn = memberHasRole(member, currentId);
+  let note;
+  let finalOn = isOn;
+  try {
+    if (isOn) {
+      await member.roles.remove(currentId, ROLE_REASON);
+      finalOn = false;
+      note = '🔕 "Semua member" dimatiin.';
+    } else {
+      const roleId = await ensureAllRole(guild);
+      await member.roles.add(roleId, ROLE_REASON);
+      finalOn = true;
+      note = '✅ "Semua member" aktif - kamu di-tag tiap SIAPAPUN mulai live.';
+    }
+  } catch (error) {
+    console.error("Gagal toggle role semua member:", error.message);
+    note = describeRoleError(error);
+  }
+  const allRoleId = getRoleIdFor(ALL_MEMBERS_KEY);
+  const hasRole = (roleId) => (roleId === allRoleId ? finalOn : memberHasRole(member, roleId));
+  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole)));
 }
 
 async function handleRoleClearAll(interaction) {
   await interaction.deferUpdate();
   const member = interaction.member;
   const owned = new Set(Object.values(loadMemberRoles()).filter((id) => memberHasRole(member, id)));
-  let note = "🔕 Semua notif member dimatiin.";
+  let note = "🔕 Semua notif dimatiin.";
   try {
     if (owned.size > 0) await member.roles.remove([...owned], ROLE_REASON);
-    else note = "Kamu emang belum aktif di member manapun.";
+    else note = "Kamu emang belum aktif di notif manapun.";
   } catch (error) {
     console.error("Gagal cabut semua role notif:", error.message);
     note = describeRoleError(error);
+    owned.clear();
   }
   await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, (roleId) => memberHasRole(member, roleId) && !owned.has(roleId))));
 }
@@ -174,8 +264,8 @@ async function handleRoleFlowSelect(interaction) {
   const roster = getRoleRoster();
   const chosen = new Set(interaction.values);
   const chunk = roster.slice(page * MEMBERS_PER_MENU, (page + 1) * MEMBERS_PER_MENU);
-  // Kalau daftar member bergeser sejak dropdown ini dibikin (ada member baru),
-  // pilihan yang gak lagi ada di halaman ini tetep diproses, gak diam-diam hilang.
+  // Kalau daftar member bergeser sejak dropdown ini dibikin, pilihan yang gak
+  // lagi ada di halaman ini tetep diproses, gak diam-diam hilang.
   const inChunk = new Set(chunk.map((m) => m.username));
   const entries = [...chunk, ...roster.filter((m) => chosen.has(m.username) && !inChunk.has(m.username))];
 
@@ -183,21 +273,23 @@ async function handleRoleFlowSelect(interaction) {
   const toRemove = [];
   const added = [];
   const removed = [];
+  const missing = [];
   let note = "";
   try {
     for (const entry of entries) {
+      const roleId = getRoleIdFor(entry.username);
       if (chosen.has(entry.username)) {
-        const roleId = await ensureRole(guild, entry);
+        if (!roleId || !(await resolveRole(guild, roleId))) {
+          missing.push(entry.label);
+          continue;
+        }
         if (!memberHasRole(member, roleId)) {
           toAdd.push(roleId);
           added.push(entry.label);
         }
-      } else {
-        const roleId = getRoleIdFor(entry.username);
-        if (roleId && memberHasRole(member, roleId)) {
-          toRemove.push(roleId);
-          removed.push(entry.label);
-        }
+      } else if (roleId && memberHasRole(member, roleId)) {
+        toRemove.push(roleId);
+        removed.push(entry.label);
       }
     }
     if (toAdd.length > 0) await member.roles.add(toAdd, ROLE_REASON);
@@ -206,6 +298,7 @@ async function handleRoleFlowSelect(interaction) {
     const parts = [];
     if (added.length > 0) parts.push(`✅ Aktif: ${added.join(", ")}`);
     if (removed.length > 0) parts.push(`🔕 Dimatiin: ${removed.join(", ")}`);
+    if (missing.length > 0) parts.push(`⚠️ Role ${missing.join(", ")} gak ketemu di server - minta owner daftarin ulang ("cok tambah role ...").`);
     note = parts.join("\n");
   } catch (error) {
     console.error("Gagal ngatur role notif:", error.message);
@@ -220,4 +313,85 @@ async function handleRoleFlowSelect(interaction) {
   await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole)));
 }
 
-module.exports = { buildRolePanel, buildSettingsScreen, handleRoleFlowButton, handleRoleFlowSelect, getRoleRoster, roleNameFor };
+// ==== Perintah owner: daftarin role member ====
+
+function parseRoleRef(ref) {
+  const match = String(ref || "")
+    .trim()
+    .match(/^<@&(\d{15,25})>$|^(\d{15,25})$/);
+  return match ? match[1] || match[2] : null;
+}
+
+// Nama member -> username IDN yang valid: dikenal bot (live-count, alias-aware),
+// atau dicek langsung ke IDN (member yang belum pernah live tetep bisa didaftarin).
+async function resolveMemberUsername(fragment) {
+  const found = findLiveCountByNameFragment(fragment);
+  if (found) return { username: found.username };
+  const token = normalizeMemberFragment(fragment).split(" ")[0];
+  if (!token || token.length < 2) return { error: `Cok, "${fragment}" bukan nama member yang valid.` };
+  try {
+    const profile = await fetchPublicProfileByUsername(`jkt48_${token}`);
+    if (!profile || !isJkt48Member(profile)) return { error: `Cok, "${fragment}" gak ketemu sebagai member JKT48 di IDN - cek lagi ejaannya.` };
+    return { username: `jkt48_${token}` };
+  } catch (error) {
+    console.error(`Gagal ngecek member "${fragment}" ke IDN:`, error.message);
+    return { error: "Cok, bot lagi gak bisa ngecek ke IDN. Coba lagi bentar." };
+  }
+}
+
+const ALL_NAME_WORDS = new Set(["semua", "all"]);
+
+async function handleAddMemberRole(nameFragment, roleRef, authorId) {
+  if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ngatur daftar role.";
+  const roleId = parseRoleRef(roleRef);
+  if (!roleId) return 'Cok, role-nya harus di-mention (@NamaRole) atau ID role-nya. Contoh: "cok tambah role aralie @Aralie".';
+
+  const name = (nameFragment || "").trim();
+  if (ALL_NAME_WORDS.has(name.toLowerCase())) {
+    setRoleIdFor(ALL_MEMBERS_KEY, roleId);
+    return `✅ Role "Semua member" diset ke <@&${roleId}>.`;
+  }
+
+  const resolved = await resolveMemberUsername(name);
+  if (resolved.error) return resolved.error;
+  const existing = getRoleIdFor(resolved.username);
+  setRoleIdFor(resolved.username, roleId);
+  const replaced = existing && existing !== roleId ? " (gantiin role lama)" : "";
+  return `✅ Role <@&${roleId}> didaftarin buat **${labelFor(resolved.username)}**${replaced}. Sekarang member ini muncul di panel role, dan role itu di-tag tiap dia mulai live.`;
+}
+
+async function handleRemoveMemberRole(nameFragment, authorId) {
+  if (!isOwner(authorId)) return "Cok, cuma owner yang boleh ngatur daftar role.";
+  const name = (nameFragment || "").trim();
+  if (ALL_NAME_WORDS.has(name.toLowerCase())) {
+    return clearRoleFor(ALL_MEMBERS_KEY) ? '✅ Role "Semua member" dilepas dari daftar.' : 'Role "Semua member" emang belum didaftarin.';
+  }
+  const resolved = await resolveMemberUsername(name);
+  if (resolved.error) return resolved.error;
+  return clearRoleFor(resolved.username)
+    ? `✅ **${labelFor(resolved.username)}** dilepas dari daftar role (role di server-nya sendiri gak dihapus).`
+    : `**${labelFor(resolved.username)}** emang belum didaftarin.`;
+}
+
+function replyRoleList() {
+  const map = loadMemberRoles();
+  const lines = getRoleRoster().map((m) => `- ${m.label} -> <@&${map[m.username]}>`);
+  const allId = map[ALL_MEMBERS_KEY];
+  lines.push(`- Semua member -> ${allId ? `<@&${allId}>` : "(dibikin otomatis pas ada yang milih)"}`);
+  return lines.length === 1 && !allId
+    ? 'Cok, belum ada role member yang didaftarin. Owner: "cok tambah role aralie @Aralie".'
+    : `🔔 Daftar role notif:\n${lines.join("\n")}`;
+}
+
+module.exports = {
+  buildRolePanel,
+  buildWelcomeMessage,
+  buildSettingsScreen,
+  handleRoleFlowButton,
+  handleRoleFlowSelect,
+  getRoleRoster,
+  handleAddMemberRole,
+  handleRemoveMemberRole,
+  replyRoleList,
+  parseRoleRef,
+};

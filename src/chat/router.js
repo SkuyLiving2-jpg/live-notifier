@@ -1,7 +1,7 @@
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { getUsernameForChannel } = require("../storage/channelRouting");
-const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN } = require("../config");
+const { BOT_CHANNEL_ID, PRIORITY_PING_USER_ID, DISCORD_BOT_TOKEN, ROLE_CHANNEL_ID, ROLE_WELCOME_ENABLED } = require("../config");
 const { containsWholeWord, stripTrailingLiveWord, formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
 const { tryHandleWatchConfirmShortcut } = require("./menu");
 const { markMenuShown, tryHandleMenuShortcut, tryHandleMemberPromptShortcut } = require("./pendingState");
@@ -16,7 +16,15 @@ const {
 } = require("./compareFlow");
 const { pruneRepeatedExchange } = require("./repeatedReplyGuard");
 const { withCloseButton, handleReplyCloseButton } = require("./interactionHelpers");
-const { buildRolePanel, handleRoleFlowButton, handleRoleFlowSelect } = require("./roleFlow");
+const {
+  buildRolePanel,
+  buildWelcomeMessage,
+  handleRoleFlowButton,
+  handleRoleFlowSelect,
+  handleAddMemberRole,
+  handleRemoveMemberRole,
+  replyRoleList,
+} = require("./roleFlow");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
@@ -202,6 +210,15 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   if (/^(?:atur\s+|ambil\s+|minta\s+)?role(?:\s+notif)?[?!.\s]*$/.test(commandText)) {
     return buildRolePanel({ closable: true });
   }
+
+  // Owner daftarin role tiap member (role yang sama yang ngatur akses channel
+  // privat member itu): "tambah role aralie @Aralie" / "hapus role aralie" /
+  // "daftar role". "semua" = role notif semua member.
+  const addRoleMatch = text.match(/tambah(?:in|kan)?\s+role\s+(\S+)\s+(<@&\d+>|\d{15,25})/);
+  if (addRoleMatch) return await handleAddMemberRole(addRoleMatch[1], addRoleMatch[2], authorId);
+  const removeRoleMatch = text.match(/hapus\s+role\s+(\S+)/);
+  if (removeRoleMatch) return await handleRemoveMemberRole(removeRoleMatch[1], authorId);
+  if (containsWholeWord(text, "daftar") && containsWholeWord(text, "role")) return replyRoleList();
 
   // Saran fitur ke-5 (§10's kelimapuluh item): "cok tambah alias <alias> =
   // <nama asli>" - pemisahnya "=", "untuk", atau "buat" (sama filosofi
@@ -686,6 +703,23 @@ function wireDiscordEvents(client) {
         : "PRIORITY_PING_USER_ID BELUM diset - DM notif prioritas gak bakal kekirim (channel tetap dapet notif biasa).",
     );
   });
+
+  // Sambutan member BARU server di channel role (config.js's ROLE_WELCOME_ENABLED -
+  // butuh Server Members Intent). Discord gak ngasih tau bot kapan seseorang
+  // "buka" sebuah channel, jadi momen paling dekat yang bisa dideteksi ya pas
+  // dia baru gabung. Owner dan bot dilewati.
+  if (ROLE_WELCOME_ENABLED) {
+    client.on("guildMemberAdd", async (member) => {
+      try {
+        if (member.user?.bot || member.id === PRIORITY_PING_USER_ID) return;
+        const channel = await member.guild.channels.fetch(ROLE_CHANNEL_ID);
+        if (!channel?.isTextBased()) return;
+        await channel.send(buildWelcomeMessage(member.id));
+      } catch (error) {
+        console.error("Gagal kirim sambutan member baru:", error.message);
+      }
+    });
+  }
 
   client.on("messageCreate", async (message) => {
     try {
