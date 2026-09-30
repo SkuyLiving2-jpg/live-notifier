@@ -1032,3 +1032,11 @@ test("interaksi reply_close ngehapus pesannya (deferUpdate lalu message.delete)"
   });
   assert.deepEqual(calls, ["defer", "delete"]);
 });
+
+// ==== Review pass: rekap <nama> + nama hari / dua member ditolak jelas ====
+test("rekap <nama> <nama hari> dan rekap <nama> <nama> <rentang> ditolak eksplisit, nama member gak diam-diam dibuang", async () => {
+  recordLiveCompleted("jkt48_rtrwka", "Rtrwka JKT48");
+  recordLiveCompleted("jkt48_rtrwkb", "Rtrwkb JKT48");
+  assert.match(textOf(await inBotChannel("rekap rtrwka senin")), /"rtrwka" per nama hari belum bisa/);
+  assert.match(textOf(await inBotChannel("rekap rtrwka rtrwkb minggu ini")), /cuma bisa SATU nama.*"rtrwka", "rtrwkb"/);
+});

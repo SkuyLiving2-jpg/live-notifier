@@ -213,11 +213,18 @@ function sanitizeExportFileNamePart(label) {
 // rentang/pelengkap) dianggep nama member: tanpa rentang -> semua arsip member
 // itu, dengan rentang -> sesi member itu di rentang tsb.
 async function replyExportRecap(text) {
-  const range = resolveStatRangeFromText(text);
+  const multiple = findMultipleKnownMembers(text);
+  if (multiple) return replyOneMemberOnly(multiple);
+
+  const fragment = extractMemberFromPeriodText(text);
+  if (fragment && parseWeekdayFromText(text) !== null) return replyMemberWeekdayUnsupported(fragment);
+
+  // Ada member -> "hari ini" juga dihitung rentang (resolveMemberPeriod), biar
+  // "export rekap nala hari ini" gak jatuh jadi semua arsip.
+  const range = fragment ? resolveMemberPeriod(text) : resolveStatRangeFromText(text);
   let rangeDays = range ? range.rangeDays : null;
   let label = range ? range.label : "hari ini";
 
-  const fragment = extractMemberFromPeriodText(text);
   let member = null;
   if (fragment) {
     const resolved = resolveRecapMember(fragment);
@@ -352,7 +359,18 @@ function replyMySubscriptions(authorId) {
 // bisa diminta liat halaman berikutnya lewat "cok rekap" -> jawab "y".
 const RECAP_TABLE_PAGE_SIZE = 20;
 
-function buildRecapTablePage(sessions, page) {
+// Anggaran karakter buat TABEL rekap (bukan seluruh pesan): batas pesan Discord
+// 2000, sisanya ~450 buat ringkasan/footer. Dulu nama panjang (mis. "Jesslyn
+// Elly Maharani JKT48") bikin balasan rekap sampe ~2200 karakter dan DITOLAK
+// Discord tanpa pesan apapun. Kolom nama dipotong SEADAANYA (bukan selalu)
+// sampai tabel muat, tapi gak lebih pendek dari RECAP_TABLE_NAME_MIN.
+const RECAP_TABLE_BUDGET = 1550;
+const RECAP_TABLE_NAME_MIN = 8;
+function truncateTableName(name, max) {
+  return name.length > max ? `${name.slice(0, max - 1)}…` : name;
+}
+
+function buildRecapTablePage(sessions, page, hideName = false) {
   const sorted = [...sessions].sort((a, b) => a.startedAtUnix - b.startedAtUnix);
   const totalPages = Math.max(1, Math.ceil(sorted.length / RECAP_TABLE_PAGE_SIZE));
   const clampedPage = Math.min(Math.max(page, 0), totalPages - 1);
@@ -387,11 +405,24 @@ function buildRecapTablePage(sessions, page) {
     return [String(start + i + 1), s.name, s.endedAtUnix !== null ? "Selesai" : "Live", mulaiText, berakhirText];
   });
 
-  const widths = header.map((h, col) => Math.max(h.length, ...rows.map((r) => r[col].length)));
-  const formatRow = (cols) => cols.map((c, i) => c.padEnd(widths[i])).join(" | ");
-  const separator = widths.map((w) => "-".repeat(w)).join("-+-");
+  // Tampilan per member: kolom Member isinya nama yang SAMA di semua baris (dan
+  // udah ada di judul), jadi dibuang.
+  const columns = header.map((_, col) => col).filter((col) => !(hideName && col === 1));
+  const shownHeader = columns.map((col) => header[col]);
+  const render = (nameMax) => {
+    const shownRows = rows.map((r) => columns.map((col) => (col === 1 ? truncateTableName(r[col], nameMax) : r[col])));
+    const widths = shownHeader.map((h, col) => Math.max(h.length, ...shownRows.map((r) => r[col].length)));
+    const formatRow = (cols) => cols.map((c, i) => c.padEnd(widths[i])).join(" | ");
+    const separator = widths.map((w) => "-".repeat(w)).join("-+-");
+    return ["```", formatRow(shownHeader), separator, ...shownRows.map(formatRow), "```"].join("\n");
+  };
 
-  const text = ["```", formatRow(header), separator, ...rows.map(formatRow), "```"].join("\n");
+  let nameMax = Math.max(RECAP_TABLE_NAME_MIN, ...rows.map((r) => r[1].length));
+  let text = render(nameMax);
+  while (!hideName && text.length > RECAP_TABLE_BUDGET && nameMax > RECAP_TABLE_NAME_MIN) {
+    nameMax -= 1;
+    text = render(nameMax);
+  }
   return { text, page: clampedPage, totalPages, hasMore: clampedPage < totalPages - 1 };
 }
 
@@ -993,7 +1024,7 @@ function buildRecapNavComponents(page, totalPages, rangeDays, origin = "") {
 }
 
 function buildRecapPageBlock(sessions, page, channelId, authorId, rangeDays = null, origin = "") {
-  const result = buildRecapTablePage(sessions, page);
+  const result = buildRecapTablePage(sessions, page, isMemberRange(rangeDays));
   const footer = `_(Halaman ${result.page + 1}/${result.totalPages})_`;
 
   if (result.totalPages > 1 && channelId && authorId) {
@@ -1551,18 +1582,46 @@ const PERIOD_TEXT_WORDS = new Set([
   ...WEEKDAY_NAMES_ID.map((d) => d.toLowerCase()),
 ]);
 
-// Buat "rekap nala minggu ini"/"export rekap nala": ambil nama member dari teks
-// yang JUGA nyebut rentang. Sisa kata setelah dibuang kata rentang, angka, dan
-// kata pelengkap harus TEPAT satu (sama ketatnya kayak extractRecapMemberFragment)
-// - lebih/kurang dari itu -> null (bukan permintaan per-member).
-function extractMemberFromPeriodText(text) {
-  const tokens = (text || "")
+// Kata sisa dari teks "rekap ..."/"export rekap ..." setelah dibuang kata
+// rentang/perintah, angka, dan kata pelengkap - kandidat nama member.
+function periodTextLeftoverTokens(text) {
+  return (text || "")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
-    .filter((t) => !PERIOD_TEXT_WORDS.has(t) && !RECAP_MEMBER_FILLER_WORDS.has(t) && !/^\d+$/.test(t));
-  if (tokens.length !== 1 || tokens[0].length < 2) return null;
-  return tokens[0];
+    .filter((t) => !PERIOD_TEXT_WORDS.has(t) && !RECAP_MEMBER_FILLER_WORDS.has(t) && !/^\d+$/.test(t))
+    .filter((t) => t.length >= 2);
+}
+
+// Buat "rekap nala minggu ini"/"export rekap nala": ambil nama member dari teks
+// yang JUGA nyebut rentang. Satu kata sisa = nama member (sama ketatnya kayak
+// extractRecapMemberFragment). Kalau sisanya beberapa kata, cuma dipake kalau
+// TEPAT SATU yang dikenali sebagai member ("rekap tolong nala minggu ini") -
+// selain itu null (bukan permintaan per-member).
+function extractMemberFromPeriodText(text) {
+  const tokens = periodTextLeftoverTokens(text);
+  if (tokens.length === 1) return tokens[0];
+  const known = tokens.filter((t) => isKnownMemberFragment(t));
+  return known.length === 1 ? known[0] : null;
+}
+
+// "rekap nala lily minggu ini" - dua member sekaligus di rekap/export per
+// member gak didukung. Dulu nama-namanya diam-diam diabaikan dan yang keluar
+// rekap SEMUA member. Balikin daftar nama (>= 2 yang dikenali) atau null.
+function findMultipleKnownMembers(text) {
+  const known = periodTextLeftoverTokens(text).filter((t) => isKnownMemberFragment(t));
+  return known.length >= 2 ? known : null;
+}
+
+function replyOneMemberOnly(names) {
+  return `Cok, rekap/export per member cuma bisa SATU nama sekali jalan (kamu nyebut ${names.map((n) => `"${n}"`).join(", ")}). Coba satu-satu, mis. "rekap ${names[0]} minggu ini".`;
+}
+
+// "rekap nala senin" - nama hari butuh dropdown buat milih tanggal pastinya, dan
+// dropdown itu belum bisa difilter per member. Ditolak jelas daripada nama
+// member-nya diam-diam dibuang.
+function replyMemberWeekdayUnsupported(fragment) {
+  return `Cok, rekap "${fragment}" per nama hari belum bisa. Coba pakai "minggu ini", "bulan ini", "kemarin", atau tanggal (mis. "rekap ${fragment} 25 september").`;
 }
 
 // Rentang yang disebut di "rekap <nama> <rentang>": resolveStatRangeFromText
@@ -1689,7 +1748,7 @@ async function replyRecapMemberInRange(fragment, range) {
   }
 
   const summaryLines = buildMemberSummaryLines(`📋 **Rekap live ${resolved.name}** - ${range.label}`, sessions);
-  const page = buildRecapTablePage(sessions, 0);
+  const page = buildRecapTablePage(sessions, 0, true);
   if (page.hasMore) {
     summaryLines.push(
       `_(Nampilin ${RECAP_TABLE_PAGE_SIZE} sesi pertama dari ${sessions.length}. Ketik "rekap ${shown}" buat semua arsip dengan navigasi halaman.)_`,
@@ -2597,6 +2656,9 @@ module.exports = {
   replyExportRecap,
   replyRecapMemberInRange,
   extractMemberFromPeriodText,
+  findMultipleKnownMembers,
+  replyOneMemberOnly,
+  replyMemberWeekdayUnsupported,
   resolveMemberPeriod,
   findImpossibleDateInText,
   replyImpossibleDate,

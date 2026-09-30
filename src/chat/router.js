@@ -54,6 +54,9 @@ const {
   findImpossibleDateInText,
   replyImpossibleDate,
   extractMemberFromPeriodText,
+  findMultipleKnownMembers,
+  replyOneMemberOnly,
+  replyMemberWeekdayUnsupported,
   resolveMemberPeriod,
   replyRecapMemberInRange,
   parseMonthOnlyFromText,
@@ -409,6 +412,11 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     const periodMember = extractMemberFromPeriodText(text);
     const memberPeriod = periodMember ? resolveMemberPeriod(text) : null;
     if (periodMember && memberPeriod) return await replyRecapMemberInRange(periodMember, memberPeriod);
+    // Nama hari + member ("rekap nala senin") dan dua member sekaligus ("rekap
+    // nala lily minggu ini") ditolak jelas - dulu nama membernya diam-diam dibuang.
+    if (periodMember && parseWeekdayFromText(text) !== null) return replyMemberWeekdayUnsupported(periodMember);
+    const multipleMembers = findMultipleKnownMembers(text);
+    if (multipleMembers && (resolveMemberPeriod(text) || parseWeekdayFromText(text) !== null)) return replyOneMemberOnly(multipleMembers);
 
     // "kemarin"/"bulan lalu" DULUAN (BUG: "rekap kemarin" dulu dianggep NAMA
     // MEMBER "kemarin" dan nembak IDN, "rekap hari kemarin" malah dijawab

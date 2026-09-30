@@ -45,6 +45,8 @@ const {
   extractMemberFromPeriodText,
   resolveMemberPeriod,
   replyRecapMemberInRange,
+  findMultipleKnownMembers,
+  replyOneMemberOnly,
   parseMonthOnlyFromText,
   parseWeekdayFromText,
   resolveStatRangeFromText,
@@ -2382,7 +2384,7 @@ test("replyRecapMember - tabel HANYA sesi member itu (member lain gak ikut), rin
   assert.match(reply.content, /Total sesi: 3x \(3 udah selesai, 0 masih live\)/);
   assert.match(reply.content, /Total durasi: 1j 30m \| Rata-rata: 30m \| Paling lama: 30m/);
   assert.match(reply.content, /35 hari terakhir/);
-  assert.equal((reply.content.match(/Mrecbeta JKT48 \|/g) || []).length, 3, "3 baris tabel buat member ini");
+  assert.equal((reply.content.match(/Selesai/g) || []).length, 3, "3 baris tabel buat member ini (kolom nama dibuang di tampilan per member)");
   assert.doesNotMatch(reply.content, /Mrecother/);
   assert.match(reply.content, /Halaman 1\/1/);
 
@@ -2406,7 +2408,7 @@ test("replyRecapMember - lebih dari 20 sesi: Maju + Tutup + Lompat halaman (tanp
   assert.equal(next.calls.length, 0, "edit di tempat, bukan pesan baru");
   const page2 = next.updates[0];
   assert.match(page2.content, /Halaman 2\/2/);
-  assert.equal((page2.content.match(/Mrecpaged JKT48 \|/g) || []).length, 5, "sisa 5 sesi di halaman 2");
+  assert.equal((page2.content.match(/Selesai/g) || []).length, 5, "sisa 5 sesi di halaman 2");
   assert.deepEqual(allCustomIds(page2), ["recap_nav:prev:ujkt48_mrecpaged:1", "recap_nav:close", "recap_nav:jump:ujkt48_mrecpaged:1"]);
 
   // navigasi teks "mundur" juga jalan (pendingRecapPage nyimpen rentang member)
@@ -2720,4 +2722,71 @@ test("handleSubscribe - nama yang gak dikenal bot tetep didaftarin tapi dikasih 
 
   const multi = handleSubscribe("unkwarna dan zzqxunk2", "u-warnsub2");
   assert.match(multi, /⚠️ Bot belum pernah liat member "unkwarna", "zzqxunk2" live/);
+});
+
+// ==== Review pass: nama member + rentang, edge case ====
+test("extractMemberFromPeriodText - beberapa kata sisa: dipakai kalau TEPAT satu yang dikenali sebagai member", () => {
+  recordLiveCompleted("jkt48_extrk", "Extrk JKT48");
+  assert.equal(extractMemberFromPeriodText("rekap tolongin extrk minggu ini"), "extrk");
+  assert.equal(extractMemberFromPeriodText("rekap asalasalan tololol minggu ini"), null, "gak ada yang dikenali -> bukan per-member");
+});
+
+test("findMultipleKnownMembers / replyOneMemberOnly - dua member dikenali di satu permintaan terdeteksi", () => {
+  recordLiveCompleted("jkt48_multia", "Multia JKT48");
+  recordLiveCompleted("jkt48_multib", "Multib JKT48");
+  assert.deepEqual(findMultipleKnownMembers("rekap multia multib minggu ini"), ["multia", "multib"]);
+  assert.equal(findMultipleKnownMembers("rekap multia minggu ini"), null);
+  assert.match(replyOneMemberOnly(["multia", "multib"]), /cuma bisa SATU nama.*"multia", "multib"/);
+});
+
+test("replyExportRecap - 'export rekap <nama> hari ini' cuma sesi HARI INI (dulu jatuh jadi semua arsip), nama hari & dua member ditolak jelas", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const now = new Date();
+  fresh.recordLiveEnded("Exporttoday", "jkt48_exporttoday", new Date(now.getTime() - 600_000), now, 5);
+  fresh.recordLiveEnded(
+    "Exporttoday",
+    "jkt48_exporttoday",
+    new Date(now.getTime() - 3 * 86_400_000),
+    new Date(now.getTime() - 3 * 86_400_000 + 600_000),
+    5,
+  );
+  recordLiveCompleted("jkt48_exporttoday", "Exporttoday JKT48");
+  recordLiveCompleted("jkt48_exportother", "Exportother JKT48");
+
+  const today = await fresh.replyExportRecap("cok export rekap exporttoday hari ini");
+  assert.match(today.content, /Exporttoday JKT48 - hari ini \(1 sesi\)/);
+
+  const all = await fresh.replyExportRecap("cok export rekap exporttoday");
+  assert.match(all.content, /semua arsip \d+ hari\) \(2 sesi\)/);
+
+  assert.match(await fresh.replyExportRecap("cok export rekap exporttoday senin"), /per nama hari belum bisa/);
+  assert.match(await fresh.replyExportRecap("cok export rekap exporttoday exportother"), /cuma bisa SATU nama/);
+});
+
+test("rekap per member dengan 20 baris dan nama sangat panjang tetap di bawah batas 2000 karakter Discord (dulu ~2200 -> ditolak Discord tanpa pesan)", async () => {
+  const name = "Jesslyn Elly Maharani JKT48";
+  const now = Date.now();
+  for (let k = 0; k < 25; k++) {
+    const end = new Date(now - k * 3 * 3600_000);
+    recordLiveEnded(name, "jkt48_lenguard", new Date(end.getTime() - 3600_000), end, 10);
+  }
+  recordLiveCompleted("jkt48_lenguard", name);
+
+  const full = await replyRecapMember("jesslyn", "c-lenguard", "u-lenguard");
+  assert.ok(full.content.length < 2000, `rekap penuh ${full.content.length} karakter`);
+  const ranged = await replyRecapMemberInRange("jesslyn", { rangeDays: 7, label: "minggu ini" });
+  assert.ok(ranged.content.length < 2000, `rekap rentang ${ranged.content.length} karakter`);
+
+  // tampilan multi-member: nama kepanjangan dipotong, bukan meledakkan pesan
+  const { text } = buildRecapTablePage(
+    Array.from({ length: 20 }, (_, i) => ({ name, username: `u${i}`, startedAtUnix: 1000 + i, endedAtUnix: 2000 + i, durationMs: 1000 })),
+    0,
+  );
+  assert.match(text, /Jesslyn[^|]*… /);
+  assert.ok(text.length <= 1560, `tabel ${text.length} karakter`);
+
+  // nama pendek gak dipotong sama sekali (anggaran cuma dipakai kalau kepepet)
+  const short = buildRecapTablePage([{ name: "Nala JKT48", username: "n", startedAtUnix: 1000, endedAtUnix: 2000, durationMs: 1000 }], 0);
+  assert.match(short.text, /Nala JKT48 /);
+  assert.doesNotMatch(short.text, /…/);
 });
