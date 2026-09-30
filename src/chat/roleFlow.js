@@ -6,7 +6,8 @@ const { normalizeMemberFragment, isOwner } = require("./replies");
 const { safeReplyOptions } = require("../utils");
 const { loadRolePanelState, saveRolePanelState } = require("../storage/rolePanelState");
 const { getDiscordClient } = require("../discordClient");
-const { ROLE_CHANNEL_ID } = require("../config");
+const { ROLE_CHANNEL_ID, ALL_LIVE_CHANNEL_ID, DISCORD_WEBHOOK_URL } = require("../config");
+const { deleteInteractionMessage } = require("./interactionHelpers");
 
 // Panel role notif live. Tiap member yang punya channel privat (mis.
 // #aralie-jkt48) punya role bernama member itu (mis. "Aralie") yang OWNER
@@ -31,7 +32,37 @@ const { ROLE_CHANNEL_ID } = require("../config");
 const MEMBERS_PER_MENU = 25;
 const MAX_MENUS = 4;
 const ROLE_REASON = "Notif live JKT48 (panel role)";
-const ALL_ROLE_NAME = "🔔 Semua Member";
+const ALL_ROLE_NAME = "all-live";
+
+// Channel live semua member (buat link "<#id>" abis user aktifin notif semua).
+// Dari env ALL_LIVE_CHANNEL_ID, atau dicari dari DISCORD_WEBHOOK_URL - info
+// webhook (GET tanpa auth) ngasih channel_id-nya. Gagal -> null, link-nya aja
+// yang dilewat.
+let cachedAllLiveChannelId = null;
+
+async function resolveAllLiveChannelId() {
+  if (ALL_LIVE_CHANNEL_ID) return ALL_LIVE_CHANNEL_ID;
+  if (cachedAllLiveChannelId) return cachedAllLiveChannelId;
+  if (!DISCORD_WEBHOOK_URL) return null;
+  try {
+    const response = await fetch(DISCORD_WEBHOOK_URL, { signal: AbortSignal.timeout(2000) });
+    if (!response.ok) return null;
+    const data = await response.json();
+    cachedAllLiveChannelId = data.channel_id || null;
+    return cachedAllLiveChannelId;
+  } catch {
+    return null;
+  }
+}
+
+async function allLiveChannelLine() {
+  const channelId = await resolveAllLiveChannelId();
+  return channelId ? `\nLangsung cek channel live semua member: <#${channelId}>` : "";
+}
+
+function resetAllLiveChannelCache() {
+  cachedAllLiveChannelId = null;
+}
 
 function cleanName(name) {
   return (name || "").replace(/\s*JKT48\s*$/i, "").trim();
@@ -158,16 +189,33 @@ async function resolveRole(guild, roleId) {
 
 // Layar pengaturan pribadi. `hasRole` (opsional) nimpa cara ngecek role - dipake
 // abis nambah/cabut role, soalnya cache role member belum tentu udah ke-update.
-function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasRole(member, roleId)) {
+// `askAll` (default true): kalau user belum punya role "semua member", layar
+// nanya "mau sekalian akses live SEMUA member?" (tombol Ya / Tidak). Abis
+// jawab "Tidak" layar dibangun ulang dengan askAll=false (dibawa lewat suffix
+// ":q0" di customId dropdown/tombol, jadi stateless) dan gantinya cuma ada
+// petunjuk "ketik notif live semua" - gak nanya lagi terus-terusan.
+function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasRole(member, roleId), { askAll = true } = {}) {
   const allOn = hasRole(getRoleIdFor(ALL_MEMBERS_KEY));
-  const buttonRow = new ActionRowBuilder().addComponents(
+  const showAsk = askAll && !allOn;
+  const suffix = askAll ? "" : ":q0";
+  const buttons = [
     new ButtonBuilder().setCustomId("role_flow:close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId("role_flow:clearall").setLabel("🔕 Matikan semua").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("role_flow:alltoggle")
-      .setLabel(allOn ? "🔔 Semua member: AKTIF" : "🔔 Semua member: mati")
-      .setStyle(allOn ? ButtonStyle.Success : ButtonStyle.Secondary),
-  );
+    new ButtonBuilder().setCustomId(`role_flow:clearall${suffix}`).setLabel("🔕 Matikan semua").setStyle(ButtonStyle.Secondary),
+  ];
+  if (showAsk) {
+    buttons.push(
+      new ButtonBuilder().setCustomId("role_flow:allyes").setLabel("✅ Ya, sekalian semua member").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("role_flow:allno").setLabel("Tidak, cukup segini").setStyle(ButtonStyle.Secondary),
+    );
+  } else {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId("role_flow:alltoggle")
+        .setLabel(allOn ? "🔔 Semua member: AKTIF" : "🔔 Semua member: mati")
+        .setStyle(allOn ? ButtonStyle.Success : ButtonStyle.Secondary),
+    );
+  }
+  const buttonRow = new ActionRowBuilder().addComponents(buttons);
   const prefix = note ? `${note}\n\n` : "";
   const roster = getRoleRoster();
   if (roster.length === 0) {
@@ -187,7 +235,7 @@ function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasR
       return { label: m.label.slice(0, 100), value: m.username, default: on };
     });
     const select = new StringSelectMenuBuilder()
-      .setCustomId(`role_select:${page}`)
+      .setCustomId(`role_select:${page}${suffix}`)
       .setPlaceholder(`${chunk[0].label} - ${chunk[chunk.length - 1].label}`.slice(0, 150))
       .setMinValues(0)
       .setMaxValues(options.length)
@@ -196,13 +244,20 @@ function buildSettingsScreen(member, note = "", hasRole = (roleId) => memberHasR
   }
 
   const allNote = allOn ? ' Kamu juga lagi aktif di "Semua member".' : "";
-  const intro = `🎯 Pilih member yang mau kamu dapet notif live-nya (centang = aktif, lepas centang = berhenti). Sekarang aktif: **${active}** member.${allNote}`;
+  let extra = "";
+  if (showAsk) {
+    extra =
+      "\n\n❓ Mau sekalian dapet notif live **SEMUA** member (dan akses channel-nya)? Kalau nggak mau, gak apa-apa - kamu tetap dapet member pilihanmu.";
+  } else if (!allOn) {
+    extra = '\n\n💡 Kepo sama live member lain? Ketik "notif live semua" kapan aja, nanti ditanya lagi dan bisa langsung aktif.';
+  }
+  const intro = `🎯 Pilih member yang mau kamu dapet notif live-nya (centang = aktif, lepas centang = berhenti). Sekarang aktif: **${active}** member.${allNote}${extra}`;
   return { content: `${prefix}${intro}`, components: [...rows, buttonRow] };
 }
 
-// Role "semua member": dipake yang didaftarin owner, atau dibikin bot sendiri
-// (lazy) kalau belum ada - role ini gak ngatur akses channel apapun, jadi aman
-// dibikin otomatis.
+// Role "semua member" (default bernama "all-live"): dipake yang didaftarin owner,
+// atau dibikin bot sendiri (lazy) kalau belum ada. Role bikinan bot cuma nge-ping;
+// akses ke channel live semua member harus diatur owner di permission channel-nya.
 const inflightAllRole = { promise: null };
 
 async function ensureAllRole(guild) {
@@ -234,7 +289,7 @@ function describeRoleError(error) {
 }
 
 async function handleRoleFlowButton(interaction) {
-  const action = interaction.customId.split(":")[1];
+  const [, action, extra] = interaction.customId.split(":");
   if (action === "open") {
     await interaction.reply(safeReplyOptions({ ...buildSettingsScreen(interaction.member), flags: MessageFlags.Ephemeral }));
     return;
@@ -245,7 +300,11 @@ async function handleRoleFlowButton(interaction) {
   }
   if (action === "all") return handleAllFromPanel(interaction);
   if (action === "alltoggle") return handleAllToggle(interaction);
-  if (action === "clearall") return handleRoleClearAll(interaction);
+  if (action === "allyes") return handleAllYes(interaction);
+  if (action === "allno") return handleAllNo(interaction);
+  if (action === "clearall") return handleRoleClearAll(interaction, extra !== "q0");
+  if (action === "confirmyes") return handleAllConfirm(interaction, extra, true);
+  if (action === "confirmno") return handleAllConfirm(interaction, extra, false);
 }
 
 // Klik "🔔 Semua member" di panel/sambutan (pesan PUBLIK) -> balasan ephemeral baru.
@@ -261,14 +320,14 @@ async function handleAllFromPanel(interaction) {
   try {
     allRoleId = await ensureAllRole(guild);
     if (!memberHasRole(member, allRoleId)) await member.roles.add(allRoleId, ROLE_REASON);
-    note = "✅ Beres! Kamu bakal di-tag tiap SIAPAPUN member mulai live.";
+    note = `✅ Beres! Kamu bakal di-tag tiap SIAPAPUN member mulai live.${await allLiveChannelLine()}`;
   } catch (error) {
     console.error("Gagal ngasih role semua member:", error.message);
     note = describeRoleError(error);
     allRoleId = null;
   }
   const hasRole = (roleId) => memberHasRole(member, roleId) || (allRoleId !== null && roleId === allRoleId);
-  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole)));
+  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole, { askAll: false })));
 }
 
 // Klik tombol toggle "Semua member" di layar pengaturan (pesan ephemeral) -> edit di tempat.
@@ -292,7 +351,7 @@ async function handleAllToggle(interaction) {
       const roleId = await ensureAllRole(guild);
       await member.roles.add(roleId, ROLE_REASON);
       finalOn = true;
-      note = '✅ "Semua member" aktif - kamu di-tag tiap SIAPAPUN mulai live.';
+      note = `✅ "Semua member" aktif - kamu di-tag tiap SIAPAPUN mulai live.${await allLiveChannelLine()}`;
     }
   } catch (error) {
     console.error("Gagal toggle role semua member:", error.message);
@@ -300,10 +359,92 @@ async function handleAllToggle(interaction) {
   }
   const allRoleId = getRoleIdFor(ALL_MEMBERS_KEY);
   const hasRole = (roleId) => (roleId === allRoleId ? finalOn : memberHasRole(member, roleId));
-  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole)));
+  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole, { askAll: false })));
 }
 
-async function handleRoleClearAll(interaction) {
+// "✅ Ya, sekalian semua member" di layar pengaturan - SELALU ngaktifin (beda dari
+// toggle yang bisa matiin kalau ternyata udah aktif).
+async function handleAllYes(interaction) {
+  await interaction.deferUpdate();
+  const { member, guild } = interaction;
+  if (!member || !guild) {
+    await interaction.editReply(safeReplyOptions({ content: "Cok, panel role cuma jalan di dalam server.", components: [] }));
+    return;
+  }
+  let note;
+  let allRoleId = getRoleIdFor(ALL_MEMBERS_KEY);
+  try {
+    allRoleId = await ensureAllRole(guild);
+    if (!memberHasRole(member, allRoleId)) await member.roles.add(allRoleId, ROLE_REASON);
+    note = `✅ Sip! Kamu juga dapet notif live SEMUA member.${await allLiveChannelLine()}`;
+  } catch (error) {
+    console.error("Gagal ngasih role semua member:", error.message);
+    note = describeRoleError(error);
+    allRoleId = null;
+  }
+  const hasRole = (roleId) => memberHasRole(member, roleId) || (allRoleId !== null && roleId === allRoleId);
+  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole, { askAll: false })));
+}
+
+// "Tidak, cukup segini" - dibiarin, tapi dikasih petunjuk cara minta lagi nanti.
+async function handleAllNo(interaction) {
+  const note =
+    'Oke, gak masalah! 👍 Kalau nanti kepo sama live member lain, tinggal ketik "notif live semua" - nanti ditanya lagi dan bisa langsung aktif.';
+  await interaction.update(safeReplyOptions(buildSettingsScreen(interaction.member, note, undefined, { askAll: false })));
+}
+
+// Konfirmasi "notif live semua" yang DIKETIK ("Yakin?" + Ya/Tidak). customId
+// bawa ID orang yang minta - tombolnya cuma buat dia (pesannya publik).
+function buildAllLiveConfirm(userId) {
+  return {
+    content:
+      "🔔 Yakin mau dapet notif live **SEMUA** member? Kamu bakal di-tag tiap ada member yang live, dan dapet akses ke channel live semua member. (Bisa dimatiin kapan aja lewat panel role.)",
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`role_flow:confirmyes:${userId}`).setLabel("Ya").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`role_flow:confirmno:${userId}`).setLabel("Tidak").setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+  };
+}
+
+async function handleAllConfirm(interaction, askerId, isYes) {
+  if (interaction.user.id !== askerId) {
+    await interaction.reply(safeReplyOptions({ content: "Cok, tombol ini buat orang yang minta notif tadi ya.", flags: MessageFlags.Ephemeral }));
+    return;
+  }
+  // "Tidak" -> ditutup (pesannya dihapus); bisa minta lagi kapan aja.
+  if (!isYes) {
+    await deleteInteractionMessage(interaction);
+    return;
+  }
+
+  await interaction.deferUpdate();
+  const { member, guild } = interaction;
+  if (!member || !guild) {
+    await interaction.editReply(safeReplyOptions({ content: "Cok, ini cuma jalan di dalam server.", components: [] }));
+    return;
+  }
+  const closeRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("reply_close").setLabel("Tutup").setStyle(ButtonStyle.Danger),
+  );
+  let content;
+  try {
+    const allRoleId = await ensureAllRole(guild);
+    if (memberHasRole(member, allRoleId)) {
+      content = `Kamu udah aktif di notif live SEMUA member kok. 👍${await allLiveChannelLine()}`;
+    } else {
+      await member.roles.add(allRoleId, ROLE_REASON);
+      content = `✅ Beres! Sekarang kamu dapet notif live SEMUA member.${await allLiveChannelLine()}`;
+    }
+  } catch (error) {
+    console.error("Gagal ngasih role semua member:", error.message);
+    content = describeRoleError(error);
+  }
+  await interaction.editReply(safeReplyOptions({ content, components: [closeRow] }));
+}
+
+async function handleRoleClearAll(interaction, askAll = true) {
   await interaction.deferUpdate();
   const member = interaction.member;
   const owned = new Set(Object.values(loadMemberRoles()).filter((id) => memberHasRole(member, id)));
@@ -316,11 +457,15 @@ async function handleRoleClearAll(interaction) {
     note = describeRoleError(error);
     owned.clear();
   }
-  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, (roleId) => memberHasRole(member, roleId) && !owned.has(roleId))));
+  await interaction.editReply(
+    safeReplyOptions(buildSettingsScreen(member, note, (roleId) => memberHasRole(member, roleId) && !owned.has(roleId), { askAll })),
+  );
 }
 
 async function handleRoleFlowSelect(interaction) {
-  const page = Number(interaction.customId.split(":")[1]) || 0;
+  const idParts = interaction.customId.split(":");
+  const page = Number(idParts[1]) || 0;
+  const askAll = idParts[2] !== "q0";
   await interaction.deferUpdate();
 
   const { member, guild } = interaction;
@@ -378,7 +523,7 @@ async function handleRoleFlowSelect(interaction) {
   const addSet = new Set(toAdd);
   const removeSet = new Set(toRemove);
   const hasRole = (roleId) => (memberHasRole(member, roleId) || addSet.has(roleId)) && !removeSet.has(roleId);
-  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole)));
+  await interaction.editReply(safeReplyOptions(buildSettingsScreen(member, note, hasRole, { askAll })));
 }
 
 // ==== Perintah owner: daftarin role member ====
@@ -458,6 +603,8 @@ module.exports = {
   buildRolePanel,
   syncRolePanel,
   syncRolePanelOnBoot,
+  buildAllLiveConfirm,
+  resetAllLiveChannelCache,
   buildSettingsScreen,
   handleRoleFlowButton,
   handleRoleFlowSelect,

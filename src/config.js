@@ -91,6 +91,12 @@ const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID || "";
 // dikosongin.
 const ROLE_CHANNEL_ID = process.env.ROLE_CHANNEL_ID || "";
 
+// Opsional - channel tempat SEMUA notif live masuk (channel gabungan). Dipake
+// buat ngasih link "<#id>" ke user yang baru aktifin notif live semua member.
+// Kalau kosong, bot nyari sendiri channel dari DISCORD_WEBHOOK_URL (Discord
+// nyediain channel_id di info webhook-nya).
+const ALL_LIVE_CHANNEL_ID = process.env.ALL_LIVE_CHANNEL_ID || "";
+
 // Perkiraan "kemungkinan mendekati akhir" buat member prioritas dipicu kalau
 // durasi live udah ngelewatin ambang ini (kalau belum ada riwayat durasi
 // buat member itu). Bisa di-override lewat env var, satuannya menit.
@@ -241,6 +247,7 @@ module.exports = {
   DISCORD_GUILD_ID,
   BOT_CHANNEL_ID,
   ROLE_CHANNEL_ID,
+  ALL_LIVE_CHANNEL_ID,
   DEFAULT_ENDING_SOON_THRESHOLD_MS,
   MAX_PLAUSIBLE_LIVE_DURATION_MS,
   JKT48_USERNAME_WHITELIST,

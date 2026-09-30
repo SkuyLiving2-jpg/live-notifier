@@ -26,6 +26,7 @@ const {
   handleAddMemberRole,
   handleRemoveMemberRole,
   replyRoleList,
+  buildAllLiveConfirm,
 } = require("./roleFlow");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
@@ -165,6 +166,14 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   const mentionsBot = isBotChannel || Boolean(dedicatedUsername) || CHAT_WAKE_WORDS.some((w) => containsWholeWord(text, w));
   const looksLikeLiveQuestion =
     TOPIC_WORDS.some((w) => containsWholeWord(text, w)) && QUESTION_HINTS.some((w) => (w === "?" ? text.includes("?") : containsWholeWord(text, w)));
+
+  // "notif live semua" (juga "notif semua"/"notifikasi live semua member") -
+  // frasa yang SPESIFIK dan dicek dari SELURUH pesan, jadi jalan di channel
+  // manapun tanpa "cok" (member baru biasanya cuma bisa ngetik di channel
+  // tertentu). Dijawab konfirmasi "Yakin?" + tombol Ya/Tidak (chat/roleFlow.js).
+  if (authorId && /^(?:cok[,.!?]?\s+)?(?:tolong\s+)?notif(?:ikasi)?\s+(?:live\s+)?semua(?:\s+member)?[?!.\s]*$/.test(text)) {
+    return buildAllLiveConfirm(authorId);
+  }
 
   if (!mentionsBot && !looksLikeLiveQuestion) return null;
 

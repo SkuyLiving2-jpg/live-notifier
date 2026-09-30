@@ -20,7 +20,15 @@ const {
   handleRemoveMemberRole,
   replyRoleList,
   parseRoleRef,
+  buildAllLiveConfirm,
+  resetAllLiveChannelCache,
 } = require("../src/chat/roleFlow");
+
+// Info webhook palsu (GET DISCORD_WEBHOOK_URL -> channel_id) supaya link "<#id>" bisa
+// dites tanpa network. Tes lain yang mau nangkep fetch memasang mock-nya sendiri
+// dan mengembalikan yang ini.
+const CHANNEL_LOOKUP_FETCH = async () => ({ ok: true, json: async () => ({ channel_id: "chan-all-live" }) });
+global.fetch = CHANNEL_LOOKUP_FETCH;
 
 // Guild/member palsu: cukup yang dipakai roleFlow.js. Gak nyentuh Discord asli.
 function fakeGuild({ existingRoles = [] } = {}) {
@@ -254,7 +262,13 @@ test("buildSettingsScreen - dropdown maks 25, role yang dipunya ke-centang, 3 to
   seedRoles();
   const screen = buildSettingsScreen(fakeMember(["role-alpha"]));
   assert.ok(screen.components.length <= 5);
-  assert.deepEqual(ids(screen.components[screen.components.length - 1]), ["role_flow:close", "role_flow:clearall", "role_flow:alltoggle"]);
+  assert.deepEqual(ids(screen.components[screen.components.length - 1]), [
+    "role_flow:close",
+    "role_flow:clearall",
+    "role_flow:allyes",
+    "role_flow:allno",
+  ]);
+  assert.match(screen.content, /sekalian dapet notif live \*\*SEMUA\*\* member/);
   const select = screen.components[0].toJSON().components[0];
   assert.equal(select.custom_id, "role_select:0");
   assert.equal(select.min_values, 0);
@@ -267,7 +281,7 @@ test("buildSettingsScreen - belum ada role yang didaftarin owner -> pesan jelas,
   resetRoles();
   const screen = buildSettingsScreen(fakeMember());
   assert.match(screen.content, /owner belum daftarin role member/);
-  assert.deepEqual(ids(screen.components[0]), ["role_flow:close", "role_flow:clearall", "role_flow:alltoggle"]);
+  assert.deepEqual(ids(screen.components[0]), ["role_flow:close", "role_flow:clearall", "role_flow:allyes", "role_flow:allno"]);
 });
 
 test("tombol 'open' - balas EPHEMERAL dengan layar pengaturan", async () => {
@@ -293,7 +307,7 @@ test("tombol 'all' (dari panel/sambutan) - role 'semua member' dibikin bot (ment
 
   assert.equal(interaction.log.deferredReply, 1);
   assert.equal(guild.created.length, 1);
-  assert.equal(guild.created[0].name, "🔔 Semua Member");
+  assert.equal(guild.created[0].name, "all-live");
   assert.equal(guild.created[0].mentionable, true);
   assert.equal(getRoleIdFor(ALL_MEMBERS_KEY), guild.created[0].id);
   assert.deepEqual(member.calls.add, [[guild.created[0].id]]);
@@ -536,4 +550,158 @@ test("sendDiscordNotif - tanpa role apapun dan tanpa subscriber -> gak ada menti
   const [start] = await captureNotif("Noping", "jkt48_nopingrole");
   assert.doesNotMatch(start.content, /<@/);
   assert.deepEqual(start.allowed_mentions, { parse: [] });
+});
+
+// ==== Pertanyaan "sekalian semua member?" di alur pilih member ====
+test("buildSettingsScreen - user yang SUDAH punya role semua member: gak ditanya lagi, tombol toggle AKTIF (tanpa Ya/Tidak)", () => {
+  seedRoles();
+  setRoleIdFor(ALL_MEMBERS_KEY, "role-all");
+  const screen = buildSettingsScreen(fakeMember(["role-all"]));
+  assert.deepEqual(ids(screen.components[screen.components.length - 1]), ["role_flow:close", "role_flow:clearall", "role_flow:alltoggle"]);
+  assert.doesNotMatch(screen.content, /sekalian/);
+  assert.doesNotMatch(screen.content, /notif live semua/);
+});
+
+test("buildSettingsScreen - askAll:false (sudah jawab 'Tidak'): gak nanya, ada petunjuk 'notif live semua', customId dropdown/tombol bawa ':q0'", () => {
+  seedRoles();
+  const screen = buildSettingsScreen(fakeMember(), "", undefined, { askAll: false });
+  assert.deepEqual(ids(screen.components[screen.components.length - 1]), ["role_flow:close", "role_flow:clearall:q0", "role_flow:alltoggle"]);
+  assert.equal(screen.components[0].toJSON().components[0].custom_id, "role_select:0:q0");
+  assert.doesNotMatch(screen.content, /sekalian/);
+  assert.match(screen.content, /Ketik "notif live semua"/);
+});
+
+test("alur pilih member: pilih dulu -> masih ditanya; klik 'Tidak, cukup' -> dibiarkan + petunjuk; pilih lagi -> TIDAK ditanya ulang", async () => {
+  seedRoles();
+  const guild = guildWithMemberRoles();
+  const member = fakeMember();
+
+  const picked = fakeInteraction({ customId: "role_select:0", values: ["jkt48_rolealpha"], member, guild });
+  await handleRoleFlowSelect(picked);
+  const afterPick = picked.log.edits[0];
+  assert.match(afterPick.content, /sekalian dapet notif live \*\*SEMUA\*\* member/);
+  assert.deepEqual(ids(afterPick.components[afterPick.components.length - 1]), [
+    "role_flow:close",
+    "role_flow:clearall",
+    "role_flow:allyes",
+    "role_flow:allno",
+  ]);
+
+  const no = fakeInteraction({ customId: "role_flow:allno", member, guild });
+  await handleRoleFlowButton(no);
+  const afterNo = no.log.updates[0];
+  assert.match(afterNo.content, /Kalau nanti kepo sama live member lain, tinggal ketik "notif live semua"/);
+  assert.doesNotMatch(afterNo.content, /Mau sekalian/);
+  assert.equal(member.calls.add.length, 1, "'Tidak' gak ngasih role semua member");
+  assert.equal(afterNo.components[0].toJSON().components[0].custom_id, "role_select:0:q0");
+
+  const again = fakeInteraction({ customId: "role_select:0:q0", values: ["jkt48_rolealpha", "jkt48_rolebeta"], member, guild });
+  await handleRoleFlowSelect(again);
+  assert.doesNotMatch(again.log.edits[0].content, /Mau sekalian/);
+  assert.match(again.log.edits[0].content, /Ketik "notif live semua"/);
+});
+
+test("'Ya, sekalian semua member' - role all-live dikasih, ada link channel live semua member, layar berubah AKTIF tanpa pertanyaan lagi", async () => {
+  seedRoles();
+  resetAllLiveChannelCache();
+  const guild = fakeGuild();
+  const member = fakeMember();
+  const interaction = fakeInteraction({ customId: "role_flow:allyes", member, guild });
+  await handleRoleFlowButton(interaction);
+
+  assert.equal(guild.created[0].name, "all-live");
+  assert.deepEqual(member.calls.add, [[guild.created[0].id]]);
+  const edit = interaction.log.edits[0];
+  assert.match(edit.content, /dapet notif live SEMUA member/);
+  assert.match(edit.content, /<#chan-all-live>/);
+  assert.match(edit.components[edit.components.length - 1].toJSON().components[2].label, /Semua member: AKTIF/);
+});
+
+test("'Ya' dua kali (klik ulang) tetap AKTIF, gak pernah malah mematikan (beda dari toggle)", async () => {
+  seedRoles();
+  setRoleIdFor(ALL_MEMBERS_KEY, "role-all");
+  const guild = fakeGuild({ existingRoles: [{ id: "role-all", name: "all-live" }] });
+  const member = fakeMember(["role-all"]);
+  await handleRoleFlowButton(fakeInteraction({ customId: "role_flow:allyes", member, guild }));
+  assert.equal(member.calls.remove.length, 0);
+  assert.equal(member.roles.cache.has("role-all"), true);
+});
+
+test("'Ya' tanpa izin Manage Roles -> pesan jelas, tetap dapet layar (bukan crash)", async () => {
+  seedRoles();
+  const member = fakeMember([], { failWith: Object.assign(new Error("Missing Permissions"), { code: 50013 }) });
+  const interaction = fakeInteraction({ customId: "role_flow:allyes", member, guild: fakeGuild() });
+  await handleRoleFlowButton(interaction);
+  assert.match(interaction.log.edits[0].content, /Manage Roles/);
+});
+
+test("link channel: dari env/webhook; kalau lookup gagal, link dilewat tapi role tetap dikasih", async () => {
+  seedRoles();
+  resetAllLiveChannelCache();
+  const original = global.fetch;
+  global.fetch = async () => {
+    throw new Error("network down");
+  };
+  try {
+    const guild = fakeGuild();
+    const member = fakeMember();
+    const interaction = fakeInteraction({ customId: "role_flow:allyes", member, guild });
+    await handleRoleFlowButton(interaction);
+    assert.equal(member.calls.add.length, 1);
+    assert.doesNotMatch(interaction.log.edits[0].content, /<#/);
+  } finally {
+    global.fetch = original;
+    resetAllLiveChannelCache();
+  }
+});
+
+// ==== "notif live semua" yang diketik: Yakin? -> Ya / Tidak ====
+test("buildAllLiveConfirm - pertanyaan 'Yakin?' + tombol Ya/Tidak yang bawa ID orang yang minta", () => {
+  const confirm = buildAllLiveConfirm("user-42");
+  assert.match(confirm.content, /Yakin mau dapet notif live \*\*SEMUA\*\* member/);
+  assert.deepEqual(ids(confirm.components[0]), ["role_flow:confirmyes:user-42", "role_flow:confirmno:user-42"]);
+});
+
+test("konfirmasi 'Tidak' - pesan DITUTUP (dihapus), role gak disentuh", async () => {
+  seedRoles();
+  const member = fakeMember();
+  const calls = [];
+  const interaction = {
+    ...fakeInteraction({ customId: "role_flow:confirmno:u-role", member, guild: fakeGuild() }),
+    deferUpdate: async () => calls.push("defer"),
+    message: { delete: async () => calls.push("delete") },
+  };
+  await handleRoleFlowButton(interaction);
+  assert.deepEqual(calls, ["defer", "delete"]);
+  assert.equal(member.calls.add.length, 0);
+});
+
+test("konfirmasi 'Ya' - role all-live dikasih, pesan di-edit jadi hasil + link channel + Tutup; udah punya -> dibilangin, gak dobel", async () => {
+  seedRoles();
+  resetAllLiveChannelCache();
+  const guild = fakeGuild();
+  const member = fakeMember();
+  const interaction = fakeInteraction({ customId: "role_flow:confirmyes:u-role", member, guild });
+  await handleRoleFlowButton(interaction);
+  assert.equal(member.calls.add.length, 1);
+  const edit = interaction.log.edits[0];
+  assert.match(edit.content, /Sekarang kamu dapet notif live SEMUA member/);
+  assert.match(edit.content, /<#chan-all-live>/);
+  assert.deepEqual(ids(edit.components[0]), ["reply_close"]);
+
+  const again = fakeInteraction({ customId: "role_flow:confirmyes:u-role", member, guild });
+  await handleRoleFlowButton(again);
+  assert.equal(member.calls.add.length, 1, "gak nambah lagi");
+  assert.match(again.log.edits[0].content, /udah aktif/);
+});
+
+test("konfirmasi Ya/Tidak dari ORANG LAIN (bukan yang minta) ditolak ephemeral, role & pesan gak berubah", async () => {
+  seedRoles();
+  const member = fakeMember();
+  const interaction = fakeInteraction({ customId: "role_flow:confirmyes:orang-lain", member, guild: fakeGuild() });
+  await handleRoleFlowButton(interaction);
+  assert.equal(interaction.log.replies[0].flags, 64);
+  assert.match(interaction.log.replies[0].content, /buat orang yang minta/);
+  assert.equal(member.calls.add.length, 0);
+  assert.equal(interaction.log.deferred, 0);
 });

@@ -49,3 +49,25 @@ test("owner: 'tambah role <nama> @Role' / 'daftar role' / 'hapus role <nama>' ja
   assert.match(await ask("cok hapus role routerrole", "owner-role-test"), /dilepas dari daftar role/);
   assert.equal(getRoleIdFor("jkt48_routerrole"), null);
 });
+
+test("'notif live semua' (dan variasinya) di channel MANAPUN tanpa 'cok' -> pertanyaan 'Yakin?' dengan tombol Ya/Tidak buat orang itu", async () => {
+  for (const text of [
+    "notif live semua",
+    "Notif Live Semua",
+    "notif semua",
+    "notifikasi live semua member",
+    "cok notif live semua",
+    "tolong notif live semua?",
+  ]) {
+    const reply = await buildChatReply(text, { isBotChannel: false, channelId: "c-biasa", authorId: "user-x" });
+    assert.match(reply.content, /Yakin mau dapet notif live \*\*SEMUA\*\* member/, text);
+    assert.deepEqual(ids(reply), ["role_flow:confirmyes:user-x", "role_flow:confirmno:user-x"], text);
+  }
+});
+
+test("kalimat lain yang cuma MENGANDUNG 'notif live semua' TIDAK dibajak jadi konfirmasi", async () => {
+  for (const text of ["gimana caranya notif live semua member itu ya", "aku mau notif live semua tapi bingung"]) {
+    const reply = await buildChatReply(text, { isBotChannel: false, channelId: "c-biasa", authorId: "user-x" });
+    assert.doesNotMatch(JSON.stringify(reply), /confirmyes/, text);
+  }
+});
