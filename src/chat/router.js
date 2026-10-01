@@ -715,15 +715,51 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
 // command-nya diem. Penyebab paling mungkin buat grafik: gambar PNG butuh
 // izin "Attach Files" (error 50013 kalau gak ada), sementara teks biasa
 // cukup "Send Messages". Jadi dicoba kirim penjelasan TEKS POLOS.
+// Error izin (50013 Missing Permissions, 160002 gak bisa reply tanpa izin baca
+// riwayat pesan, 50001 Missing Access) itu soal SETUP channel di Discord, bukan
+// bug - tapi log lamanya gak nyebut channel mana (jadi susah dicari) dan nyetak
+// dua baris tiap pesan. Sekarang SATU baris yang nyebut nama + ID channel dan
+// izin yang kurang, maksimal sekali per channel per 10 menit.
+const PERMISSION_ERROR_CODES = new Set([50013, 160002, 50001]);
+const PERMISSION_LOG_COOLDOWN_MS = 10 * 60 * 1000;
+const lastPermissionLogAt = new Map();
+
+function describePermissionProblem(code) {
+  if (code === 160002) return 'izin "Read Message History" belum ada (wajib buat membalas/reply pesan)';
+  if (code === 50001) return 'bot gak punya akses ke channel ini (izin "View Channel" belum ada)';
+  return 'izin "Send Messages" (atau izin lain yang dibutuhin balasan ini) belum ada';
+}
+
+function logReplyFailure(message, error) {
+  if (!PERMISSION_ERROR_CODES.has(error?.code)) {
+    console.error("Gagal kirim balesan chat:", error?.message, "| code:", error?.code);
+    return;
+  }
+  const channelId = message?.channel?.id || message?.channelId || "?";
+  const now = Date.now();
+  if (now - (lastPermissionLogAt.get(channelId) || 0) < PERMISSION_LOG_COOLDOWN_MS) return;
+  lastPermissionLogAt.set(channelId, now);
+  console.error(
+    `Bot gak bisa membalas di channel #${message?.channel?.name || "?"} (ID ${channelId}): ${describePermissionProblem(error.code)} - kode ${error.code}. ` +
+      "Cek Permissions channel/kategori itu buat role bot: View Channel, Send Messages, Read Message History (+ Attach Files buat grafik/CSV). Log ini muncul maks sekali per 10 menit per channel.",
+  );
+}
+
 async function replyWithFailureNotice(message, reply, error) {
-  console.error("Gagal kirim balesan chat:", error.message, "| code:", error.code);
+  logReplyFailure(message, error);
+  // Tanpa izin baca riwayat, balasan apapun (termasuk penjelasan ini) pasti
+  // ditolak dengan alasan yang sama - gak usah dicoba.
+  if (error?.code === 160002) return;
   const hasFiles = typeof reply === "object" && Array.isArray(reply.files) && reply.files.length > 0;
   const notice =
     error.code === 50013 && hasFiles
       ? 'Cok, gambarnya gak bisa kekirim - bot belum punya izin "Attach Files" di channel ini. Minta admin nambahin izin itu ke role bot ya.'
       : "Cok, ada error pas ngirim balesannya. Coba lagi bentar ya.";
   await message.reply(safeReplyOptions(notice)).catch((noticeError) => {
-    console.error("Gagal kirim pesan error-nya juga:", noticeError.message, "| code:", noticeError.code);
+    // Izin error: sudah dicatat sekali di atas, jangan dobel-dobel.
+    if (!PERMISSION_ERROR_CODES.has(noticeError?.code)) {
+      console.error("Gagal kirim pesan error-nya juga:", noticeError.message, "| code:", noticeError.code);
+    }
   });
 }
 

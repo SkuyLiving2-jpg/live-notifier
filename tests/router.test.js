@@ -1040,3 +1040,34 @@ test("rekap <nama> <nama hari> dan rekap <nama> <nama> <rentang> ditolak eksplis
   assert.match(textOf(await inBotChannel("rekap rtrwka senin")), /"rtrwka" per nama hari belum bisa/);
   assert.match(textOf(await inBotChannel("rekap rtrwka rtrwkb minggu ini")), /cuma bisa SATU nama.*"rtrwka", "rtrwkb"/);
 });
+
+// Log izin Discord (laporan owner: Deploy Logs Railway penuh "Cannot reply without
+// permission..." tanpa nyebut channel mana, dua baris tiap pesan).
+test("replyWithFailureNotice - error izin: SATU baris log yang nyebut channel + izin yang kurang, dibatasi sekali per channel; 160002 gak nyoba kirim notice yang pasti gagal", async () => {
+  const logs = [];
+  const originalError = console.error;
+  console.error = (...args) => logs.push(args.join(" "));
+  try {
+    let replyCalls = 0;
+    const message = { channel: { id: "chan-izin-1", name: "role-notif" }, reply: async () => { replyCalls += 1; throw Object.assign(new Error("x"), { code: 50013 }); } }; // prettier-ignore
+    const noHistory = Object.assign(new Error("Cannot reply without permission to read message history"), { code: 160002 });
+
+    await replyWithFailureNotice(message, "halo", noHistory);
+    await replyWithFailureNotice(message, "halo", noHistory);
+    await replyWithFailureNotice(message, "halo", noHistory);
+    assert.equal(replyCalls, 0, "160002: notice gak dicoba (pasti ditolak juga)");
+    assert.equal(logs.length, 1, "log dibatasi sekali per channel");
+    assert.match(logs[0], /#role-notif/);
+    assert.match(logs[0], /ID chan-izin-1/);
+    assert.match(logs[0], /Read Message History/);
+
+    // Channel LAIN tetap dapat log-nya sendiri; error 50013 tetap nyoba notice, tapi kegagalannya gak dobel-log.
+    const other = { channel: { id: "chan-izin-2", name: "lain" }, reply: message.reply };
+    await replyWithFailureNotice(other, "halo", Object.assign(new Error("Missing Permissions"), { code: 50013 }));
+    assert.equal(logs.length, 2);
+    assert.match(logs[1], /Send Messages/);
+    assert.equal(replyCalls, 1);
+  } finally {
+    console.error = originalError;
+  }
+});
