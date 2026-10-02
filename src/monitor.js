@@ -72,6 +72,57 @@ async function notePollSuccess() {
   if (wasAlerted) await sendOwnerDM(`✅ Polling IDN pulih lagi (sempat gagal ${failures}x berturut-turut). Deteksi live jalan normal.`);
 }
 
+// Catat sesi yang SUDAH selesai ke stats/rekap/streak (kalau durasinya masuk akal)
+// lalu hapus dari activeLives. Dipake dua jalur: live biasa yang selesai (di
+// bawah) dan sesi lama yang digantiin sesi BARU di tengah toleransi absen.
+async function recordCompletedSession(username, memberData, durationHistory) {
+  if (memberData.liveAt) {
+    const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
+    // BUG SEBELUMNYA: durationMs di sini gak pernah divalidasi sama
+    // sekali - beda dari server.js's handleBackfillLiveHistory/
+    // handleRepairLiveHistory yang UDAH nyaring durasi implausible
+    // (>MAX_PLAUSIBLE_LIVE_DURATION_MS, lihat ARCHITECTURE.md §10)
+    // dari jalur BACKFILL, tapi jalur LIVE normal ini (dipanggil tiap
+    // POLL_INTERVAL_MS selama bot jalan) kelewatan sama sekali. Kalau
+    // activeLives nyimpen `liveAt` yang udah basi (mis. bot mati
+    // berjam-jam - crash loop, Railway kena masalah, dll - terus
+    // member itu KEBETULAN masih/lagi live pas bot idup lagi), durasi
+    // yang keitung bakal ngelewatin downtime-nya juga, dan tanpa
+    // penyaringan ini bakal ke-tulis LANGSUNG ke daily-log/
+    // duration-history/pengumuman rekor - persis kelas bug "100+ jam
+    // live" yang dilaporin owner, cuma lewat pintu yang beda (live
+    // biasa, bukan backfill). Sesi implausible DIBUANG dari
+    // stats/rekor (gak nyoba nyimpen versi "diclamp" - gak ada cara
+    // ngebedain berapa dari durasi itu yang beneran live vs
+    // downtime), tapi notif "selesai" tetap udah kekirim & cache
+    // tetep dibersihin di bawah, biar gak nyangkut selamanya.
+    if (durationMs > 0 && durationMs <= MAX_PLAUSIBLE_LIVE_DURATION_MS) {
+      await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
+      recordLiveDuration(username, memberData.name, durationMs);
+      recordLiveCompleted(username, memberData.name);
+      recordLiveEnded(
+        memberData.name,
+        memberData.username,
+        new Date(memberData.liveAt),
+        new Date(),
+        memberData.peakViewCount ?? memberData.viewCount ?? null,
+      );
+      // Saran fitur ke-5 (§10's kelimapuluh+item, live streak) -
+      // dicek SETELAH recordLiveEnded (hari ini harus udah masuk
+      // arsip completed dulu sebelum dihitung), dan CUMA buat sesi
+      // yang durasinya udah lolos validasi plausible di atas (sesi
+      // implausible juga gak boleh ikut ngedongkrak/ngerusak streak).
+      await maybeAnnounceStreakMilestone(username, memberData.name);
+    } else {
+      console.error(
+        `Durasi live ${memberData.name} implausible (${durationMs}ms) - kemungkinan cache activeLives basi (bot sempet mati lama). Sesi ini DIBUANG dari stats/rekap, gak dicatet.`,
+      );
+    }
+  }
+  activeLives.delete(username);
+  saveActiveLives();
+}
+
 async function checkLiveMembers() {
   try {
     let currentLives;
@@ -93,6 +144,18 @@ async function checkLiveMembers() {
       if (!isJkt48Member(live.creator)) continue; // cuma peduli member JKT48
 
       currentLiveUsernames.add(username);
+
+      // Member putus lalu LANGSUNG live lagi (sesi BARU - slug beda) sebelum
+      // ENDED_GRACE_POLLS siklus absen lewat: tanpa ini bot ngira masih sesi
+      // lama - notif live kedua gak pernah kekirim, link basi, dua sesi
+      // menyatu di rekap. Sesi lama ditutup sekarang (durasi = sampai sekarang,
+      // selisihnya dengan akhir aslinya paling banyak beberapa siklus), lalu
+      // jatuh ke jalur "mulai live" normal di bawah.
+      const previous = activeLives.get(username);
+      if (previous && live.slug && previous.slug && previous.slug !== live.slug) {
+        await sendDiscordNotif(previous.name, previous.username, previous.slug, "end", previous.imageUrl);
+        await recordCompletedSession(username, previous, durationHistory);
+      }
 
       // Kirim notif cuma kalo member baru mulai live
       if (!activeLives.has(username)) {
@@ -159,51 +222,7 @@ async function checkLiveMembers() {
 
         const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end", memberData.imageUrl);
         if (terkirim) {
-          if (memberData.liveAt) {
-            const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
-            // BUG SEBELUMNYA: durationMs di sini gak pernah divalidasi sama
-            // sekali - beda dari server.js's handleBackfillLiveHistory/
-            // handleRepairLiveHistory yang UDAH nyaring durasi implausible
-            // (>MAX_PLAUSIBLE_LIVE_DURATION_MS, lihat ARCHITECTURE.md §10)
-            // dari jalur BACKFILL, tapi jalur LIVE normal ini (dipanggil tiap
-            // POLL_INTERVAL_MS selama bot jalan) kelewatan sama sekali. Kalau
-            // activeLives nyimpen `liveAt` yang udah basi (mis. bot mati
-            // berjam-jam - crash loop, Railway kena masalah, dll - terus
-            // member itu KEBETULAN masih/lagi live pas bot idup lagi), durasi
-            // yang keitung bakal ngelewatin downtime-nya juga, dan tanpa
-            // penyaringan ini bakal ke-tulis LANGSUNG ke daily-log/
-            // duration-history/pengumuman rekor - persis kelas bug "100+ jam
-            // live" yang dilaporin owner, cuma lewat pintu yang beda (live
-            // biasa, bukan backfill). Sesi implausible DIBUANG dari
-            // stats/rekor (gak nyoba nyimpen versi "diclamp" - gak ada cara
-            // ngebedain berapa dari durasi itu yang beneran live vs
-            // downtime), tapi notif "selesai" tetap udah kekirim & cache
-            // tetep dibersihin di bawah, biar gak nyangkut selamanya.
-            if (durationMs > 0 && durationMs <= MAX_PLAUSIBLE_LIVE_DURATION_MS) {
-              await maybeAnnounceNewRecord(username, memberData.name, durationMs, durationHistory);
-              recordLiveDuration(username, memberData.name, durationMs);
-              recordLiveCompleted(username, memberData.name);
-              recordLiveEnded(
-                memberData.name,
-                memberData.username,
-                new Date(memberData.liveAt),
-                new Date(),
-                memberData.peakViewCount ?? memberData.viewCount ?? null,
-              );
-              // Saran fitur ke-5 (§10's kelimapuluh+item, live streak) -
-              // dicek SETELAH recordLiveEnded (hari ini harus udah masuk
-              // arsip completed dulu sebelum dihitung), dan CUMA buat sesi
-              // yang durasinya udah lolos validasi plausible di atas (sesi
-              // implausible juga gak boleh ikut ngedongkrak/ngerusak streak).
-              await maybeAnnounceStreakMilestone(username, memberData.name);
-            } else {
-              console.error(
-                `Durasi live ${memberData.name} implausible (${durationMs}ms) - kemungkinan cache activeLives basi (bot sempet mati lama). Sesi ini DIBUANG dari stats/rekap, gak dicatet.`,
-              );
-            }
-          }
-          activeLives.delete(username);
-          saveActiveLives();
+          await recordCompletedSession(username, memberData, durationHistory);
         }
         // kalau gagal kirim, sengaja nggak dihapus dari cache
         // biar dicoba lagi di polling berikutnya

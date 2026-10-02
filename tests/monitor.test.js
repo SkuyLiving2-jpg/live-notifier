@@ -283,3 +283,37 @@ test("checkLiveMembers - notif start nyantumin jam mulai (dari live_at IDN), not
     activeLives.delete(username);
   }
 });
+
+// Regresi: member putus lalu LANGSUNG live lagi (sesi BARU, slug beda) sebelum 2 siklus absen
+// berlalu. Dulu bot menganggapnya sesi lama yang masih nyambung: notif live kedua gak pernah
+// kekirim, link di activeLives basi, dan dua sesi menyatu di rekap.
+test("checkLiveMembers - member live lagi dengan SESI BARU (slug beda) di tengah toleransi: sesi lama dicatat selesai, notif START sesi baru kekirim, link-nya yang baru", async () => {
+  const username = "jkt48_test_sesibaru";
+  const firstLiveAt = new Date(Date.now() - 40 * 60_000).toISOString();
+  const secondLiveAt = new Date(Date.now() - 20_000).toISOString();
+  const first = fakeLiveEntry(username, "SesiBaru", firstLiveAt);
+  const second = { ...fakeLiveEntry(username, "SesiBaru", secondLiveAt), slug: "slug-sesi-kedua" };
+  const bodies = [];
+  const restoreFetch = mockFetchIdnCycles([[first], [second]], bodies);
+  try {
+    await checkLiveMembers();
+    assert.equal(activeLives.get(username).slug, `slug-${username}`);
+
+    await checkLiveMembers();
+    const entry = activeLives.get(username);
+    assert.equal(entry.slug, "slug-sesi-kedua", "link harus ikut sesi baru");
+    assert.equal(entry.liveAt, secondLiveAt, "liveAt harus dari sesi baru, bukan nyambung ke yang lama");
+    assert.equal(entry.missingStreak, undefined);
+
+    const texts = bodies.map((b) => b.content || "");
+    assert.equal(texts.filter((t) => /lagi live di IDN Live/.test(t) && t.includes("slug-sesi-kedua")).length, 1, "notif START sesi baru kekirim");
+    assert.equal(texts.filter((t) => /udah selesai live/.test(t)).length, 1, "sesi lama diumumkan selesai");
+
+    const recorded = getCompletedSessionsToday().filter((s) => s.username === username);
+    assert.equal(recorded.length, 1, "sesi lama kecatet sebagai sesi sendiri");
+    assert.equal(recorded[0].startedAtUnix, Math.floor(new Date(firstLiveAt).getTime() / 1000));
+  } finally {
+    restoreFetch();
+    activeLives.delete(username);
+  }
+});

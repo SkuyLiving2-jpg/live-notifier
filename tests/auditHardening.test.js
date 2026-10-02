@@ -313,3 +313,39 @@ test("safeReplyOptions - content > 2000 dipotong (Discord nolak tanpa pesan), bl
   assert.deepEqual(object.allowedMentions, { parse: [] });
   assert.equal(safeReplyOptions({ embeds: [] }).content, undefined);
 });
+
+test("interactionCreate - handler yang melempar error sebelum menjawab: user dapat pesan pribadi (bukan 'interaksi gagal'); interaksi kedaluwarsa (10062) dibiarkan diam", async () => {
+  const { EventEmitter } = require("node:events");
+  const { wireDiscordEvents } = require("../src/chat/router");
+  const fake = new EventEmitter();
+  fake.login = () => Promise.resolve();
+  const originalError = console.error;
+  console.error = () => {};
+  const replies = [];
+  const makeInteraction = (deferUpdate) => ({
+    isChatInputCommand: () => false,
+    isAutocomplete: () => false,
+    isButton: () => true,
+    isStringSelectMenu: () => false,
+    isModalSubmit: () => false,
+    isRepliable: () => true,
+    customId: "reply_close",
+    deferred: false,
+    replied: false,
+    deferUpdate,
+    reply: async (payload) => replies.push(payload),
+  });
+  try {
+    wireDiscordEvents(fake);
+    const listeners = fake.listeners("interactionCreate");
+    await listeners[0](makeInteraction(async () => { throw new Error("boom"); })); // prettier-ignore
+    assert.equal(replies.length, 1);
+    assert.match(replies[0].content, /ada error pas ngejalanin/);
+    assert.equal(replies[0].flags, 64);
+
+    await listeners[0](makeInteraction(async () => { throw Object.assign(new Error("Unknown interaction"), { code: 10062 }); })); // prettier-ignore
+    assert.equal(replies.length, 1, "kedaluwarsa: gak ada yang bisa dijawab");
+  } finally {
+    console.error = originalError;
+  }
+});

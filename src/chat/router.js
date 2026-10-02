@@ -1,3 +1,4 @@
+const { MessageFlags } = require("discord.js");
 const { findMemberByNameFragment } = require("../storage/activeLives");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { getUsernameForChannel } = require("../storage/channelRouting");
@@ -763,6 +764,23 @@ async function replyWithFailureNotice(message, reply, error) {
   });
 }
 
+// Handler tombol/menu/modal yang melempar error sebelum sempat menjawab bikin
+// user cuma lihat "interaksi gagal" tanpa penjelasan. Jaring pengaman UMUM
+// (handler tertentu - role, slash - punya penanganan sendiri): kasih pesan
+// pribadi singkat. 10062 = interaksi sudah kedaluwarsa (lewat ~3 detik),
+// gak ada yang bisa dijawab lagi.
+async function notifyInteractionFailure(interaction, error) {
+  if (error?.code === 10062 || error?.code === 40060) return;
+  try {
+    if (typeof interaction?.isRepliable === "function" && !interaction.isRepliable()) return;
+    const payload = safeReplyOptions({ content: "Cok, ada error pas ngejalanin itu. Coba lagi bentar ya.", flags: MessageFlags.Ephemeral });
+    if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
+    else await interaction.reply(payload);
+  } catch (notifyError) {
+    console.error("Gagal ngasih tau user soal error interaksi:", notifyError.message);
+  }
+}
+
 // Nempelin listener pesan/tombol ke discord.js Client yang udah dibikin
 // discordClient.js's createDiscordClient() - dipanggil dari src/app.js's
 // start() setelah DISCORD_BOT_TOKEN dipastiin ada, JADI fungsi ini sendiri
@@ -895,7 +913,8 @@ function wireDiscordEvents(client) {
         await handleAliasFlowSelect(interaction);
       }
     } catch (error) {
-      console.error("Gagal proses tombol/menu Discord:", error.message);
+      console.error("Gagal proses tombol/menu Discord:", error.message, "| code:", error.code);
+      await notifyInteractionFailure(interaction, error);
     }
   });
 
