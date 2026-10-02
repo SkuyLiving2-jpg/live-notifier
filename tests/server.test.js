@@ -696,6 +696,35 @@ test("POST /api/repair-live-history - dryRun:false beneran buang sesi/entry dura
   }
 });
 
+test("POST /api/repair-live-history - arsip sudah mendekati batas retensi 35 hari: total live ALL-TIME TIDAK direbuild (dulu menghapus total lama), sesi implausible tetap dibersihkan", async () => {
+  const startFn = freshStartServerForBackfillTest();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const { saveLiveCount, loadLiveCount } = require("../src/storage/liveCount");
+  const nowSec = Math.floor(Date.now() / 1000);
+  // Sesi tertua 34 hari lalu - arsip ini hampir pasti SUDAH memangkas sesi yang lebih tua.
+  recordLiveEnded("Veteran", "jkt48_repair3_veteran", new Date((nowSec - 34 * 86400 - 3600) * 1000), new Date((nowSec - 34 * 86400) * 1000), null);
+  saveLiveCount({
+    jkt48_repair3_veteran: { name: "Veteran", count: 80, firstLiveAt: "2026-01-01T00:00:00.000Z", lastLiveAt: "2026-09-30T00:00:00.000Z" },
+  });
+
+  const server = await startTestServer(startFn);
+  try {
+    const { port } = server.address();
+    const body = JSON.stringify({ dryRun: false });
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/repair-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    const data = await res.json();
+    assert.equal(data.liveCountRebuilt, false);
+    assert.equal(loadLiveCount().jkt48_repair3_veteran.count, 80, "total all-time harus utuh");
+  } finally {
+    server.close();
+  }
+});
+
 test("POST /api/repair-live-history - request tanpa signature ditolak (401)", async () => {
   const server = await startTestServer();
   try {

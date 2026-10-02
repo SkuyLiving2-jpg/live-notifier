@@ -317,3 +317,21 @@ test("checkLiveMembers - member live lagi dengan SESI BARU (slug beda) di tengah
     activeLives.delete(username);
   }
 });
+
+test("checkLiveMembers - creator.name kosong dari IDN: notif & cache pakai username, bukan 'undefined'", async () => {
+  const username = "jkt48_test_tanpanama";
+  const entry = fakeLiveEntry(username, "x", new Date(Date.now() - 60_000).toISOString());
+  entry.creator.name = null;
+  const bodies = [];
+  const restoreFetch = mockFetchIdnCycles([[entry]], bodies);
+  try {
+    await checkLiveMembers();
+    assert.equal(activeLives.get(username).name, username);
+    assert.ok(bodies.length > 0);
+    assert.doesNotMatch(bodies[0].content, /undefined|null/);
+    assert.match(bodies[0].content, /jkt48_test_tanpanama/);
+  } finally {
+    restoreFetch();
+    activeLives.delete(username);
+  }
+});

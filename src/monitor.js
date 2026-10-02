@@ -144,6 +144,8 @@ async function checkLiveMembers() {
       if (!isJkt48Member(live.creator)) continue; // cuma peduli member JKT48
 
       currentLiveUsernames.add(username);
+      // Nama tampilan bisa kosong/null dari IDN - jangan sampai notif nulis "**undefined**".
+      const displayName = (typeof live.creator.name === "string" && live.creator.name.trim()) || username;
 
       // Member putus lalu LANGSUNG live lagi (sesi BARU - slug beda) sebelum
       // ENDED_GRACE_POLLS siklus absen lewat: tanpa ini bot ngira masih sesi
@@ -159,10 +161,10 @@ async function checkLiveMembers() {
 
       // Kirim notif cuma kalo member baru mulai live
       if (!activeLives.has(username)) {
-        const terkirim = await sendDiscordNotif(live.creator.name, live.creator.username, live.slug, "start", live.image_url, live.live_at);
+        const terkirim = await sendDiscordNotif(displayName, live.creator.username, live.slug, "start", live.image_url, live.live_at);
         if (terkirim) {
           activeLives.set(username, {
-            name: live.creator.name,
+            name: displayName,
             username,
             slug: live.slug,
             liveAt: live.live_at,
@@ -173,7 +175,7 @@ async function checkLiveMembers() {
             alertedMilestones: [],
           });
           saveActiveLives();
-          if (getPriorityConfig(live.creator.name, live.creator.username)) {
+          if (getPriorityConfig(displayName, live.creator.username)) {
             await maybePartyModeAlert();
           }
         }

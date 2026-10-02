@@ -5,7 +5,7 @@ const { activeLives } = require("./storage/activeLives");
 const { pollHealth } = require("./pollHealth");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
 const { loadDurationHistory, saveDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
-const { loadDailyLog, saveDailyLog, recordLiveEnded } = require("./storage/dailyLog");
+const { loadDailyLog, saveDailyLog, recordLiveEnded, SESSION_RETENTION_DAYS } = require("./storage/dailyLog");
 const { loadCustomPriorityMembers } = require("./storage/priorityStore");
 const { loadSubscriptions } = require("./storage/subscriptions");
 const { rebuildLiveCountFromSessions, loadLiveCount } = require("./storage/liveCount");
@@ -365,6 +365,15 @@ function handleRepairLiveHistory(req, res, body) {
     durationHistoryRemoved += durationHistory[username].filter((e) => isImplausible(e.durationMs)).length;
   }
 
+  // Total live ALL-TIME (live-count.json) cuma boleh dibangun ulang dari arsip
+  // sesi kalau arsip itu masih nyakup SELURUH riwayat bot. Arsip dipangkas di
+  // SESSION_RETENTION_DAYS; begitu sesi tertuanya sudah mendekati batas itu,
+  // sesi lama kemungkinan sudah terpangkas dan rebuild akan MENGHAPUS total
+  // lama. Dalam kondisi itu rebuild dilewati (laporan balik: liveCountRebuilt false).
+  const oldestEndedUnix = cleanedSessions.reduce((min, s) => Math.min(min, s.endedAtUnix), Infinity);
+  const ageOfOldestDays = Number.isFinite(oldestEndedUnix) ? (Date.now() / 1000 - oldestEndedUnix) / 86400 : 0;
+  const archiveStillComplete = ageOfOldestDays < SESSION_RETENTION_DAYS - 3;
+
   if (!dryRun) {
     log.sessions = cleanedSessions;
     saveDailyLog(log);
@@ -376,10 +385,10 @@ function handleRepairLiveHistory(req, res, body) {
     }
     saveDurationHistory(durationHistory);
 
-    rebuildLiveCountFromSessions(cleanedSessions);
+    if (archiveStillComplete) rebuildLiveCountFromSessions(cleanedSessions);
 
     console.log(
-      `Repair live-history: ${dailyLogRemoved} sesi dibuang dari daily-log, ${durationHistoryRemoved} entry dibuang dari duration-history, live-count direbuild dari ${cleanedSessions.length} sesi.`,
+      `Repair live-history: ${dailyLogRemoved} sesi dibuang dari daily-log, ${durationHistoryRemoved} entry dibuang dari duration-history, live-count ${archiveStillComplete ? `direbuild dari ${cleanedSessions.length} sesi` : "TIDAK direbuild (arsip sudah dipangkas, total lama dipertahankan)"}.`,
     );
   }
 
@@ -390,6 +399,7 @@ function handleRepairLiveHistory(req, res, body) {
       dailyLogSessionsRemaining: cleanedSessions.length,
       dailyLogRemoved,
       durationHistoryRemoved,
+      liveCountRebuilt: !dryRun && archiveStillComplete,
     }),
   );
 }
