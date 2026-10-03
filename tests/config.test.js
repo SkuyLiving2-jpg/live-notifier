@@ -79,3 +79,29 @@ test("POLL_INTERVAL_MS - POLL_INTERVAL_SECONDS diisi angka lain (mis. 15) tetep 
   const { POLL_INTERVAL_MS } = freshConfig({ POLL_INTERVAL_SECONDS: "15" });
   assert.equal(POLL_INTERVAL_MS, 15 * 1000);
 });
+
+test("POLL_INTERVAL_MS - 0/negatif/terlalu kecil dinaikkan ke batas bawah 5 detik (bukan nembak IDN tiap detik)", () => {
+  for (const raw of ["0", "-10", "1"]) {
+    assert.equal(freshConfig({ POLL_INTERVAL_SECONDS: raw }).POLL_INTERVAL_MS, 5000, raw);
+  }
+});
+
+test("DAILY_RECAP_HOUR/SCHEDULE_DIGEST_HOUR - di luar 0-23 atau pecahan -> fallback default (24 bikin rekap gak pernah kekirim)", () => {
+  for (const raw of ["24", "-1", "7.5", "99"]) {
+    const config = freshConfig({ DAILY_RECAP_HOUR: raw, SCHEDULE_DIGEST_HOUR: raw });
+    assert.equal(config.DAILY_RECAP_HOUR, 23, raw);
+    assert.equal(config.SCHEDULE_DIGEST_HOUR, 7, raw);
+  }
+  assert.equal(freshConfig({ SCHEDULE_DIGEST_HOUR: "0" }).SCHEDULE_DIGEST_HOUR, 0, "0 tetap sah");
+});
+
+test("env ID/token/URL: spasi & newline di ujung (hasil paste) dibuang", () => {
+  const config = freshConfig({
+    PRIORITY_PING_USER_ID: " 12345\n",
+    BOT_CHANNEL_ID: "  777 ",
+    DISCORD_BOT_TOKEN: "tok \n",
+  });
+  assert.equal(config.PRIORITY_PING_USER_ID, "12345");
+  assert.equal(config.BOT_CHANNEL_ID, "777");
+  assert.equal(config.DISCORD_BOT_TOKEN, "tok");
+});

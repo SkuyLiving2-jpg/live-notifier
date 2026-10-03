@@ -18,14 +18,32 @@ function envInt(name, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+// Jam (WIB) harus bilangan bulat 0-23. Nilai di luar itu (mis. 24, -1, 7.5)
+// bikin gerbang "getHourWIBOf() < JAM" gak pernah lolos (rekap/digest gak
+// pernah kekirim, diam-diam) - lebih aman balik ke default.
+function envHour(name, fallback) {
+  const value = envInt(name, fallback);
+  return Number.isInteger(value) && value >= 0 && value <= 23 ? value : fallback;
+}
+
+// Env string hasil copy-paste dashboard sering bawa spasi/newline di ujung.
+// Buat ID/token/URL itu bikin perbandingan owner (authorId === ID) gagal
+// diam-diam atau login ditolak - dirapihin di satu tempat.
+function envStr(name) {
+  return (process.env[name] || "").trim();
+}
+
+const DISCORD_WEBHOOK_URL = envStr("DISCORD_WEBHOOK_URL");
 const IDN_API_URL = "https://api.idn.app/graphql";
 // Diturunin dari 30 -> 20 detik (default) buat ngurangin jeda deteksi live
 // baru - dibikin configurable (bukan angka mati) biar owner bisa nyetel
 // sendiri trade-off-nya (makin kecil = makin cepet kedetek, tapi makin
 // sering nembak API IDN) tanpa perlu ubah kode/redeploy tiap kali mau
 // nyoba-nyoba angka lain.
-const POLL_INTERVAL_MS = envInt("POLL_INTERVAL_SECONDS", 20) * 1000;
+// Batas bawah 5 detik: nilai 0/negatif/1 bikin bot nembak API IDN tiap detik
+// (risiko diblokir) dan ambang alert polling-gagal jadi gak masuk akal.
+const MIN_POLL_INTERVAL_SECONDS = 5;
+const POLL_INTERVAL_MS = Math.max(MIN_POLL_INTERVAL_SECONDS, envInt("POLL_INTERVAL_SECONDS", 20)) * 1000;
 
 // Secret buat sistem signature (API_KEY + HMAC-SHA256) yang ngelindungin
 // endpoint API kita dari akses sembarangan - dipakai kalau nanti nambah
@@ -58,7 +76,7 @@ console.log(
 // nggak diset, notifikasi channel tetap jalan normal, cuma fitur tanya-jawab
 // DAN versi flashy/DM notif prioritas-nya mati (prioritas tetap dapet notif
 // biasa doang di channel, kayak member lain).
-const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
+const DISCORD_BOT_TOKEN = envStr("DISCORD_BOT_TOKEN");
 
 // ID Application Discord (Developer Portal > General Information > halaman
 // yang sama kayak Bot Token) DAN ID server (klik kanan nama server > Copy
@@ -74,28 +92,28 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
 // doang (bot ini emang didesain buat satu server pribadi, bukan multi-server
 // publik - lihat BOT_CHANNEL_ID/PRIORITY_PING_USER_ID yang sama-sama single
 // value, bukan per-guild).
-const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "";
-const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || "";
+const DISCORD_CLIENT_ID = envStr("DISCORD_CLIENT_ID");
+const DISCORD_GUILD_ID = envStr("DISCORD_GUILD_ID");
 
 // Opsional - ID channel Discord tempat bot boleh lebih "agresif" balas
 // (hampir semua pesan yang gak dikenali dibalas menu options, gak perlu
 // nyebut "cok"/"live"). Channel lain tetap butuh wake word biar gak ganggu
 // obrolan biasa. Cara dapetin ID channel: Developer Mode di Discord Settings
 // > Advanced, terus klik kanan nama channel-nya > Copy Channel ID.
-const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID || "";
+const BOT_CHANNEL_ID = envStr("BOT_CHANNEL_ID");
 
 // Opsional - channel panel role notif (chat/roleFlow.js). Bot masang SATU pesan
 // panel di channel ini pas boot (dan ngedit pesan yang sama tiap kali, gak
 // pernah numpuk). Kalau kosong, dipake channel tempat owner terakhir ngetik
 // "cok pasang panel role" (disimpen di role-panel.json) - jadi env ini boleh
 // dikosongin.
-const ROLE_CHANNEL_ID = process.env.ROLE_CHANNEL_ID || "";
+const ROLE_CHANNEL_ID = envStr("ROLE_CHANNEL_ID");
 
 // Opsional - channel tempat SEMUA notif live masuk (channel gabungan). Dipake
 // buat ngasih link "<#id>" ke user yang baru aktifin notif live semua member.
 // Kalau kosong, bot nyari sendiri channel dari DISCORD_WEBHOOK_URL (Discord
 // nyediain channel_id di info webhook-nya).
-const ALL_LIVE_CHANNEL_ID = process.env.ALL_LIVE_CHANNEL_ID || "";
+const ALL_LIVE_CHANNEL_ID = envStr("ALL_LIVE_CHANNEL_ID");
 
 // Perkiraan "kemungkinan mendekati akhir" buat member prioritas dipicu kalau
 // durasi live udah ngelewatin ambang ini (kalau belum ada riwayat durasi
@@ -191,7 +209,7 @@ const PRIORITY_MEMBERS = [
 // terus klik kanan nama kamu sendiri > Copy User ID. ID yang sama ini juga
 // dipake buat nentuin siapa "owner" yang boleh kelola daftar prioritas lewat
 // chat, dan siapa yang nerima DM notif prioritas.
-const PRIORITY_PING_USER_ID = process.env.PRIORITY_PING_USER_ID || "";
+const PRIORITY_PING_USER_ID = envStr("PRIORITY_PING_USER_ID");
 
 // Palette warna buat member prioritas CUSTOM (ditambah lewat chat "cok tambah
 // prioritas <nama>"). Sengaja HINDARIN warna Nala (0x1abc9c teal) & Lily
@@ -201,7 +219,7 @@ const PRIORITY_PING_USER_ID = process.env.PRIORITY_PING_USER_ID || "";
 // Discord).
 const PRIORITY_COLOR_PALETTE = [0x9b59b6, 0x2ecc71, 0xe91e63, 0xe67e22, 0xf1c40f];
 
-const DAILY_RECAP_HOUR = envInt("DAILY_RECAP_HOUR", 23); // jam WIB
+const DAILY_RECAP_HOUR = envHour("DAILY_RECAP_HOUR", 23); // jam WIB
 
 // Saran fitur ke-6 (§10's kelimapuluh+item): jam WIB pengiriman "prediksi
 // jadwal hari ini" otomatis (notify/publicAlerts.js's maybeSendScheduleDigest)
@@ -209,7 +227,7 @@ const DAILY_RECAP_HOUR = envInt("DAILY_RECAP_HOUR", 23); // jam WIB
 // perkiraan siapa aja yang kemungkinan live hari itu, BUKAN jam 23:00 kayak
 // DAILY_RECAP_HOUR (itu ngerangkum yang UDAH SELESAI, ini nebak yang BELUM
 // terjadi - dua kebutuhan yang beda, pantesnya beda jam juga).
-const SCHEDULE_DIGEST_HOUR = envInt("SCHEDULE_DIGEST_HOUR", 7);
+const SCHEDULE_DIGEST_HOUR = envHour("SCHEDULE_DIGEST_HOUR", 7);
 
 // Warna embed rekap harian/mingguan/bulanan OTOMATIS (notify/publicAlerts.js's
 // maybeSendDailyRecap/maybeSendWeeklyRecap/maybeSendMonthlyRecap) - Discord
@@ -232,7 +250,7 @@ const DAILY_RECAP_COLOR = 0x5865f2;
 // mau dashboard-nya nempel di channel notif yang sama) atau webhook LAIN
 // (kalau mau channel khusus status) - keduanya pilihan owner, kode ini gak
 // maksa salah satu.
-const DASHBOARD_WEBHOOK_URL = process.env.DASHBOARD_WEBHOOK_URL || "";
+const DASHBOARD_WEBHOOK_URL = envStr("DASHBOARD_WEBHOOK_URL");
 
 const PORT = process.env.PORT || 3000;
 

@@ -142,6 +142,12 @@ async function checkLiveMembers() {
       const username = live?.creator?.username;
       if (!username) continue; // skip entry yang datanya nggak lengkap
       if (!isJkt48Member(live.creator)) continue; // cuma peduli member JKT48
+      // Satu username cuma diproses sekali per respons. Kalau IDN somehow
+      // nampilin username yang sama dua kali dengan slug beda (mis. paging
+      // bergeser pas live lama selesai dan live baru mulai), deteksi "slug
+      // berubah" di bawah bakal nutup-buka sesi bolak-balik tiap siklus
+      // (spam notif selesai/mulai). Entry pertama yang menang.
+      if (currentLiveUsernames.has(username)) continue;
 
       currentLiveUsernames.add(username);
       // Nama tampilan bisa kosong/null dari IDN - jangan sampai notif nulis "**undefined**".

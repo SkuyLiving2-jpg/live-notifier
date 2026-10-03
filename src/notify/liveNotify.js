@@ -7,15 +7,6 @@ const { getRoleIdFor } = require("../storage/memberRoles");
 const { containsWholeWord, formatClockWIB } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
-// priority (opsional) - kalau member ini punya startIntro/startHashtag (lihat
-// config.js's PRIORITY_MEMBERS, sekarang cuma Nala yang diisi) itu ikut
-// ditempel di notif CHANNEL juga, TAPI formatnya TETAP plain content kayak
-// notif member lain (bukan ganti jadi embed/tombol flashy kayak
-// priority/index.js's buildPriorityPayload, yang cuma dikirim ke DM pribadi
-// owner). Sengaja dipertahanin plain: activeLives/daily-log (yang dipake
-// rekap) dicatet dari BOOKKEEPING internal bot, bukan di-parse dari teks
-// notif channel - jadi nambahin intro/hashtag di sini aman, gak ngubah
-// struktur pesan yang bisa bikin sesi Nala "kelewatan" dari rekap.
 // imageUrl (opsional) - thumbnail live dari IDN (field image_url di
 // getLivestreams, sama field yang dipake priority/index.js's embed flashy).
 // Sebelumnya CUMA member prioritas yang dapet gambar di notifnya (channel
@@ -70,17 +61,27 @@ function getSubscribersFor(memberName, username) {
 
 // Salinan payload dengan baris mention: subscriber "cok ingetin" (tag pribadi)
 // dan/atau role (panel role, chat/roleFlow.js). Gak ada satupun -> payload asli.
+// Batas jumlah subscriber yang di-tag per notif. Discord nolak (400) webhook
+// yang content-nya > 2000 karakter atau allowed_mentions.users-nya > 100 id -
+// dan karena notif yang gagal kekirim diulang tiap siklus polling TANPA PERNAH
+// sukses, member yang punya terlalu banyak subscriber bakal gak pernah ke-notif
+// ke siapapun. Sisanya (lebih dari batas) gak di-tag, cuma disebut jumlahnya.
+const MAX_SUBSCRIBER_MENTIONS = 50;
+
 function withMentions(payload, subscriberIds, roleIds) {
   const roles = roleIds.filter((id, i, all) => id && all.indexOf(id) === i);
   const lines = [];
   const allowedMentions = {};
   if (subscriberIds.length > 0) {
-    lines.push(`${subscriberIds.map((id) => `<@${id}>`).join(" ")} kamu subscribe notif buat member ini!`);
+    const tagged = subscriberIds.slice(0, MAX_SUBSCRIBER_MENTIONS);
+    const overflow = subscriberIds.length - tagged.length;
+    const overflowText = overflow > 0 ? ` (+${overflow} subscriber lain)` : "";
+    lines.push(`${tagged.map((id) => `<@${id}>`).join(" ")}${overflowText} kamu subscribe notif buat member ini!`);
     // Satu-satunya mention yang BENERAN dimaksud di jalur ini - scoped
     // eksplisit ke ID subscriber doang (lihat webhook.js's
     // withDefaultMentionGuard), biar CUMA mereka yang ke-ping walau
     // memberName kebetulan ngandung teks semacam "@everyone".
-    allowedMentions.users = subscriberIds;
+    allowedMentions.users = tagged;
   }
   if (roles.length > 0) {
     lines.push(`${roles.map((id) => `<@&${id}>`).join(" ")} lagi live nih!`);

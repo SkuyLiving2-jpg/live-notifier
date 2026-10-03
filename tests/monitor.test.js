@@ -318,6 +318,37 @@ test("checkLiveMembers - member live lagi dengan SESI BARU (slug beda) di tengah
   }
 });
 
+// Regresi: username yang sama muncul DUA kali dalam satu respons IDN dengan slug beda.
+// Tanpa dedupe, tiap siklus bot nutup sesi A lalu buka B, siklus berikutnya nutup B lalu
+// buka A - spam notif selesai/mulai tanpa henti.
+test("checkLiveMembers - username dobel (slug beda) dalam SATU respons IDN: cuma entry pertama dipakai, gak ada notif nutup-buka bolak-balik", async () => {
+  const username = "jkt48_test_dobel";
+  const liveAt = new Date(Date.now() - 10 * 60_000).toISOString();
+  const a = fakeLiveEntry(username, "Dobel", liveAt);
+  const b = { ...fakeLiveEntry(username, "Dobel", liveAt), slug: "slug-dobel-b" };
+  const bodies = [];
+  const restoreFetch = mockFetchIdnCycles(
+    [
+      [a, b],
+      [a, b],
+      [a, b],
+    ],
+    bodies,
+  );
+  try {
+    await checkLiveMembers();
+    await checkLiveMembers();
+    await checkLiveMembers();
+    const texts = bodies.map((x) => x.content || "");
+    assert.equal(texts.filter((t) => /lagi live di IDN Live/.test(t)).length, 1, "notif START cuma sekali");
+    assert.equal(texts.filter((t) => /udah selesai live/.test(t)).length, 0, "gak ada notif selesai palsu");
+    assert.equal(activeLives.get(username).slug, `slug-${username}`, "entry pertama yang menang");
+  } finally {
+    restoreFetch();
+    activeLives.delete(username);
+  }
+});
+
 test("checkLiveMembers - creator.name kosong dari IDN: notif & cache pakai username, bukan 'undefined'", async () => {
   const username = "jkt48_test_tanpanama";
   const entry = fakeLiveEntry(username, "x", new Date(Date.now() - 60_000).toISOString());

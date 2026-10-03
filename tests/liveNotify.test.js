@@ -172,3 +172,28 @@ test("sendDiscordNotif - channel khusus GAGAL kirim (mis. webhook-nya udah kebur
     saveChannelRouting({});
   }
 });
+
+// Regresi: Discord nolak (400) payload dengan > 100 id di allowed_mentions.users atau content
+// > 2000 karakter. Notif yang gagal diulang tiap siklus tanpa pernah sukses, jadi member yang
+// subscribernya banyak gak akan pernah ke-notif ke siapapun.
+test("sendDiscordNotif - subscriber ratusan: yang di-tag dibatasi 50, content < 2000, allowed_mentions.users <= 50, sisanya disebut jumlahnya", async () => {
+  const { saveSubscriptions } = require("../src/storage/subscriptions");
+  const ids = Array.from({ length: 300 }, (_, i) => String(100000000000000000n + BigInt(i)));
+  saveSubscriptions({ banyakfans: ids });
+  const original = global.fetch;
+  let body = null;
+  global.fetch = async (url, options) => {
+    body = JSON.parse(options.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const ok = await sendDiscordNotif("BanyakFans", "jkt48_banyakfans", "slug-x", "start", null, null);
+    assert.equal(ok, true);
+    assert.ok(body.content.length < 2000, `content ${body.content.length} harus < 2000`);
+    assert.equal(body.allowed_mentions.users.length, 50);
+    assert.match(body.content, /\(\+250 subscriber lain\)/);
+  } finally {
+    global.fetch = original;
+    saveSubscriptions({});
+  }
+});
