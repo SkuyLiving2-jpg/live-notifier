@@ -4,11 +4,30 @@ const { wireDiscordEvents } = require("./chat/router");
 const { startServer } = require("./server");
 const { pollLoop, stopPolling } = require("./monitor");
 const { sendCrashAlert } = require("./notify/crashAlert");
+const { sendOwnerDM } = require("./notify/ownerAlert");
 
 // Berapa lama paling lama nunggu sendCrashAlert() (network call ke Discord)
 // sebelum proses keluar paksa - upaya ngasih tau gak boleh nahan proses
 // mati selamanya kalau koneksinya kebetulan lagi hang.
 const CRASH_ALERT_TIMEOUT_MS = 3000;
+
+// Promise yang gagal dan gak ke-catch (mis. satu .reply() Discord yang kena error
+// jaringan sesaat) TIDAK lagi mematikan proses: seluruh polling live berhenti
+// sampai platform nge-restart, padahal state-nya sudah tersimpan per-operasi.
+// Dicatat + owner di-DM, dibatasi sekali per jendela ini biar badai error gak
+// jadi badai DM. uncaughtException tetap fatal (state proses bisa tidak konsisten).
+const REJECTION_ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+let lastRejectionAlertAt = 0;
+
+async function handleUnhandledRejection(reason, now = Date.now()) {
+  console.error("unhandledRejection (bot tetap jalan):", reason);
+  if (now - lastRejectionAlertAt < REJECTION_ALERT_COOLDOWN_MS) return false;
+  lastRejectionAlertAt = now;
+  const message = String(reason?.message || reason).slice(0, 300);
+  await sendOwnerDM(`⚠️ **Ada error yang gak ketangkap** (unhandledRejection): \`${message}\`
+Bot tetap jalan, tapi cek log Railway kalau ini sering muncul.`);
+  return true;
+}
 
 // Titik masuk tunggal buat nyalain seluruh bot - dipanggil dari src/index.js.
 // Sengaja dipisah dari require-time (bukan langsung jalan begitu file ini
@@ -62,9 +81,10 @@ function start() {
   // punya try/catch sendiri buat error per-siklus polling biasa (jadi bot
   // TETEP jalan lanjut walau 1 siklus gagal). Dua handler ini buat sesuatu
   // yang beneran LOLOS dari situ (bug di tempat lain, event handler
-  // Discord yang error, dll) - dikasih tau dulu (best-effort, dibatesin
-  // waktu biar gak nge-gantung) baru proses keluar, daripada mati diem-diem
-  // tanpa jejak sama sekali.
+  // Discord yang error, dll). uncaughtException: dikasih tau dulu (best-effort,
+  // dibatesin waktu biar gak nge-gantung) baru proses keluar, daripada mati
+  // diem-diem tanpa jejak. unhandledRejection: cuma dicatat + owner di-DM
+  // (handleUnhandledRejection di atas), proses TIDAK dimatiin.
   async function handleFatalError(context, error) {
     console.error(`${context}:`, error);
     await Promise.race([sendCrashAlert(context, error), new Promise((resolve) => setTimeout(resolve, CRASH_ALERT_TIMEOUT_MS))]);
@@ -74,11 +94,11 @@ function start() {
     handleFatalError("uncaughtException", error);
   });
   process.on("unhandledRejection", (reason) => {
-    handleFatalError("unhandledRejection", reason);
+    handleUnhandledRejection(reason);
   });
 
   console.log("Bot notifikasi IDN Live jalan...");
   pollLoop();
 }
 
-module.exports = { start };
+module.exports = { start, handleUnhandledRejection };

@@ -58,7 +58,16 @@ function computeSchedulePattern(entries) {
   const rangeMin = Math.min(...rangeHours) % 24;
   const rangeMax = Math.max(...rangeHours) % 24;
 
-  return { total, topBucketName, topBucketCount, topWeekdayName, topWeekdayCount, rangeMin, rangeMax };
+  return { total, topBucketName, topBucketCount, topWeekdayName, topWeekdayCount, weekdayCounts, rangeMin, rangeMax };
+}
+
+// Apakah di riwayat yang ke-track member ini PERNAH live di hari `weekdayName`
+// (nama hari WIB, format sama kayak WEEKDAY_FORMATTER_WIB). Dipake heads-up
+// proaktif: tanpa cek ini, member yang cuma live tiap Sabtu tetap di-"kemungkinan
+// bentar lagi live" tiap hari di jam biasanya (cuma jam yang dicek) - tebakan
+// yang pasti meleset 6 dari 7 hari. Nol kali live di hari itu = gak ada dasar nebak.
+function hasLivedOnWeekday(pattern, weekdayName) {
+  return (pattern?.weekdayCounts?.[weekdayName] || 0) > 0;
 }
 
 // Jam `hour` (0-23) ada di antara `min`-`max` INKLUSIF, TERMASUK kasus
@@ -88,4 +97,4 @@ function isHourInRange(hour, min, max) {
 const HEADS_UP_MIN_ENTRIES = 5;
 const HEADS_UP_MIN_DOMINANCE = 0.5;
 
-module.exports = { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE };
+module.exports = { computeSchedulePattern, hasLivedOnWeekday, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE };

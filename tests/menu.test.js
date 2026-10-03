@@ -647,3 +647,16 @@ test("handleFallbackMemberSelect - opsi 9: langsung ambil dari username dropdown
   const optionIds = interaction.updates[0].components[0].components.map((c) => c.data.custom_id);
   assert.deepEqual(optionIds, ["fallback_menu:3", "fallback_menu:5", "fallback_menu:9"]);
 });
+
+test("handleFallbackExtraSelect - 'jadwalhariini' DIEKSEKUSI LANGSUNG (string atau embed), 'role' cuma dikasih tau caranya; keduanya ada di dropdown", async () => {
+  const jadwal = fakeInteraction({ customId: "fallback_extra_select", values: ["jadwalhariini"] });
+  await handleFallbackExtraSelect(jadwal);
+  const update = jadwal.updates[0];
+  assert.ok(typeof update.content === "string" || Array.isArray(update.embeds), "balasan jadwal: teks 'belum ada pola' ATAU embed prediksi");
+  assert.equal(update.components.length, 2);
+
+  const role = fakeInteraction({ customId: "fallback_extra_select", values: ["role"] });
+  await handleFallbackExtraSelect(role);
+  assert.match(role.updates[0].content, /cok role/);
+  assert.match(role.updates[0].content, /cok cek role/);
+});

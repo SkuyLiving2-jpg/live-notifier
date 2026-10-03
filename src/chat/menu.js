@@ -18,6 +18,7 @@ const {
   replyLongestNotLiveLeaderboard,
   replyAliasList,
   replyLiveCountLeaderboard,
+  replyScheduleToday,
 } = require("./replies");
 
 // "channelId:authorId" -> kapan terakhir menu fallback ditampilin buat orang
@@ -177,7 +178,13 @@ const EXTRA_FEATURES = [
     value: "countboard",
     label: "🏆 Paling sering live",
     description: "Leaderboard total live count semua member",
-    zeroParam: true,
+    run: () => replyLiveCountLeaderboard(),
+  },
+  {
+    value: "jadwalhariini",
+    label: "📅 Jadwal hari ini",
+    description: "Siapa yang kemungkinan live hari ini (dari pola histori)",
+    run: () => replyScheduleToday(),
   },
   {
     value: "stats",
@@ -244,6 +251,13 @@ const EXTRA_FEATURES = [
     description: "Di-tag kalau member itu mulai live",
     detail:
       "Ketik `cok ingetin <nama member>` - kamu di-tag kalau dia mulai live (atau ada tanda-tanda bentar lagi live, dari pola jam biasanya). Ketik `cok berhenti ingetin <nama member>` buat matiin.",
+  },
+  {
+    value: "role",
+    label: "🎭 Notif role",
+    description: "Pilih notif live: semua member / member tertentu",
+    detail:
+      "Ketik `cok role` - muncul tombol buat milih notif live: akses channel semua member, atau di-tag cuma buat member tertentu. Owner: `cok pasang panel role` (panel permanen), `cok tambah role <nama> @Role`, `cok hapus role <nama>`, `cok cek role` buat ngecek setup.",
   },
   {
     value: "alias_owner",
@@ -747,9 +761,9 @@ function buildAliasListMenuScreen(prefixMessage) {
 
 // Diklik abis milih salah satu fitur dari dropdown yang dimunculin tombol
 // "❓ Fitur lainnya" (buildExtraFeaturesSelectRow, lihat EXTRA_FEATURES).
-// "countboard" (paling sering live) itu satu-satunya entry ZERO-PARAMETER -
-// dieksekusi LANGSUNG (replyLiveCountLeaderboard(), sama pola persis kayak
-// opsi notlive/aliaslist). Entry lainnya butuh nama member yang gak dibawa
+// Entry ZERO-PARAMETER (punya `run`: "countboard", "jadwalhariini") dieksekusi
+// LANGSUNG, sama pola persis kayak opsi notlive/aliaslist. Entry lainnya butuh
+// nama member yang gak dibawa
 // dropdown ini (dropdown milih FITUR, bukan nama) - jadi cuma dikasih tau
 // CARA PAKENYA (`feature.detail`), gak dieksekusi. Dropdown-nya SENDIRI
 // ditempel ULANG lagi di bawah jawaban (bareng Tutup+Kembali) biar user bisa
@@ -758,14 +772,16 @@ function buildAliasListMenuScreen(prefixMessage) {
 async function handleFallbackExtraSelect(interaction) {
   const value = interaction.values[0];
   const feature = EXTRA_FEATURES_BY_VALUE.get(value);
-  const content = !feature
+  const result = !feature
     ? "Cok, opsi itu kayaknya udah gak ada. Coba pilih lagi ya."
-    : feature.zeroParam
-      ? replyLiveCountLeaderboard()
+    : feature.run
+      ? feature.run()
       : `**${feature.label}**\n${feature.detail}`;
+  // Jawaban fitur bisa string biasa atau payload ({embeds}) - mis. jadwal hari ini.
+  const body = typeof result === "string" ? { content: result } : result;
   await interaction.update(
     safeReplyOptions({
-      content,
+      ...body,
       components: [buildExtraFeaturesSelectRow(), buildFallbackPickActionRow(pageIndexForOption("more"))],
     }),
   );

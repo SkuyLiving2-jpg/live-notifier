@@ -13,7 +13,7 @@ const { activeLives, saveActiveLives } = require("../storage/activeLives");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts");
 const { getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert, loadStreakAlerts } = require("../storage/streaks");
-const { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
+const { computeSchedulePattern, hasLivedOnWeekday, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
 const { computeCurrentStreak, STREAK_MILESTONES } = require("../streakMath");
 const { DAILY_RECAP_HOUR, SCHEDULE_DIGEST_HOUR, DAILY_RECAP_COLOR } = require("../config");
 
@@ -338,6 +338,7 @@ function sendPublicHeadsUpAlert(displayName, pattern, subscriberIds) {
 async function maybeSendPublicHeadsUpAlerts(now = new Date()) {
   const today = getDateWIB(now);
   const currentHour = getHourWIBOf(now);
+  const todayWeekdayName = WEEKDAY_FORMATTER_WIB.format(now);
   const subs = loadSubscriptions();
 
   // Beberapa keyword subscription BEDA bisa nunjuk ke MEMBER YANG SAMA (mis.
@@ -365,6 +366,7 @@ async function maybeSendPublicHeadsUpAlerts(now = new Date()) {
     if (!pattern || pattern.total < HEADS_UP_MIN_ENTRIES) continue;
     if (pattern.topBucketCount / pattern.total < HEADS_UP_MIN_DOMINANCE) continue;
     if (!isHourInRange(currentHour, pattern.rangeMin, pattern.rangeMax)) continue;
+    if (!hasLivedOnWeekday(pattern, todayWeekdayName)) continue; // gak pernah live di hari ini -> jangan nebak
 
     markAlertedToday(dedupKey, today);
     await sendPublicHeadsUpAlert(found.displayName, pattern, [...subscriberIds]);

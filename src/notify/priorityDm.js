@@ -4,8 +4,8 @@ const { getPriorityConfig, buildPriorityPayload, getAllPriorityMembers } = requi
 const { getAverageDuration, findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { activeLives, saveActiveLives } = require("../storage/activeLives");
 const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts");
-const { computeSchedulePattern, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
-const { formatDuration, getDateWIB, getHourWIBOf } = require("../utils");
+const { computeSchedulePattern, hasLivedOnWeekday, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
+const { formatDuration, getDateWIB, getHourWIBOf, WEEKDAY_FORMATTER_WIB } = require("../utils");
 
 // Notif flashy (embed warna-warni + tombol + pesan spesial) buat member
 // prioritas dulu kekirim ke CHANNEL bersama - masalahnya, channel itu
@@ -179,6 +179,7 @@ async function maybeSendHeadsUpAlerts(now = new Date()) {
 
   const today = getDateWIB(now);
   const currentHour = getHourWIBOf(now);
+  const todayWeekdayName = WEEKDAY_FORMATTER_WIB.format(now);
 
   for (const priority of getAllPriorityMembers()) {
     const found = findDurationHistoryByNameFragment(priority.keyword);
@@ -189,6 +190,7 @@ async function maybeSendHeadsUpAlerts(now = new Date()) {
     if (!pattern || pattern.total < HEADS_UP_MIN_ENTRIES) continue;
     if (pattern.topBucketCount / pattern.total < HEADS_UP_MIN_DOMINANCE) continue;
     if (!isHourInRange(currentHour, pattern.rangeMin, pattern.rangeMax)) continue;
+    if (!hasLivedOnWeekday(pattern, todayWeekdayName)) continue; // gak pernah live di hari ini -> jangan nebak
 
     markAlertedToday(found.username, today);
     await sendHeadsUpAlert(priority, found.displayName, pattern);

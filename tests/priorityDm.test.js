@@ -77,8 +77,8 @@ function seedDominantSiangPattern(saveDurationHistory) {
   });
 }
 
-const INSIDE_WINDOW_NOW = new Date("2026-09-20T12:30:00+07:00"); // jam 12 WIB - di dalem rentang 12-12
-const OUTSIDE_WINDOW_NOW = new Date("2026-09-20T18:00:00+07:00"); // jam 18 WIB - jelas di luar
+const INSIDE_WINDOW_NOW = new Date("2026-09-22T12:30:00+07:00"); // Selasa, jam 12 WIB - di dalem rentang 12-12
+const OUTSIDE_WINDOW_NOW = new Date("2026-09-22T18:00:00+07:00"); // Selasa, jam 18 WIB - jelas di luar
 
 test("maybeSendHeadsUpAlerts - pola kuat + jam sekarang masuk rentang + belum live + belum di-alert hari ini -> DM kekirim", async () => {
   const { maybeSendHeadsUpAlerts, saveDurationHistory, sentDMs } = freshPriorityDmWithFakeClient();
@@ -96,7 +96,7 @@ test("maybeSendHeadsUpAlerts - dipanggil 2x hari yang sama -> DM cuma kekirim SE
   seedDominantSiangPattern(saveDurationHistory);
 
   await maybeSendHeadsUpAlerts(INSIDE_WINDOW_NOW);
-  await maybeSendHeadsUpAlerts(new Date("2026-09-20T13:00:00+07:00")); // masih hari yang sama, masih dalem rentang
+  await maybeSendHeadsUpAlerts(new Date("2026-09-22T13:00:00+07:00")); // masih hari yang sama, masih dalem rentang
   assert.equal(sentDMs.length, 1);
 });
 
@@ -141,4 +141,19 @@ test("maybeSendHeadsUpAlerts - jam sekarang di LUAR rentang perkiraan -> gak ngi
 
   await maybeSendHeadsUpAlerts(OUTSIDE_WINDOW_NOW);
   assert.equal(sentDMs.length, 0);
+});
+
+// Regresi: heads-up cuma ngecek JAM, jadi member yang cuma live di hari tertentu tetap
+// di-"kemungkinan bentar lagi live" tiap hari di jam biasanya. Riwayat seed = Selasa-Sabtu
+// (1-5 Sep 2026); Minggu (20 Sep) gak pernah ada -> jangan nebak.
+test("maybeSendHeadsUpAlerts - jam cocok tapi member GAK PERNAH live di hari ini (Minggu) -> gak ada DM, dan dedup harian gak kepake", async () => {
+  const { maybeSendHeadsUpAlerts, saveDurationHistory, sentDMs } = freshPriorityDmWithFakeClient();
+  seedDominantSiangPattern(saveDurationHistory);
+  const SUNDAY_IN_WINDOW = new Date("2026-09-20T12:30:00+07:00");
+
+  await maybeSendHeadsUpAlerts(SUNDAY_IN_WINDOW);
+  assert.equal(sentDMs.length, 0);
+
+  await maybeSendHeadsUpAlerts(INSIDE_WINDOW_NOW); // Selasa yang ada di riwayat -> baru boleh
+  assert.equal(sentDMs.length, 1);
 });

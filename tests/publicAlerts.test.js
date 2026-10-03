@@ -290,8 +290,8 @@ test("maybeSendMonthlyRecap - BUKAN hari terakhir bulan -> gerbang ketutup, gak 
 function fiveHeadsUpEntries(name) {
   return [1, 2, 3, 4, 5].map((day) => ({ name, durationMs: 60 * 60_000, at: `2026-09-0${day}T13:00:00+07:00` }));
 }
-const PUBLIC_INSIDE_WINDOW_NOW = new Date("2026-09-20T12:30:00+07:00"); // jam 12 WIB - di dalem rentang 12-12
-const PUBLIC_OUTSIDE_WINDOW_NOW = new Date("2026-09-20T18:00:00+07:00"); // jam 18 WIB - jelas di luar
+const PUBLIC_INSIDE_WINDOW_NOW = new Date("2026-09-22T12:30:00+07:00"); // Selasa, jam 12 WIB - di dalem rentang 12-12
+const PUBLIC_OUTSIDE_WINDOW_NOW = new Date("2026-09-22T18:00:00+07:00"); // Selasa, jam 18 WIB - jelas di luar
 
 test("maybeSendPublicHeadsUpAlerts - pola kuat + jam masuk rentang + ada subscriber + belum live -> post ke channel, nge-tag SEMUA subscriber", async () => {
   saveDurationHistory({ jkt48_headsuppub1: fiveHeadsUpEntries("Headsuppub1") });
@@ -327,7 +327,7 @@ test("maybeSendPublicHeadsUpAlerts - dipanggil 2x hari yang sama -> post cuma SE
   };
   try {
     await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW);
-    await maybeSendPublicHeadsUpAlerts(new Date("2026-09-20T13:00:00+07:00")); // masih hari yang sama, masih dalem rentang
+    await maybeSendPublicHeadsUpAlerts(new Date("2026-09-22T13:00:00+07:00")); // masih hari yang sama, masih dalem rentang
     assert.equal(sendCount, 1);
   } finally {
     global.fetch = original;
@@ -736,4 +736,24 @@ test("maybeSendScheduleDigest - member LAGI LIVE SEKARANG dikecualiin dari dafta
 test("buildScheduleDigestPayload - array kandidat kosong -> null (bukan embed kosong)", () => {
   const { buildScheduleDigestPayload } = require("../src/notify/publicAlerts");
   assert.equal(buildScheduleDigestPayload([], "Minggu"), null);
+});
+
+test("maybeSendPublicHeadsUpAlerts - jam cocok tapi member GAK PERNAH live di hari ini (Minggu) -> gak ngetag subscriber", async () => {
+  saveDurationHistory({ jkt48_headsuppubhari: fiveHeadsUpEntries("Headsuppubhari") });
+  addSubscription("headsuppubhari", "sub-user-hari");
+
+  let sendCount = 0;
+  const original = global.fetch;
+  global.fetch = async () => {
+    sendCount++;
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await maybeSendPublicHeadsUpAlerts(new Date("2026-09-20T12:30:00+07:00")); // Minggu - riwayat cuma Selasa-Sabtu
+    assert.equal(sendCount, 0);
+    await maybeSendPublicHeadsUpAlerts(PUBLIC_INSIDE_WINDOW_NOW); // Selasa - ada di riwayat
+    assert.equal(sendCount, 1);
+  } finally {
+    global.fetch = original;
+  }
 });

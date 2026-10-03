@@ -65,3 +65,13 @@ test("isHourInRange - rentang yang nyebrang tengah malam (min > max)", () => {
   assert.equal(isHourInRange(22, 22, 1), true);
   assert.equal(isHourInRange(10, 22, 1), false); // jam siang, jelas di luar rentang malam ini
 });
+
+test("hasLivedOnWeekday - true cuma untuk hari yang ada di riwayat; pola null/tanpa weekdayCounts aman (false)", () => {
+  const { hasLivedOnWeekday } = require("../src/schedulePattern");
+  const entries = [1, 2, 3].map((day) => ({ durationMs: 60 * 60_000, at: `2026-09-0${day}T13:00:00+07:00` })); // Selasa, Rabu, Kamis
+  const pattern = computeSchedulePattern(entries);
+  assert.equal(hasLivedOnWeekday(pattern, "Selasa"), true);
+  assert.equal(hasLivedOnWeekday(pattern, "Minggu"), false);
+  assert.equal(hasLivedOnWeekday(null, "Selasa"), false);
+  assert.equal(hasLivedOnWeekday({}, "Selasa"), false);
+});
