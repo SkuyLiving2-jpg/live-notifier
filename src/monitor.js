@@ -22,6 +22,7 @@ const {
 } = require("./notify/publicAlerts");
 const { sendOwnerDM } = require("./notify/ownerAlert");
 const { maybeSendOshiDigests } = require("./notify/oshiDigest");
+const { maybeResolveDurationGuesses, maybeResolveNextStarter, discardDurationRound } = require("./notify/guessGame");
 const { pollHealth } = require("./pollHealth");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
@@ -111,6 +112,7 @@ async function recordCompletedSession(username, memberData, durationHistory) {
         memberData.peakViewCount ?? memberData.viewCount ?? null,
       );
       recordViewerTimeline(username, memberData); // kurva penonton buat "cok grafik penonton <nama>"
+      await maybeResolveDurationGuesses(username, memberData, durationMs); // hasil mini-game tebak durasi
       // Saran fitur ke-5 (§10's kelimapuluh+item, live streak) -
       // dicek SETELAH recordLiveEnded (hari ini harus udah masuk
       // arsip completed dulu sebelum dihitung), dan CUMA buat sesi
@@ -123,6 +125,7 @@ async function recordCompletedSession(username, memberData, durationHistory) {
       );
     }
   }
+  discardDurationRound(username); // ronde tebak durasi yang belum ke-resolve (sesi dibuang) gak boleh nyangkut
   activeLives.delete(username);
   saveActiveLives();
 }
@@ -187,6 +190,7 @@ async function checkLiveMembers() {
           });
           addViewerSample(activeLives.get(username), live.view_count);
           saveActiveLives();
+          await maybeResolveNextStarter(username, displayName); // mini-game "siapa live berikutnya"
           if (getPriorityConfig(displayName, live.creator.username)) {
             await maybePartyModeAlert();
           }

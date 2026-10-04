@@ -34,6 +34,7 @@ const {
 const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { replyViewerChart } = require("./viewerChart");
 const { tryHandlePersonalCommand } = require("./personalFlow");
+const { tryHandleGuessCommand } = require("./guessFlow");
 const { touchLastSeen } = require("../storage/userPrefs");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
@@ -223,6 +224,10 @@ async function buildChatReplyCore(rawContent, { isBotChannel = false, channelId 
   // ("oshi", "notif") gak ketangkep cabang lain.
   const personalReply = await tryHandlePersonalCommand(text, commandText, authorId);
   if (personalReply !== null) return withCloseButton(personalReply);
+
+  // Mini-game tebak-tebakan (chat/guessFlow.js): "tebak <nama> <menit>", "tebak berikutnya <nama>", "papan tebak".
+  const guessReply = await tryHandleGuessCommand(commandText, authorId);
+  if (guessReply !== null) return withCloseButton(guessReply);
 
   const addPriorityMatch = text.match(/tambah(?:in|kan)?\s+prioritas\s+(.+)/);
   if (addPriorityMatch) {

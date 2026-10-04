@@ -201,6 +201,13 @@ const EXTRA_FEATURES = [
       "Ketik `cok oshi <nama member>` (maks 5) buat jadiin oshi - kamu otomatis di-tag pas dia live dan dapet ringkasan mingguan lewat DM tiap Minggu malam. `cok oshi saya` buat profil lengkap (lagi live? streak? 7 hari terakhir?), `cok hapus oshi <nama>` buat hapus, `cok ringkasan mati` buat matiin DM mingguan.",
   },
   {
+    value: "tebak",
+    label: "🎮 Tebak-tebakan",
+    description: "Tebak durasi live & siapa live berikutnya, ada papan skor",
+    detail:
+      'Pas ada yang mulai live (15 menit pertama): `cok tebak <nama> <menit>`, contoh "cok tebak nala 90" - yang paling dekat dapet poin (minimal 2 penebak). `cok tebak berikutnya <nama>` = tebak siapa yang bakal live berikutnya. `cok tebak` buat liat ronde yang buka, `cok papan tebak` buat papan skor.',
+  },
+  {
     value: "pengaturan",
     label: "⚙️ Pengaturan notif",
     description: "Notif lewat DM/tag, jam tenang",
