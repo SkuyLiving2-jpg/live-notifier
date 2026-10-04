@@ -322,6 +322,7 @@ function replyHelp() {
     '- "cok grafik <nama member>" (atau "cok chart <nama>") - bar chart durasi live 10 sesi terakhirnya (gambar, bukan teks)',
     '- "cok oshi <nama>" / "cok oshi saya" - member favoritmu (maks 5): profil, di-tag pas live, ringkasan mingguan lewat DM',
     '- "cok kelewat" (atau "cok kelewat 6 jam") - siapa aja yang live sejak terakhir kamu aktif',
+    '- "cok wrapped" / "cok wrapped <nama>" - kartu rangkuman 30 hari terakhir (gambar)',
     '- "cok tebak" - mini-game tebak durasi live / siapa live berikutnya ("cok papan tebak" = skor)',
     '- "cok pengaturan" - notif lewat DM ("cok notif dm") dan jam tenang ("cok jam tenang 23-6")',
     '- "cok grafik penonton <nama member>" - kurva jumlah penonton selama live (gambar), lengkap dengan puncaknya',

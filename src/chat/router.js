@@ -35,6 +35,7 @@ const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { replyViewerChart } = require("./viewerChart");
 const { tryHandlePersonalCommand } = require("./personalFlow");
 const { tryHandleGuessCommand } = require("./guessFlow");
+const { replyWrapped } = require("./wrappedCard");
 const { touchLastSeen } = require("../storage/userPrefs");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
@@ -228,6 +229,10 @@ async function buildChatReplyCore(rawContent, { isBotChannel = false, channelId 
   // Mini-game tebak-tebakan (chat/guessFlow.js): "tebak <nama> <menit>", "tebak berikutnya <nama>", "papan tebak".
   const guessReply = await tryHandleGuessCommand(commandText, authorId);
   if (guessReply !== null) return withCloseButton(guessReply);
+
+  // "cok wrapped" / "cok wrapped <nama>" - kartu rangkuman 30 hari (chat/wrappedCard.js).
+  const wrappedMatch = commandText.match(/^(?:kartu\s+)?wrapped(?:\s+(.+?))?[?!.\s]*$/);
+  if (wrappedMatch) return await replyWrapped(wrappedMatch[1] || "");
 
   const addPriorityMatch = text.match(/tambah(?:in|kan)?\s+prioritas\s+(.+)/);
   if (addPriorityMatch) {

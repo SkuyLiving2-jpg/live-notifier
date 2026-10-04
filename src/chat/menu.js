@@ -201,6 +201,13 @@ const EXTRA_FEATURES = [
       "Ketik `cok oshi <nama member>` (maks 5) buat jadiin oshi - kamu otomatis di-tag pas dia live dan dapet ringkasan mingguan lewat DM tiap Minggu malam. `cok oshi saya` buat profil lengkap (lagi live? streak? 7 hari terakhir?), `cok hapus oshi <nama>` buat hapus, `cok ringkasan mati` buat matiin DM mingguan.",
   },
   {
+    value: "wrapped",
+    label: "🎁 Kartu Wrapped",
+    description: "Rangkuman 30 hari terakhir jadi satu gambar",
+    detail:
+      "Ketik `cok wrapped` buat kartu rangkuman 30 hari terakhir seluruh member (total sesi, waktu live, top member, jam & hari tersibuk), atau `cok wrapped <nama member>` buat versi satu member. Gambar, enak di-screenshot.",
+  },
+  {
     value: "tebak",
     label: "🎮 Tebak-tebakan",
     description: "Tebak durasi live & siapa live berikutnya, ada papan skor",
