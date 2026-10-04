@@ -240,6 +240,13 @@ const EXTRA_FEATURES = [
     detail: 'Ketik `cok grafik <nama member>` (atau "cok chart <nama>") - bar chart durasi live 10 sesi terakhirnya. Contoh: "cok grafik nala".',
   },
   {
+    value: "grafikpenonton",
+    label: "📈 Kurva penonton",
+    description: "Naik-turun jumlah penonton selama live (gambar)",
+    detail:
+      'Ketik `cok grafik penonton <nama member>` - kurva jumlah penonton selama live (yang lagi jalan, atau sesi terakhir yang selesai), lengkap dengan puncaknya. Contoh: "cok grafik penonton nala".',
+  },
+  {
     value: "export",
     label: "📤 Export rekap (CSV)",
     description: "Rekap dikirim jadi file yang bisa didownload",

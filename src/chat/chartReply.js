@@ -258,4 +258,14 @@ async function replyDurationChart(fragment) {
   };
 }
 
-module.exports = { replyDurationChart, computeDurationChartMetrics, drawDurationChart, mergeChartEntries, handleChartButton };
+module.exports = {
+  replyDurationChart,
+  computeDurationChartMetrics,
+  drawDurationChart,
+  mergeChartEntries,
+  handleChartButton,
+  buildChartCloseRow,
+  COLORS,
+  FONT_REGULAR,
+  FONT_BOLD,
+};

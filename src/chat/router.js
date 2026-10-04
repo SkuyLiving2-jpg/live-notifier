@@ -32,6 +32,7 @@ const {
   OWNER_NO_ALL_ROLE_NOTE,
 } = require("./roleFlow");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
+const { replyViewerChart } = require("./viewerChart");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
 const {
@@ -313,6 +314,15 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
   // soalnya kata "grafik"/"chart" gak nyempil di kalimat command lain manapun
   // di file ini, jadi urutannya gak krusial, cuma ditaro deket
   // stats/streak biar related secara tematik (dua-duanya "detail 1 member").
+  // "grafik penonton <nama>" (kurva penonton, chat/viewerChart.js) dicek DULUAN -
+  // kalau enggak, chartMatch di bawah nangkepnya sebagai nama member "penonton ...".
+  const viewerChartMatch = text.match(/(?:grafik|chart)\s+(?:penonton|viewers?)(?:\s+(.+))?$/);
+  if (viewerChartMatch) {
+    return viewerChartMatch[1]
+      ? await replyViewerChart(viewerChartMatch[1])
+      : 'Ketik `grafik penonton <nama member>` ya, contoh: "grafik penonton nala".';
+  }
+
   const chartMatch = text.match(/(?:grafik|chart)\s+(.+)/);
   if (chartMatch) {
     return await replyDurationChart(chartMatch[1]);

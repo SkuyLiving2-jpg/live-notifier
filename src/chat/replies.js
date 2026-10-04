@@ -320,6 +320,7 @@ function replyHelp() {
     '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',
     '- "cok streak <nama member>" - lagi live berapa hari berturut-turut',
     '- "cok grafik <nama member>" (atau "cok chart <nama>") - bar chart durasi live 10 sesi terakhirnya (gambar, bukan teks)',
+    '- "cok grafik penonton <nama member>" - kurva jumlah penonton selama live (yang lagi jalan, atau sesi terakhir yang selesai): puncak jam berapa, ramai atau sepi dibanding biasanya',
     '- "cok export rekap ..." - sama rentangnya kayak "cok rekap ...", dikirim jadi file CSV yang bisa didownload',
     '- "cok daftar prioritas" - lihat member prioritas',
     '- "cok ingetin <nama member>" - kamu di-tag kalau dia mulai live, ATAU kalau ada tanda-tanda bentar lagi live (perkiraan dari pola jam biasanya dia live, kalau histori-nya udah cukup)',

@@ -3,6 +3,8 @@ const { activeLives, saveActiveLives } = require("./storage/activeLives");
 const { loadDurationHistory, recordLiveDuration } = require("./storage/durationHistory");
 const { recordLiveEnded } = require("./storage/dailyLog");
 const { recordLiveCompleted } = require("./storage/liveCount");
+const { recordViewerTimeline } = require("./storage/viewerTimelines");
+const { addViewerSample } = require("./viewerTimeline");
 const { getPriorityConfig } = require("./priority");
 const { sendDiscordNotif } = require("./notify/liveNotify");
 const { maybePartyModeAlert, maybeAlertEndingSoon, maybeSendHeadsUpAlerts } = require("./notify/priorityDm");
@@ -107,6 +109,7 @@ async function recordCompletedSession(username, memberData, durationHistory) {
         new Date(),
         memberData.peakViewCount ?? memberData.viewCount ?? null,
       );
+      recordViewerTimeline(username, memberData); // kurva penonton buat "cok grafik penonton <nama>"
       // Saran fitur ke-5 (§10's kelimapuluh+item, live streak) -
       // dicek SETELAH recordLiveEnded (hari ini harus udah masuk
       // arsip completed dulu sebelum dihitung), dan CUMA buat sesi
@@ -179,7 +182,9 @@ async function checkLiveMembers() {
             imageUrl: live.image_url || null,
             endingSoonAlerted: false,
             alertedMilestones: [],
+            viewSamples: [],
           });
+          addViewerSample(activeLives.get(username), live.view_count);
           saveActiveLives();
           if (getPriorityConfig(displayName, live.creator.username)) {
             await maybePartyModeAlert();
@@ -197,6 +202,7 @@ async function checkLiveMembers() {
         if (typeof live.view_count === "number") {
           entry.peakViewCount = Math.max(entry.peakViewCount ?? 0, live.view_count);
         }
+        addViewerSample(entry, live.view_count);
         await maybeAlertEndingSoon(entry, durationHistory);
         await maybeAlertViewerMilestone(entry);
         // BUG SEBELUMNYA: viewCount/peakViewCount di atas cuma dimutasi di
