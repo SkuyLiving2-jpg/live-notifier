@@ -5,6 +5,7 @@ const { loadAliases } = require("../storage/aliases");
 const { getGreeting, describeElapsed, YES_PATTERN, NO_PATTERN, safeReplyOptions } = require("../utils");
 const { deleteInteractionMessage } = require("./interactionHelpers");
 const { buildAliasActionButtonsRow } = require("./aliasFlow");
+const { buildCatchup } = require("./personalFlow");
 const {
   replyListLive,
   replyBotStatus,
@@ -185,6 +186,26 @@ const EXTRA_FEATURES = [
     label: "📅 Jadwal hari ini",
     description: "Siapa yang kemungkinan live hari ini (dari pola histori)",
     run: () => replyScheduleToday(),
+  },
+  {
+    value: "kelewat",
+    label: "📭 Yang kelewat",
+    description: "Siapa aja yang live sejak terakhir kamu aktif",
+    run: (interaction) => (interaction.user?.id ? buildCatchup(interaction.user.id, "") : "Cok, bot perlu tau kamu siapa buat fitur ini."),
+  },
+  {
+    value: "oshi",
+    label: "⭐ Oshi & ringkasan mingguan",
+    description: "Member favorit: profil, tag pas live, ringkasan DM",
+    detail:
+      "Ketik `cok oshi <nama member>` (maks 5) buat jadiin oshi - kamu otomatis di-tag pas dia live dan dapet ringkasan mingguan lewat DM tiap Minggu malam. `cok oshi saya` buat profil lengkap (lagi live? streak? 7 hari terakhir?), `cok hapus oshi <nama>` buat hapus, `cok ringkasan mati` buat matiin DM mingguan.",
+  },
+  {
+    value: "pengaturan",
+    label: "⚙️ Pengaturan notif",
+    description: "Notif lewat DM/tag, jam tenang",
+    detail:
+      "Ketik `cok pengaturan` buat liat settingmu. `cok notif dm` = member yang kamu ingetin dikabari lewat DM (bukan ditag di channel), `cok notif tag` = balik ke tag. `cok jam tenang 23-6` = gak di-tag/di-DM jam segitu (WIB), `cok jam tenang mati` buat matiin. Yang kelewat bisa dicek pakai `cok kelewat`.",
   },
   {
     value: "stats",
@@ -782,7 +803,7 @@ async function handleFallbackExtraSelect(interaction) {
   const result = !feature
     ? "Cok, opsi itu kayaknya udah gak ada. Coba pilih lagi ya."
     : feature.run
-      ? feature.run()
+      ? feature.run(interaction)
       : `**${feature.label}**\n${feature.detail}`;
   // Jawaban fitur bisa string biasa atau payload ({embeds}) - mis. jadwal hari ini.
   const body = typeof result === "string" ? { content: result } : result;

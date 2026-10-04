@@ -21,6 +21,7 @@ const {
   maybeCleanupBrokenStreaks,
 } = require("./notify/publicAlerts");
 const { sendOwnerDM } = require("./notify/ownerAlert");
+const { maybeSendOshiDigests } = require("./notify/oshiDigest");
 const { pollHealth } = require("./pollHealth");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 
@@ -249,6 +250,7 @@ async function checkLiveMembers() {
     await maybeSendScheduleDigest();
     await maybeSendHeadsUpAlerts();
     await maybeSendPublicHeadsUpAlerts();
+    await maybeSendOshiDigests(); // ringkasan mingguan oshi lewat DM (Minggu malam)
     // BUG YANG DITEMUKAN (debug pass §10, live streak) - lihat komen lengkapnya
     // di notify/publicAlerts.js's maybeCleanupBrokenStreaks: tanpa panggilan
     // rutin terpisah ini, streak yang putus gara-gara member VAKUM (gak live

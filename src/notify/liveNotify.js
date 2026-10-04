@@ -4,6 +4,7 @@ const { sendPriorityDM } = require("./priorityDm");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { getChannelWebhookFor } = require("../storage/channelRouting");
 const { getRoleIdFor } = require("../storage/memberRoles");
+const { splitByPreference, sendDirectMessages } = require("./personalDelivery");
 const { containsWholeWord, formatClockWIB } = require("../utils");
 const { PRIORITY_PING_USER_ID } = require("../config");
 
@@ -129,7 +130,18 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   let sharedPayload = payload;
   let dedicatedPayload = payload;
   if (status === "start") {
-    const subscriberIds = getSubscribersFor(memberName, username);
+    // Preferensi pengguna (cok notif dm / jam tenang): yang pilih DM dikirimin
+    // DM duluan (gagal -> jatuh balik ke tag), yang lagi jam tenang gak diganggu.
+    const { tag, dm } = splitByPreference(getSubscribersFor(memberName, username));
+    let subscriberIds = tag;
+    if (dm.length > 0) {
+      const dmPayload = {
+        ...payload,
+        content: `${payload.content}\n_(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di channel.)_`,
+      };
+      const { failed } = await sendDirectMessages(dm, dmPayload);
+      subscriberIds = [...tag, ...failed];
+    }
     const memberRoleId = getRoleIdFor(username);
     sharedPayload = withMentions(payload, subscriberIds, dedicatedWebhookUrl ? [] : [memberRoleId]);
     dedicatedPayload = withMentions(payload, subscriberIds, [memberRoleId]);

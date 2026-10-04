@@ -14,6 +14,7 @@ const { loadStreakAlerts } = require("./storage/streaks");
 const { loadMemberRoles } = require("./storage/memberRoles");
 const { loadRolePanelState } = require("./storage/rolePanelState");
 const { loadViewerTimelines } = require("./storage/viewerTimelines");
+const { loadAll: loadUserPrefs } = require("./storage/userPrefs");
 const { loadChannelRouting, saveChannelRouting } = require("./storage/channelRouting");
 
 // Format webhook Discord yang valid - dipake buat nolak entry yang jelas
@@ -175,6 +176,7 @@ function handleBackupExport(req, res) {
       memberRoles: loadMemberRoles(),
       rolePanel: loadRolePanelState(),
       viewerTimelines: loadViewerTimelines(),
+      userPrefs: loadUserPrefs(),
     }),
   );
 }

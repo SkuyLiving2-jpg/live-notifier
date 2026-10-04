@@ -33,6 +33,8 @@ const {
 } = require("./roleFlow");
 const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { replyViewerChart } = require("./viewerChart");
+const { tryHandlePersonalCommand } = require("./personalFlow");
+const { touchLastSeen } = require("../storage/userPrefs");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect, buildAliasListBlock } = require("./aliasFlow");
 const {
@@ -138,7 +140,16 @@ const MEMBER_QUERY_STOPWORDS = new Set([
   "gak", "nggak", "belum", "semua", "member", "bot", "live", "cok", "dia", "kamu", "aku",
 ]); // prettier-ignore
 
-async function buildChatReply(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
+// Pembungkus: setelah bot BENERAN ngebales seseorang, dicatat kapan terakhir dia aktif
+// (dasar jendela "cok kelewat"). Dicatat SESUDAH balasan dihitung, jadi "cok kelewat"
+// sendiri masih baca waktu aktif yang SEBELUMNYA.
+async function buildChatReply(rawContent, options = {}) {
+  const reply = await buildChatReplyCore(rawContent, options);
+  if (reply !== null && reply !== undefined && options.authorId) touchLastSeen(options.authorId);
+  return reply;
+}
+
+async function buildChatReplyCore(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
 
   const watchConfirmReply = tryHandleWatchConfirmShortcut(text, channelId, authorId);
@@ -206,6 +217,12 @@ async function buildChatReply(rawContent, { isBotChannel = false, channelId = nu
     const impossibleDate = findImpossibleDateInText(text);
     if (impossibleDate) return replyImpossibleDate(impossibleDate);
   }
+
+  // Perintah personal (oshi, pengaturan notif, jam tenang, ringkasan, kelewat) -
+  // chat/personalFlow.js. Dicek sebelum perintah lain biar kata-kata umumnya
+  // ("oshi", "notif") gak ketangkep cabang lain.
+  const personalReply = await tryHandlePersonalCommand(text, commandText, authorId);
+  if (personalReply !== null) return withCloseButton(personalReply);
 
   const addPriorityMatch = text.match(/tambah(?:in|kan)?\s+prioritas\s+(.+)/);
   if (addPriorityMatch) {

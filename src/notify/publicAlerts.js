@@ -13,6 +13,7 @@ const { activeLives, saveActiveLives } = require("../storage/activeLives");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { wasAlertedToday, markAlertedToday } = require("../storage/headsUpAlerts");
 const { getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert, loadStreakAlerts } = require("../storage/streaks");
+const { splitByPreference, sendDirectMessages } = require("./personalDelivery");
 const { computeSchedulePattern, hasLivedOnWeekday, isHourInRange, HEADS_UP_MIN_ENTRIES, HEADS_UP_MIN_DOMINANCE } = require("../schedulePattern");
 const { computeCurrentStreak, STREAK_MILESTONES } = require("../streakMath");
 const { DAILY_RECAP_HOUR, SCHEDULE_DIGEST_HOUR, DAILY_RECAP_COLOR } = require("../config");
@@ -314,13 +315,28 @@ async function maybeSendScheduleDigest(now = new Date()) {
 // (mis. ada yang "cok ingetin nala" padahal Nala udah prioritas) gak salah
 // nge-suppress salah satu jalur gara-gara ngirain udah "kepake" hari itu,
 // padahal yang kepake jalur yang laen.
-function sendPublicHeadsUpAlert(displayName, pattern, subscriberIds) {
+async function sendPublicHeadsUpAlert(displayName, pattern, subscriberIds, now = new Date()) {
   const pad2 = (n) => String(n).padStart(2, "0");
   const windowText = `${pad2(pattern.rangeMin)}-${pad2(pattern.rangeMax)} WIB`;
+  const headline = `👀 **${displayName}** biasanya live sekitar jam segini (${windowText}, ${pattern.topBucketCount}/${pattern.total}x riwayat terakhir) - kemungkinan bentar lagi live!`;
+  const disclaimer = "_(Perkiraan dari pola histori, BUKAN jadwal resmi - bisa aja meleset.)_";
+
+  // Preferensi pengguna: jam tenang -> dilewati; pilih DM -> dikirim lewat DM
+  // (gagal DM jatuh balik ke tag); sisanya di-tag di channel.
+  const { tag, dm } = splitByPreference(subscriberIds, now);
+  let tagIds = tag;
+  if (dm.length > 0) {
+    const { failed } = await sendDirectMessages(dm, {
+      content: `${headline}\n${disclaimer}\n_(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di channel.)_`,
+    });
+    tagIds = [...tag, ...failed];
+  }
+  if (tagIds.length === 0) return;
+  subscriberIds = tagIds;
   const mentions = subscriberIds.map((id) => `<@${id}>`).join(" ");
 
   const payload = {
-    content: `👀 **${displayName}** biasanya live sekitar jam segini (${windowText}, ${pattern.topBucketCount}/${pattern.total}x riwayat terakhir) - kemungkinan bentar lagi live!\n${mentions} kamu subscribe notif buat member ini. _(Perkiraan dari pola histori, BUKAN jadwal resmi - bisa aja meleset.)_`,
+    content: `${headline}\n${mentions} kamu subscribe notif buat member ini. ${disclaimer}`,
     // Mention yang BENERAN dimaksud cuma subscriber-nya doang (sama pola
     // scoped-nya kayak liveNotify.js's getSubscribersFor) - biar CUMA
     // mereka yang ke-ping walau displayName kebetulan ngandung teks aneh.
@@ -369,7 +385,7 @@ async function maybeSendPublicHeadsUpAlerts(now = new Date()) {
     if (!hasLivedOnWeekday(pattern, todayWeekdayName)) continue; // gak pernah live di hari ini -> jangan nebak
 
     markAlertedToday(dedupKey, today);
-    await sendPublicHeadsUpAlert(found.displayName, pattern, [...subscriberIds]);
+    await sendPublicHeadsUpAlert(found.displayName, pattern, [...subscriberIds], now);
   }
 }
 
