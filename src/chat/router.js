@@ -147,7 +147,13 @@ const MEMBER_QUERY_STOPWORDS = new Set([
 // sendiri masih baca waktu aktif yang SEBELUMNYA.
 async function buildChatReply(rawContent, options = {}) {
   const reply = await buildChatReplyCore(rawContent, options);
-  if (reply !== null && reply !== undefined && options.authorId) touchLastSeen(options.authorId);
+  if (reply !== null && reply !== undefined && options.authorId) {
+    try {
+      touchLastSeen(options.authorId);
+    } catch (error) {
+      console.error("Gagal nyatet waktu aktif terakhir (nggak fatal):", error.message);
+    }
+  }
   return reply;
 }
 

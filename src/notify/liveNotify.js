@@ -132,15 +132,25 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   if (status === "start") {
     // Preferensi pengguna (cok notif dm / jam tenang): yang pilih DM dikirimin
     // DM duluan (gagal -> jatuh balik ke tag), yang lagi jam tenang gak diganggu.
-    const { tag, dm } = splitByPreference(getSubscribersFor(memberName, username));
-    let subscriberIds = tag;
-    if (dm.length > 0) {
-      const dmPayload = {
-        ...payload,
-        content: `${payload.content}\n_(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di channel.)_`,
-      };
-      const { failed } = await sendDirectMessages(dm, dmPayload);
-      subscriberIds = [...tag, ...failed];
+    const allSubscribers = getSubscribersFor(memberName, username);
+    let subscriberIds = allSubscribers;
+    try {
+      const { tag, dm } = splitByPreference(allSubscribers);
+      subscriberIds = tag;
+      if (dm.length > 0) {
+        const dmPayload = {
+          ...payload,
+          content: `${payload.content}
+_(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di channel.)_`,
+        };
+        const { failed } = await sendDirectMessages(dm, dmPayload);
+        subscriberIds = [...tag, ...failed];
+      }
+    } catch (error) {
+      // Fitur preferensi error (data rusak, dst) gak boleh bikin notif live gak kekirim:
+      // jatuh balik ke perilaku lama - semua subscriber di-tag di channel.
+      console.error("Preferensi notif gagal diterapkan (semua subscriber di-tag seperti biasa):", error.message);
+      subscriberIds = allSubscribers;
     }
     const memberRoleId = getRoleIdFor(username);
     sharedPayload = withMentions(payload, subscriberIds, dedicatedWebhookUrl ? [] : [memberRoleId]);

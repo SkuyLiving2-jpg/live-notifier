@@ -76,6 +76,19 @@ async function notePollSuccess() {
   if (wasAlerted) await sendOwnerDM(`✅ Polling IDN pulih lagi (sempat gagal ${failures}x berturut-turut). Deteksi live jalan normal.`);
 }
 
+// Fitur SAMPINGAN (kurva penonton, mini-game, ringkasan oshi) dijalankan lewat sini: kalau
+// salah satunya error (data rusak, bug), itu cuma dicatat - JANGAN sampai ngebatalin
+// siklus polling, bikin sesi yang udah selesai gak pernah dihapus dari activeLives
+// (notif "selesai" ngulang tiap siklus), atau nyetop update dashboard.
+async function safely(label, fn) {
+  try {
+    return await fn();
+  } catch (error) {
+    console.error(`${label} gagal (nggak fatal, siklus polling lanjut):`, error.message);
+    return undefined;
+  }
+}
+
 // Catat sesi yang SUDAH selesai ke stats/rekap/streak (kalau durasinya masuk akal)
 // lalu hapus dari activeLives. Dipake dua jalur: live biasa yang selesai (di
 // bawah) dan sesi lama yang digantiin sesi BARU di tengah toleransi absen.
@@ -111,8 +124,8 @@ async function recordCompletedSession(username, memberData, durationHistory) {
         new Date(),
         memberData.peakViewCount ?? memberData.viewCount ?? null,
       );
-      recordViewerTimeline(username, memberData); // kurva penonton buat "cok grafik penonton <nama>"
-      await maybeResolveDurationGuesses(username, memberData, durationMs); // hasil mini-game tebak durasi
+      await safely("Simpan kurva penonton", () => recordViewerTimeline(username, memberData)); // buat "cok grafik penonton <nama>"
+      await safely("Hasil tebak durasi", () => maybeResolveDurationGuesses(username, memberData, durationMs));
       // Saran fitur ke-5 (§10's kelimapuluh+item, live streak) -
       // dicek SETELAH recordLiveEnded (hari ini harus udah masuk
       // arsip completed dulu sebelum dihitung), dan CUMA buat sesi
@@ -125,7 +138,7 @@ async function recordCompletedSession(username, memberData, durationHistory) {
       );
     }
   }
-  discardDurationRound(username); // ronde tebak durasi yang belum ke-resolve (sesi dibuang) gak boleh nyangkut
+  await safely("Buang ronde tebak durasi", () => discardDurationRound(username)); // ronde yang belum ke-resolve (sesi dibuang) gak boleh nyangkut
   activeLives.delete(username);
   saveActiveLives();
 }
@@ -188,9 +201,9 @@ async function checkLiveMembers() {
             alertedMilestones: [],
             viewSamples: [],
           });
-          addViewerSample(activeLives.get(username), live.view_count);
+          await safely("Sampel penonton", () => addViewerSample(activeLives.get(username), live.view_count));
           saveActiveLives();
-          await maybeResolveNextStarter(username, displayName); // mini-game "siapa live berikutnya"
+          await safely("Hasil tebak berikutnya", () => maybeResolveNextStarter(username, displayName)); // mini-game "siapa live berikutnya"
           if (getPriorityConfig(displayName, live.creator.username)) {
             await maybePartyModeAlert();
           }
@@ -207,7 +220,7 @@ async function checkLiveMembers() {
         if (typeof live.view_count === "number") {
           entry.peakViewCount = Math.max(entry.peakViewCount ?? 0, live.view_count);
         }
-        addViewerSample(entry, live.view_count);
+        await safely("Sampel penonton", () => addViewerSample(entry, live.view_count));
         await maybeAlertEndingSoon(entry, durationHistory);
         await maybeAlertViewerMilestone(entry);
         // BUG SEBELUMNYA: viewCount/peakViewCount di atas cuma dimutasi di
@@ -254,7 +267,7 @@ async function checkLiveMembers() {
     await maybeSendScheduleDigest();
     await maybeSendHeadsUpAlerts();
     await maybeSendPublicHeadsUpAlerts();
-    await maybeSendOshiDigests(); // ringkasan mingguan oshi lewat DM (Minggu malam)
+    await safely("Ringkasan mingguan oshi", () => maybeSendOshiDigests()); // DM Minggu malam
     // BUG YANG DITEMUKAN (debug pass §10, live streak) - lihat komen lengkapnya
     // di notify/publicAlerts.js's maybeCleanupBrokenStreaks: tanpa panggilan
     // rutin terpisah ini, streak yang putus gara-gara member VAKUM (gak live

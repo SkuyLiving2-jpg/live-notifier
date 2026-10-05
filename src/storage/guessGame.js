@@ -24,14 +24,57 @@ const EXACT_DIFF_MINUTES = 2;
 const isId = (id) => typeof id === "string" && id.length > 0 && id !== "__proto__";
 const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
 
+const num = (v) => (Number.isFinite(v) ? v : 0);
+
+// File bisa diedit tangan / rusak sebagian (JSON valid tapi bentuknya salah):
+// entri yang bentuknya tidak masuk akal dibuang supaya satu entri jelek tidak
+// merusak papan skor atau menyetop penghitungan ronde.
+function cleanScores(raw) {
+  const out = {};
+  for (const [id, s] of Object.entries(isPlain(raw) ? raw : {})) {
+    if (isId(id) && isPlain(s)) out[id] = { points: num(s.points), wins: num(s.wins), plays: num(s.plays) };
+  }
+  return out;
+}
+
+function cleanMonthly(raw) {
+  const out = {};
+  for (const [month, perUser] of Object.entries(isPlain(raw) ? raw : {})) {
+    if (!isPlain(perUser)) continue;
+    out[month] = {};
+    for (const [id, points] of Object.entries(perUser)) if (isId(id) && Number.isFinite(points)) out[month][id] = points;
+  }
+  return out;
+}
+
+function cleanDuration(raw) {
+  const out = {};
+  for (const [username, round] of Object.entries(isPlain(raw) ? raw : {})) {
+    if (!isId(username) || !isPlain(round) || !Number.isFinite(round.liveAtUnix)) continue;
+    const guesses = {};
+    for (const [id, g] of Object.entries(isPlain(round.guesses) ? round.guesses : {})) {
+      if (isId(id) && isPlain(g) && Number.isFinite(g.minutes)) guesses[id] = { minutes: g.minutes, at: num(g.at) };
+    }
+    out[username] = { liveAtUnix: round.liveAtUnix, name: typeof round.name === "string" ? round.name : username, guesses };
+  }
+  return out;
+}
+
+function cleanNext(raw) {
+  if (!isPlain(raw) || !Number.isFinite(raw.openedAt) || !isPlain(raw.guesses)) return null;
+  const guesses = {};
+  for (const [id, username] of Object.entries(raw.guesses)) if (isId(id) && typeof username === "string" && username) guesses[id] = username;
+  return { openedAt: raw.openedAt, guesses };
+}
+
 function load() {
   const raw = store.load();
   const data = isPlain(raw) ? raw : {};
   return {
-    duration: isPlain(data.duration) ? data.duration : {},
-    next: isPlain(data.next) && isPlain(data.next.guesses) ? data.next : null,
-    scores: isPlain(data.scores) ? data.scores : {},
-    monthly: isPlain(data.monthly) ? data.monthly : {},
+    duration: cleanDuration(data.duration),
+    next: cleanNext(data.next),
+    scores: cleanScores(data.scores),
+    monthly: cleanMonthly(data.monthly),
   };
 }
 

@@ -323,13 +323,22 @@ async function sendPublicHeadsUpAlert(displayName, pattern, subscriberIds, now =
 
   // Preferensi pengguna: jam tenang -> dilewati; pilih DM -> dikirim lewat DM
   // (gagal DM jatuh balik ke tag); sisanya di-tag di channel.
-  const { tag, dm } = splitByPreference(subscriberIds, now);
-  let tagIds = tag;
-  if (dm.length > 0) {
-    const { failed } = await sendDirectMessages(dm, {
-      content: `${headline}\n${disclaimer}\n_(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di channel.)_`,
-    });
-    tagIds = [...tag, ...failed];
+  let tagIds = subscriberIds;
+  try {
+    const { tag, dm } = splitByPreference(subscriberIds, now);
+    tagIds = tag;
+    if (dm.length > 0) {
+      const { failed } = await sendDirectMessages(dm, {
+        content: `${headline}
+${disclaimer}
+_(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di channel.)_`,
+      });
+      tagIds = [...tag, ...failed];
+    }
+  } catch (error) {
+    // Preferensi gagal diterapkan -> perilaku lama (semua di-tag), alert tetap keluar.
+    console.error("Preferensi notif gagal diterapkan di heads-up (semua subscriber di-tag):", error.message);
+    tagIds = subscriberIds;
   }
   if (tagIds.length === 0) return;
   subscriberIds = tagIds;

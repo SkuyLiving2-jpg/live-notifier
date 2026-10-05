@@ -32,7 +32,8 @@ const activeLives = loadActiveLives();
 function saveActiveLives() {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileAtomic(CACHE_FILE, JSON.stringify(Object.fromEntries(activeLives), null, 2));
+    // Tanpa indentasi: file ini cuma dibaca mesin, dan tiap entri bawa sampel kurva penonton (puluhan KB kalau di-pretty-print, ditulis tiap siklus polling).
+    writeFileAtomic(CACHE_FILE, JSON.stringify(Object.fromEntries(activeLives)));
   } catch (error) {
     console.error("Gagal nyimpen cache ke file:", error.message);
   }
