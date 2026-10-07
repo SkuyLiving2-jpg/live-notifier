@@ -35,6 +35,7 @@ const { replyDurationChart, handleChartButton } = require("./chartReply");
 const { replyViewerChart } = require("./viewerChart");
 const { tryHandlePersonalCommand } = require("./personalFlow");
 const { tryHandleGuessCommand } = require("./guessFlow");
+const { suggestCommand } = require("./commandSuggest");
 const { replyWrapped } = require("./wrappedCard");
 const { touchLastSeen } = require("../storage/userPrefs");
 const { handleSlashCommand, handleSlashAutocomplete, replyCekMember } = require("./slashCommands");
@@ -157,8 +158,13 @@ async function buildChatReply(rawContent, options = {}) {
   return reply;
 }
 
-async function buildChatReplyCore(rawContent, { isBotChannel = false, channelId = null, authorId = null } = {}) {
+// Perintah yang mengatur role server - gak ada artinya (dan gak bisa jalan) di DM.
+const ROLE_COMMAND_IN_DM = /\brole\b|\bnotif(?:ikasi)?\s+(?:live\s+)?semua\b/;
+const DM_ROLE_NOTE = "Cok, perintah role cuma bisa dipakai di server (bukan lewat DM). Buka channel role di server buat milih notifmu.";
+
+async function buildChatReplyCore(rawContent, { isBotChannel = false, channelId = null, authorId = null, isDm = false } = {}) {
   const text = (rawContent || "").toLowerCase().trim();
+  if (isDm && ROLE_COMMAND_IN_DM.test(text)) return DM_ROLE_NOTE;
 
   const watchConfirmReply = tryHandleWatchConfirmShortcut(text, channelId, authorId);
   if (watchConfirmReply) return watchConfirmReply;
@@ -751,7 +757,17 @@ async function buildChatReplyCore(rawContent, { isBotChannel = false, channelId 
   if (dedicatedUsername) return replyMemberChannelFallback(dedicatedUsername);
 
   markMenuShown(channelId, authorId);
-  return replyFallbackMenu();
+  const menu = replyFallbackMenu();
+  // Salah ketik perintah ("cok strek nala") -> petunjuk "maksud kamu ...?" di atas menu.
+  const suggestion = suggestCommand(commandText);
+  return suggestion
+    ? {
+        ...menu,
+        content: `${suggestion}
+
+${menu.content}`,
+      }
+    : menu;
 }
 
 // BUG YANG DILAPORIN OWNER ("grafik erine" gak keluar apa-apa): kalau kirim
@@ -854,9 +870,12 @@ function wireDiscordEvents(client) {
   client.on("messageCreate", async (message) => {
     try {
       if (message.author.bot) return;
-      const isBotChannel = Boolean(BOT_CHANNEL_ID) && message.channel.id === BOT_CHANNEL_ID;
+      // DM (tanpa server): semua pesan dianggap ditujukan ke bot, kayak di channel bot.
+      const isDm = !message.guildId;
+      const isBotChannel = isDm || (Boolean(BOT_CHANNEL_ID) && message.channel.id === BOT_CHANNEL_ID);
       const reply = await buildChatReply(message.content, {
         isBotChannel,
+        isDm,
         channelId: message.channel.id,
         authorId: message.author.id,
       });
@@ -871,7 +890,8 @@ function wireDiscordEvents(client) {
         // Ketikan yang SAMA diulang lebih dari 2x -> ketikan lama + balesan
         // bot lamanya dihapus (lihat repeatedReplyGuard.js). Dipanggil abis
         // balesan kekirim, dan gak pernah throw (kegagalan hapus cuma di-log).
-        await pruneRepeatedExchange(message, (message.content || "").trim().toLowerCase(), sent);
+        // (Di DM dilewati: bot gak bisa menghapus pesan user di DM.)
+        if (!isDm) await pruneRepeatedExchange(message, (message.content || "").trim().toLowerCase(), sent);
       }
     } catch (error) {
       // Sebelumnya cuma nyetak error.message - kalau ini beneran gagal

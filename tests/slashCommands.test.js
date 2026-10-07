@@ -69,9 +69,9 @@ function fakeAutocompleteInteraction({ focusedName, focusedValue = "" }) {
   };
 }
 
-test("getCommandDefinitionsJSON - semua 26 command valid (SlashCommandBuilder#toJSON() gak throw), nama unik", () => {
+test("getCommandDefinitionsJSON - semua 32 command valid (SlashCommandBuilder#toJSON() gak throw), nama unik", () => {
   const defs = getCommandDefinitionsJSON();
-  assert.equal(defs.length, 26);
+  assert.equal(defs.length, 32);
   const names = defs.map((d) => d.name);
   assert.equal(new Set(names).size, names.length, "gak boleh ada nama command yang dobel");
   assert.ok(names.includes("live"));

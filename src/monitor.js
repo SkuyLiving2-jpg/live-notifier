@@ -22,6 +22,7 @@ const {
 } = require("./notify/publicAlerts");
 const { sendOwnerDM } = require("./notify/ownerAlert");
 const { maybeSendOshiDigests } = require("./notify/oshiDigest");
+const { updateBotPresence } = require("./presence");
 const { maybeResolveDurationGuesses, maybeResolveNextStarter, discardDurationRound } = require("./notify/guessGame");
 const { pollHealth } = require("./pollHealth");
 const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
@@ -281,6 +282,7 @@ async function checkLiveMembers() {
     // selesai) beres semua buat siklus ini, biar roster yang direnderin
     // reflect state FINAL siklus ini, bukan state di tengah-tengah proses.
     await maybeUpdateDashboard();
+    await safely("Status bot", () => updateBotPresence()); // "Watching 🔴 Nala (live)" di daftar anggota
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);
   }

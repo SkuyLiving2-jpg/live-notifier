@@ -20,7 +20,7 @@
 // lewat button/select-menu interaction seperti biasa - modul ini CUMA
 // nangenin interaction.isChatInputCommand()/isAutocomplete(), dua kelas
 // interaction yang beda sama sekali dari yang udah ada.
-const { SlashCommandBuilder } = require("discord.js");
+const { SlashCommandBuilder, MessageFlags } = require("discord.js");
 const { activeLives, findMemberByNameFragment } = require("../storage/activeLives");
 const { loadLiveCount } = require("../storage/liveCount");
 const { formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
@@ -62,6 +62,10 @@ const {
 } = require("./replies");
 const { findDurationHistoryByNameFragment } = require("../storage/durationHistory");
 const { replyDurationChart } = require("./chartReply");
+const { replyViewerChart } = require("./viewerChart");
+const { replyWrapped } = require("./wrappedCard");
+const personal = require("./personalFlow");
+const guess = require("./guessFlow");
 
 // Dipake HAMPIR di semua command yang butuh nama member - satu helper biar
 // deskripsi/nama opsi-nya konsisten di semua command, gak ketik ulang
@@ -107,7 +111,7 @@ function replyCekMember(fragment) {
 // `handler` dipake handleSlashCommand di bawah - keduanya SELALU sinkron
 // (gak mungkin ada command yang ke-daftar tapi handler-nya lupa ditulis,
 // atau sebaliknya) karena satu array yang sama dipake dua-duanya.
-const COMMAND_DEFINITIONS = [
+const BASE_COMMAND_DEFINITIONS = [
   {
     builder: new SlashCommandBuilder().setName("live").setDescription("Lihat member JKT48 yang lagi live sekarang"),
     handler: async () => replyListLive(),
@@ -267,6 +271,138 @@ const COMMAND_DEFINITIONS = [
   },
 ];
 
+// Command PERSONAL & fitur baru. `ephemeral: true` = jawabannya cuma kelihatan oleh
+// pemakainya (deferReply ephemeral di handleSlashCommand) - cocok buat profil oshi,
+// pengaturan, kelewat, dan tebakan yang gak perlu ngotorin channel. Wrapped & grafik
+// penonton sengaja publik (gambarnya enak dibagikan). Sama seperti command lain di atas:
+// handler cuma manggil fungsi yang SAMA dengan versi teks ("cok oshi ...", dst).
+const PERSONAL_COMMAND_DEFINITIONS = [
+  {
+    ephemeral: true,
+    builder: new SlashCommandBuilder()
+      .setName("oshi")
+      .setDescription("Member favoritmu: profil, tambah, hapus")
+      .addSubcommand((sub) => sub.setName("lihat").setDescription("Profil singkat semua oshi kamu"))
+      .addSubcommand((sub) => addMemberOption(sub.setName("tambah").setDescription("Jadikan member sebagai oshi (maks 5)")))
+      .addSubcommand((sub) => addMemberOption(sub.setName("hapus").setDescription("Hapus member dari oshi kamu"))),
+    handler: async (interaction) => {
+      const sub = interaction.options.getSubcommand();
+      const userId = interaction.user.id;
+      if (sub === "tambah") return personal.handleAddOshi(interaction.options.getString("member", true), userId);
+      if (sub === "hapus") return personal.handleRemoveOshi(interaction.options.getString("member", true), userId);
+      return personal.replyOshiProfile(userId);
+    },
+  },
+  {
+    ephemeral: true,
+    builder: new SlashCommandBuilder()
+      .setName("kelewat")
+      .setDescription("Siapa aja yang live sejak terakhir kamu aktif")
+      .addIntegerOption((opt) =>
+        opt.setName("jam").setDescription("Opsional - lihat N jam terakhir (1-720)").setMinValue(1).setMaxValue(720).setRequired(false),
+      ),
+    handler: async (interaction) => {
+      const hours = interaction.options.getInteger("jam");
+      return personal.buildCatchup(interaction.user.id, hours ? `${hours} jam` : "");
+    },
+  },
+  {
+    ephemeral: true,
+    builder: new SlashCommandBuilder()
+      .setName("pengaturan")
+      .setDescription("Atur notifmu: lewat DM/tag, jam tenang, ringkasan mingguan")
+      .addSubcommand((sub) => sub.setName("lihat").setDescription("Lihat pengaturanmu sekarang"))
+      .addSubcommand((sub) =>
+        sub
+          .setName("notif")
+          .setDescription("Member yang kamu ingetin dikabari lewat apa")
+          .addStringOption((opt) =>
+            opt
+              .setName("cara")
+              .setDescription("DM atau di-tag di channel")
+              .setRequired(true)
+              .addChoices({ name: "Lewat DM", value: "dm" }, { name: "Di-tag di channel", value: "tag" }),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("jam-tenang")
+          .setDescription("Gak di-tag/di-DM di rentang jam ini (WIB)")
+          .addIntegerOption((opt) => opt.setName("mulai").setDescription("Jam mulai (0-23)").setMinValue(0).setMaxValue(23).setRequired(true))
+          .addIntegerOption((opt) => opt.setName("selesai").setDescription("Jam selesai (0-23)").setMinValue(0).setMaxValue(23).setRequired(true)),
+      )
+      .addSubcommand((sub) => sub.setName("jam-tenang-mati").setDescription("Matiin jam tenang"))
+      .addSubcommand((sub) =>
+        sub
+          .setName("ringkasan")
+          .setDescription("Ringkasan mingguan oshi lewat DM")
+          .addStringOption((opt) =>
+            opt
+              .setName("status")
+              .setDescription("Hidup atau mati")
+              .setRequired(true)
+              .addChoices({ name: "Hidup", value: "hidup" }, { name: "Mati", value: "mati" }),
+          ),
+      ),
+    handler: async (interaction) => {
+      const sub = interaction.options.getSubcommand();
+      const userId = interaction.user.id;
+      if (sub === "notif") return personal.handleSetDelivery(interaction.options.getString("cara", true), userId);
+      if (sub === "jam-tenang") {
+        return personal.handleSetQuietHours(interaction.options.getInteger("mulai", true), interaction.options.getInteger("selesai", true), userId);
+      }
+      if (sub === "jam-tenang-mati") return personal.handleClearQuietHours(userId);
+      if (sub === "ringkasan") return personal.handleSetDigest(interaction.options.getString("status", true) === "hidup", userId);
+      return personal.replySettings(userId);
+    },
+  },
+  {
+    ephemeral: true,
+    builder: new SlashCommandBuilder()
+      .setName("tebak")
+      .setDescription("Mini-game tebak-tebakan (durasi live / siapa live berikutnya)")
+      .addSubcommand((sub) =>
+        addMemberOption(
+          sub.setName("durasi").setDescription("Tebak berapa lama member yang lagi live bakal live (15 menit pertama)"),
+        ).addIntegerOption((opt) => opt.setName("menit").setDescription("Tebakan durasi (menit)").setMinValue(1).setMaxValue(720).setRequired(true)),
+      )
+      .addSubcommand((sub) => addMemberOption(sub.setName("berikutnya").setDescription("Tebak siapa yang bakal mulai live berikutnya")))
+      .addSubcommand((sub) => sub.setName("lihat").setDescription("Ronde yang lagi buka + cara main"))
+      .addSubcommand((sub) => sub.setName("papan").setDescription("Papan skor tebak-tebakan")),
+    handler: async (interaction) => {
+      const sub = interaction.options.getSubcommand();
+      const userId = interaction.user.id;
+      if (sub === "durasi")
+        return guess.handleDurationGuess(
+          interaction.options.getString("member", true),
+          String(interaction.options.getInteger("menit", true)),
+          userId,
+        );
+      if (sub === "berikutnya") return guess.handleNextGuess(interaction.options.getString("member", true), userId);
+      if (sub === "papan") return guess.replyScoreboard(userId);
+      return guess.replyGuessOverview(userId);
+    },
+  },
+  {
+    builder: new SlashCommandBuilder()
+      .setName("wrapped")
+      .setDescription("Kartu rangkuman 30 hari terakhir (semua member atau satu member)")
+      .addStringOption((opt) =>
+        opt.setName("member").setDescription("Opsional - kosongin buat semua member").setRequired(false).setAutocomplete(true),
+      ),
+    handler: async (interaction) => replyWrapped(interaction.options.getString("member") || ""),
+  },
+  {
+    builder: addMemberOption(new SlashCommandBuilder().setName("grafik-penonton").setDescription("Kurva jumlah penonton selama live (gambar)")),
+    handler: async (interaction) => replyViewerChart(interaction.options.getString("member", true)),
+  },
+];
+
+const COMMAND_DEFINITIONS = [...BASE_COMMAND_DEFINITIONS, ...PERSONAL_COMMAND_DEFINITIONS];
+
+// Command yang jawabannya cuma boleh kelihatan oleh pemakainya.
+const EPHEMERAL_COMMANDS = new Set(COMMAND_DEFINITIONS.filter((def) => def.ephemeral).map((def) => def.builder.name));
+
 // Peta nama command -> handler, dibangun SEKALI dari COMMAND_DEFINITIONS
 // (bukan ditulis dobel) - dipake handleSlashCommand di bawah buat lookup
 // O(1) per interaction.
@@ -299,7 +435,8 @@ async function handleSlashCommand(interaction) {
   // bisa lewat batas dan user dapet "The application did not respond".
   // Abis defer, batasnya jadi 15 menit, jawabannya diisi lewat editReply().
   try {
-    await interaction.deferReply();
+    // Command personal dijawab ephemeral (cuma kelihatan pemakainya); sisanya publik seperti biasa.
+    await interaction.deferReply(EPHEMERAL_COMMANDS.has(interaction.commandName) ? { flags: MessageFlags.Ephemeral } : undefined);
     const reply = await handler(interaction);
     await interaction.editReply(safeReplyOptions(reply));
   } catch (error) {
@@ -361,6 +498,7 @@ async function handleSlashAutocomplete(interaction) {
 }
 
 module.exports = {
+  EPHEMERAL_COMMANDS,
   getCommandDefinitionsJSON,
   handleSlashCommand,
   handleSlashAutocomplete,
