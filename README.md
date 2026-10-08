@@ -1,8 +1,10 @@
 # JKT48 IDN Live Notifier
 
-Discord bot yang mantau IDN Live tiap 30 detik dan ngirim notifikasi otomatis pas member JKT48 mulai/selesai live, plus fitur tanya-jawab lewat chat ("cok, siapa yang live?") ATAU slash command native ("/live", "/rekap", "/grafik", dst - lihat `npm run register-slash-commands` di bawah). 3 member prioritas (Nala/Levi/Lily, bisa ditambah lewat chat) dapet perlakuan flashy tambahan lewat DM ke pemilik bot.
+Discord bot yang mantau IDN Live tiap ~20 detik (bisa diatur lewat `POLL_INTERVAL_SECONDS`) dan ngirim notifikasi otomatis pas member JKT48 mulai/selesai live, plus fitur tanya-jawab lewat chat ("cok, siapa yang live?") ATAU slash command native ("/live", "/rekap", "/grafik", dst - lihat `npm run register-slash-commands` di bawah). 3 member prioritas (Nala/Levi/Lily, bisa ditambah lewat chat) dapet perlakuan flashy tambahan lewat DM ke pemilik bot.
 
 Untuk penjelasan arsitektur, data flow, dan alasan desain di balik keputusan-keputusan teknisnya, lihat **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
+Untuk pembelajaran: **[docs/ALGORITMA-DAN-SISTEM.md](docs/ALGORITMA-DAN-SISTEM.md)** menjelaskan algoritma yang dipakai, pola sistemnya, dan prinsip software engineering di baliknya, lengkap dengan trade-off dan urutan baca kode.
 
 ## Jalanin lokal
 
