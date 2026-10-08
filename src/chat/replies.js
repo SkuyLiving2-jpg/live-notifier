@@ -8,7 +8,7 @@ const {
   StringSelectMenuBuilder,
   AttachmentBuilder,
 } = require("discord.js");
-const { deleteInteractionMessage } = require("./interactionHelpers");
+const { deleteInteractionMessage, buildReplyCloseButton } = require("./interactionHelpers");
 const { pollHealth } = require("../pollHealth");
 const { getScheduleDigestCandidates, buildScheduleDigestPayload } = require("../notify/publicAlerts");
 const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require("../storage/activeLives");
@@ -739,8 +739,22 @@ function isMemberRange(rangeDays) {
   return typeof rangeDays === "string" && rangeDays.startsWith("@");
 }
 
+// "@username" = SEMUA sesi member itu; "@username#YYYY-MM-DD" = sesi member itu di SATU
+// tanggal (pilihan dropdown tanggal di rekap member, buildMemberDateSelectRow). "#"
+// aman dipakai sebagai pemisah: username IDN gak pernah ngandung "#", dan bukan ":"
+// (pemisah posisional customId).
+function parseMemberRange(rangeDays) {
+  const raw = rangeDays.slice(1);
+  const hashAt = raw.indexOf("#");
+  return hashAt === -1 ? { username: raw, date: null } : { username: raw.slice(0, hashAt), date: raw.slice(hashAt + 1) };
+}
+
 function getSessionsForRange(rangeDays) {
-  if (isMemberRange(rangeDays)) return getMemberSessionsForRecap(rangeDays.slice(1));
+  if (isMemberRange(rangeDays)) {
+    const { username, date } = parseMemberRange(rangeDays);
+    // Satu tanggal: logika SAMA dengan rekap tanggal biasa (hari ini ikut gabung sesi yang masih live), difilter ke member itu.
+    return date ? getSessionsForRange(date).filter((s) => s.username === username) : getMemberSessionsForRecap(username);
+  }
   if (rangeDays == null || rangeDays === getTodayWIB()) return getTodaySessionsForRecap();
   if (typeof rangeDays === "string") {
     if (rangeDays.length === 7) return getMonthSessionsForRecap(rangeDays);
@@ -816,6 +830,48 @@ function buildRecapDateSelectRow(selectedDate = null, origin = "") {
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(withOrigin("recap_date_select", origin))
     .setPlaceholder("Pilih tanggal buat rekap")
+    .addOptions(options);
+  return new ActionRowBuilder().addComponents(selectMenu);
+}
+
+// Dropdown "📅 Cari tanggal" di rekap PER MEMBER (menggantikan tombol "🔍 Cari member" yang
+// gak ada gunanya di rekap satu orang). Isinya HANYA tanggal yang beneran ada sesi member
+// itu (bukan semua hari kayak buildRecapDateSelectRow), ditambah opsi "Semua sesi" buat
+// balik ke rekap lengkap. Memilih nge-EDIT pesan yang sama (handleRecapMemberDateSelect).
+const MEMBER_DATE_ALL = "all";
+const MEMBER_DATE_OPTIONS_MAX = 24; // + opsi "Semua sesi" = 25, batas keras Discord per dropdown
+
+// [[tanggal WIB, jumlah sesi]] terbaru dulu. Sesi yang masih live dihitung ke HARI INI
+// (sama kayak getSessionsForRange: tanggal sesi selesai = tanggal rekapnya).
+function getMemberSessionDates(username) {
+  const counts = new Map();
+  for (const s of getMemberSessionsForRecap(username)) {
+    const date = s.endedAtUnix === null ? getTodayWIB() : getDateWIB(new Date(s.endedAtUnix * 1000));
+    counts.set(date, (counts.get(date) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+}
+
+function buildMemberDateSelectRow(username, selectedDate = null, origin = "") {
+  const all = getMemberSessionDates(username);
+  let shown = all.slice(0, MEMBER_DATE_OPTIONS_MAX);
+  if (selectedDate && !shown.some(([date]) => date === selectedDate)) {
+    // Tanggal yang lagi dilihat harus tetap kelihatan terpilih walau lebih tua dari 24 tanggal terbaru.
+    const selected = all.find(([date]) => date === selectedDate);
+    if (selected) shown = [...shown.slice(0, MEMBER_DATE_OPTIONS_MAX - 1), selected].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }
+  const options = [{ label: `Semua sesi (${SESSION_RETENTION_DAYS} hari terakhir)`, value: MEMBER_DATE_ALL, default: !selectedDate }];
+  for (const [date, count] of shown) {
+    options.push({
+      label: formatLongDateWIB(new Date(`${date}T00:00:00+07:00`)),
+      description: `${count} sesi live`,
+      value: date,
+      default: date === selectedDate,
+    });
+  }
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(withOrigin(`recap_member_date:${username}`, origin))
+    .setPlaceholder("📅 Cari tanggal")
     .addOptions(options);
   return new ActionRowBuilder().addComponents(selectMenu);
 }
@@ -928,6 +984,16 @@ function withOrigin(base, origin) {
   return origin ? `${base}:${origin}` : base;
 }
 
+//   - "lc-<username>" - dibuka dari tombol "📋 Lihat rekap" di jawaban jumlah live
+//                 ("cok berapa kali nala live" / "/berapa-kali"). Username ikut di origin
+//                 karena tombol "Kembali" (recap_nav:backto:<origin>) gak bawa range apa pun,
+//                 padahal harus tau jumlah live SIAPA yang ditampilkan lagi.
+const LIVE_COUNT_ORIGIN_PREFIX = "lc-";
+const liveCountOrigin = (username) => `${LIVE_COUNT_ORIGIN_PREFIX}${username}`;
+const isLiveCountOrigin = (origin) =>
+  typeof origin === "string" && origin.startsWith(LIVE_COUNT_ORIGIN_PREFIX) && origin.length > LIVE_COUNT_ORIGIN_PREFIX.length;
+const usernameFromLiveCountOrigin = (origin) => origin.slice(LIVE_COUNT_ORIGIN_PREFIX.length);
+
 // Kebalikan dari withOrigin - buat customId FIXED (bukan yang udah bawa
 // range/page sendiri kayak "recap_nav:..."), origin-nya nempel PERSIS di
 // index tetap (mis. "recap_date_select:recapmenu" -> index 1). Dropdown
@@ -944,7 +1010,7 @@ function originFromCustomId(customId, index) {
 // sama sekali di customId-nya - balik ke menu itu gak butuh tau lagi tabel
 // yang lagi ditampilin isinya apa.
 function buildBackRow(origin) {
-  const label = origin === "fallback" ? "🔙 Kembali ke menu" : "🔙 Kembali ke menu rekap";
+  const label = origin === "fallback" ? "🔙 Kembali ke menu" : isLiveCountOrigin(origin) ? "🔙 Kembali ke jumlah live" : "🔙 Kembali ke menu rekap";
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`recap_nav:backto:${origin}`).setLabel(label).setStyle(ButtonStyle.Secondary),
   );
@@ -1001,7 +1067,8 @@ function buildRecapNavComponents(page, totalPages, rangeDays, origin = "") {
   }
   buttons.push(new ButtonBuilder().setCustomId("recap_nav:close").setLabel("Tutup rekap").setStyle(ButtonStyle.Danger));
   // Rekap PER MEMBER (§10's forty-eighth item) cuma isinya satu orang, jadi
-  // "🔍 Cari member" gak ada gunanya di situ (owner minta dihilangkan).
+  // "🔍 Cari member" gak ada gunanya di situ (owner minta dihilangkan) - diganti
+  // dropdown "📅 Cari tanggal" (buildMemberDateSelectRow) di baris atas.
   if (!memberRange) {
     buttons.push(new ButtonBuilder().setCustomId(`recap_nav:search:${range}`).setLabel("🔍 Cari member").setStyle(ButtonStyle.Secondary));
   }
@@ -1028,6 +1095,10 @@ function buildRecapNavComponents(page, totalPages, rangeDays, origin = "") {
       const { date, weekdayIndex } = parseDateRangeValue(rangeDays);
       rows.push(weekdayIndex !== null ? buildWeekdayDateSelectRow(weekdayIndex, rangeDays, origin) : buildRecapDateSelectRow(date, origin));
     }
+  }
+  if (memberRange) {
+    const { username, date } = parseMemberRange(rangeDays);
+    rows.push(buildMemberDateSelectRow(username, date, origin));
   }
   rows.push(new ActionRowBuilder().addComponents(buttons));
   // BUG YANG DILAPORIN OWNER (lihat komen panjang di buildBackRow) - baris
@@ -1166,6 +1237,12 @@ async function handleRecapNavButton(interaction) {
   if (action === "backto") {
     const origin = parts[2];
     pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+    if (isLiveCountOrigin(origin)) {
+      // Balik ke jawaban jumlah live member itu (lengkap dengan tombol "Lihat rekap").
+      const block = buildLiveCountBlockForUsername(usernameFromLiveCountOrigin(origin));
+      await interaction.update(safeReplyOptions(block || replyRecapMenu()));
+      return;
+    }
     if (origin === "fallback") {
       // require lazy (bukan di atas file) - chat/menu.js require dari sini
       // (chat/replies.js) buat reply builder-nya, jadi require balik di sini
@@ -1176,6 +1253,15 @@ async function handleRecapNavButton(interaction) {
       return;
     }
     await interaction.update(safeReplyOptions(replyRecapMenu()));
+    return;
+  }
+
+  // Tombol "📋 Lihat rekap" di jawaban jumlah live (buildLiveCountRow) - customId-nya
+  // "recap_nav:memberrecap:<username>". Nge-EDIT pesan yang sama jadi rekap member itu
+  // (tabel + Maju/Mundur/Tutup + dropdown tanggal + "Kembali ke jumlah live").
+  if (action === "memberrecap") {
+    const view = buildMemberRecapFromUsername(parts[2], interaction.channelId, interaction.user.id);
+    await interaction.update(safeReplyOptions(view));
     return;
   }
 
@@ -1710,21 +1796,68 @@ async function replyRecapMember(fragment, channelId, authorId, origin = "") {
     return withRecapMenu(await describeMissingMember(shown, "direkap"));
   }
 
-  const rangeDays = `@${resolved.username}`;
+  return buildMemberRecapView({ username: resolved.username, name: resolved.name, channelId, authorId, origin });
+}
+
+// Tampilan rekap SATU member: semua sesi di arsip, atau satu tanggal kalau `date` diisi.
+// Dipakai tiga jalur yang logikanya HARUS sama: ketik "cok rekap <nama>" (replyRecapMember),
+// tombol "📋 Lihat rekap" di jawaban jumlah live, dan dropdown "📅 Cari tanggal".
+function buildMemberRecapView({ username, name, date = null, channelId, authorId, origin = "" }) {
+  const rangeDays = date ? `@${username}#${date}` : `@${username}`;
   const sessions = getSessionsForRange(rangeDays);
+  const dateLabel = date ? formatLongDateWIB(new Date(`${date}T00:00:00+07:00`)) : null;
+
   if (sessions.length === 0) {
-    const total = loadLiveCount()[resolved.username]?.count;
+    if (date) {
+      // Tanggal dipilih dari dropdown tapi datanya keburu berubah - tetap kasih dropdown/Tutup/Kembali.
+      return {
+        content: `Cok, **${name}** gak punya live yang kecatet tanggal ${dateLabel}.`,
+        components: buildRecapNavComponents(0, 1, rangeDays, origin),
+      };
+    }
+    const total = loadLiveCount()[username]?.count;
     const totalNote = total ? ` (total ${total}x live semenjak bot ini mulai mantau)` : "";
-    return withRecapMenu(
-      `Cok, **${resolved.name}** gak punya sesi live yang masih kesimpen di rekap${totalNote} - arsip sesi cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir.`,
-    );
+    const message = `Cok, **${name}** gak punya sesi live yang masih kesimpen di rekap${totalNote} - arsip sesi cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir.`;
+    // Dari jawaban jumlah live: jangan lempar ke menu rekap umum, cukup Tutup + Kembali.
+    if (isLiveCountOrigin(origin)) return { content: message, components: [buildCloseOnlyRow(), buildBackRow(origin)] };
+    return withRecapMenu(message);
   }
 
-  const summaryLines = buildMemberSummaryLines(`📋 **Rekap live ${resolved.name}**`, sessions);
-  summaryLines.push(`_(Rekap cuma nyimpen sesi ${SESSION_RETENTION_DAYS} hari terakhir.)_`);
+  const summaryLines = buildMemberSummaryLines(date ? `📋 **Rekap live ${name} - ${dateLabel}**` : `📋 **Rekap live ${name}**`, sessions);
+  if (!date) summaryLines.push(`_(Rekap cuma nyimpen sesi ${SESSION_RETENTION_DAYS} hari terakhir.)_`);
 
   const block = buildRecapPageBlock(sessions, 0, channelId, authorId, rangeDays, origin);
   return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };
+}
+
+function memberDisplayName(username) {
+  return loadLiveCount()[username]?.name || activeLives.get(username)?.name || username;
+}
+
+// Rekap member yang dibuka dari tombol di jawaban jumlah live (username sudah pasti, gak perlu resolusi nama).
+function buildMemberRecapFromUsername(username, channelId, authorId) {
+  pendingRecapPage.delete(`${channelId}:${authorId}`);
+  return buildMemberRecapView({ username, name: memberDisplayName(username), channelId, authorId, origin: liveCountOrigin(username) });
+}
+
+// Dropdown "📅 Cari tanggal" di rekap member. customId: "recap_member_date:<username>[:<origin>]".
+// Nilai "all" (atau apa pun yang bukan tanggal) = balik ke rekap semua sesi.
+async function handleRecapMemberDateSelect(interaction) {
+  const parts = interaction.customId.split(":");
+  const username = parts[1];
+  const origin = parts[2] || "";
+  const value = interaction.values[0];
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+  pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+  const view = buildMemberRecapView({
+    username,
+    name: memberDisplayName(username),
+    date,
+    channelId: interaction.channelId,
+    authorId: interaction.user.id,
+    origin,
+  });
+  await interaction.update(safeReplyOptions(view));
 }
 
 function buildMemberSummaryLines(title, sessions) {
@@ -2114,16 +2247,49 @@ function replyMemberStats(fragment) {
 // TERAKHIR buat ngitung rata-rata/rekor) - ini counter TOTAL yang gak
 // pernah di-prune/reset (storage/liveCount.js), jadi bisa jawab "udah
 // berapa kali live SEMENJAK bot ini jalan", bukan cuma dari histori terbatas.
-function replyLiveCount(fragment) {
-  const name = (fragment || "").trim();
-  if (!name) return 'Live count siapa? Ketik nama membernya juga ya, misal "cok berapa kali nala live".';
-
-  const found = findLiveCountByNameFragment(name);
-  if (!found) return `Cok, belum ada catatan live buat "${name}" semenjak bot ini jalan.`;
-
+function formatLiveCountText(found) {
   const sinceText = getDateWIB(new Date(found.firstLiveAt));
   const lastText = formatRelativeTime(new Date(found.lastLiveAt));
   return `📊 **${found.name}** udah live **${found.count}x** semenjak bot ini mulai mantau (dari ${sinceText}). Terakhir live ${lastText}.`;
+}
+
+function describeLiveCount(fragment) {
+  const name = (fragment || "").trim();
+  if (!name) return { text: 'Live count siapa? Ketik nama membernya juga ya, misal "cok berapa kali nala live".', found: null };
+
+  const found = findLiveCountByNameFragment(name);
+  if (!found) return { text: `Cok, belum ada catatan live buat "${name}" semenjak bot ini jalan.`, found: null };
+
+  return { text: formatLiveCountText(found), found };
+}
+
+// Versi teks polos (dipakai tes dan pemanggil yang cuma butuh kalimatnya).
+function replyLiveCount(fragment) {
+  return describeLiveCount(fragment).text;
+}
+
+// Baris tombol di jawaban jumlah live: "📋 Lihat rekap" (buka rekap member itu, lihat
+// handleRecapNavButton action "memberrecap") + "Tutup" (hapus pesan).
+function buildLiveCountRow(username) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`recap_nav:memberrecap:${username}`).setLabel("📋 Lihat rekap").setStyle(ButtonStyle.Primary),
+    buildReplyCloseButton(),
+  );
+}
+
+// Jawaban "cok berapa kali <nama> live" / "/berapa-kali": kalimat jumlah live + tombol
+// Lihat rekap/Tutup. Kalau member gak ketemu (atau nama kosong) tetap string biasa - pemanggil
+// yang membungkusnya dengan tombol Tutup.
+function replyLiveCountWithRecap(fragment) {
+  const { text, found } = describeLiveCount(fragment);
+  return found ? { content: text, components: [buildLiveCountRow(found.username)] } : text;
+}
+
+// Dipakai tombol "Kembali ke jumlah live" - balik ke jawaban yang sama dari username (null kalau datanya sudah tidak ada).
+function buildLiveCountBlockForUsername(username) {
+  const entry = loadLiveCount()[username];
+  if (!entry) return null;
+  return { content: formatLiveCountText({ username, ...entry }), components: [buildLiveCountRow(username)] };
 }
 
 // Beda lagi dari replyLiveCount (satu member spesifik) - ini leaderboard
@@ -2733,6 +2899,8 @@ module.exports = {
   replyMySubscriptions,
   replyMemberStats,
   replyLiveCount,
+  replyLiveCountWithRecap,
+  handleRecapMemberDateSelect,
   replyLiveCountLeaderboard,
   replyLongestNotLiveLeaderboard,
   replySchedulePattern,

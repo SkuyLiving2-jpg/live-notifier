@@ -13,6 +13,7 @@ const {
   handleRecapMenuButton,
   handleRecapDateSelect,
   handleRecapMonthSelect,
+  handleRecapMemberDateSelect,
 } = require("./replies");
 const { handleFallbackMenuButton, handleFallbackMemberSelect, handleFallbackExtraSelect, handleWatchConfirmButton } = require("./menu");
 
@@ -56,6 +57,8 @@ const INTERACTION_ROUTES = [
   // tambahan ("recap_date_select:recapmenu"), bukan cuma "recap_date_select" polos.
   { kind: "select", prefix: "recap_date_select", handler: handleRecapDateSelect },
   { kind: "select", prefix: "recap_month_select", handler: handleRecapMonthSelect },
+  // Dropdown "📅 Cari tanggal" di rekap per member (customId: recap_member_date:<username>[:<origin>]).
+  { kind: "select", prefix: "recap_member_date:", handler: handleRecapMemberDateSelect },
   { kind: "button", prefix: "watch_confirm:", handler: handleWatchConfirmButton },
   { kind: "button", prefix: "compare_pick:", handler: handleComparePickButton },
   { kind: "modal", prefix: "compare_modal:", handler: handleCompareModalSubmit },

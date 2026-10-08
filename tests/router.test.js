@@ -720,12 +720,12 @@ for (let i = 0; i < 2; i++) {
 }
 recordLiveCompleted("jkt48_rtrrecap", "Rtrrecap JKT48");
 
-test("'cok rekap <nama member>' - dispatch ke tabel rekap member (cuma sesi dia, tombol Tutup doang, tanpa 'Cari member')", async () => {
+test("'cok rekap <nama member>' - dispatch ke tabel rekap member (cuma sesi dia, dropdown tanggal + Tutup, tanpa 'Cari member')", async () => {
   const reply = await buildChatReply("cok rekap rtrrecap", { channelId: "c-rtr1", authorId: "u-rtr1" });
   assert.match(reply.content, /📋 \*\*Rekap live Rtrrecap JKT48\*\*/);
   assert.match(reply.content, /Total sesi: 2x/);
   const ids = reply.components.flatMap((row) => row.components.map((c) => c.data.custom_id));
-  assert.deepEqual(ids, ["recap_nav:close"]);
+  assert.deepEqual(ids, ["recap_member_date:jkt48_rtrrecap", "recap_nav:close"]);
 });
 
 test("'rekap <nama>' tanpa 'cok' di bot channel juga jalan, dan kata pelengkap ('dong') diabaikan", async () => {

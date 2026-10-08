@@ -104,11 +104,15 @@ test("tombol Tutup tidak dobel - balasan yang sudah punya tombol sendiri tidak d
     assert.ok(hasCloseButton(sent.payload), `/${name} ${sub ?? ""} harus punya penutup`);
     assert.ok(!buttonIds(sent.payload).includes("reply_close"), `/${name} ${sub ?? ""} sudah punya Tutup sendiri, jangan ditambah lagi`);
   }
-  // dan yang polos mendapat tepat SATU reply_close
+  // /berapa-kali: "Lihat rekap" + tepat SATU reply_close
   const { interaction, sent } = fakeSlash("berapa-kali");
   await handleSlashCommand(interaction);
-  assert.deepEqual(buttonIds(sent.payload), ["reply_close"]);
+  assert.deepEqual(buttonIds(sent.payload), ["recap_nav:memberrecap:jkt48_nala", "reply_close"]);
   assert.match(sent.payload.content, /\S/, "isi balasan tetap ada");
+  // dan yang polos (tanpa tombol sendiri), mis. /status, mendapat tepat SATU reply_close
+  const plain = fakeSlash("status");
+  await handleSlashCommand(plain.interaction);
+  assert.deepEqual(buttonIds(plain.sent.payload), ["reply_close"]);
 });
 
 test("command ephemeral tidak diberi reply_close (bot tidak bisa menghapus pesan ephemeral)", async () => {

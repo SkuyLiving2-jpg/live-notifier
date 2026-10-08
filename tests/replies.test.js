@@ -2375,7 +2375,7 @@ test("resolveRecapMember - ketemu di live-count / cuma ada di activeLives (live 
   assert.deepEqual(resolveRecapMember(""), { status: "none" });
 });
 
-test("replyRecapMember - tabel HANYA sesi member itu (member lain gak ikut), ringkasan bener, tombol Tutup doang (tanpa 'Cari member') kalau 1 halaman", async () => {
+test("replyRecapMember - tabel HANYA sesi member itu (member lain gak ikut), ringkasan bener, dropdown tanggal + Tutup (tanpa 'Cari member') kalau 1 halaman", async () => {
   recordMemberSessions("Mrecbeta JKT48", "jkt48_mrecbeta", 3);
   recordMemberSessions("Mrecother JKT48", "jkt48_mrecother", 2);
 
@@ -2389,27 +2389,64 @@ test("replyRecapMember - tabel HANYA sesi member itu (member lain gak ikut), rin
   assert.match(reply.content, /Halaman 1\/1/);
 
   const ids = allCustomIds(reply);
-  assert.deepEqual(ids, ["recap_nav:close"]);
+  assert.deepEqual(ids, ["recap_member_date:jkt48_mrecbeta", "recap_nav:close"]);
   assert.ok(!ids.some((id) => id.startsWith("recap_nav:search")), "tombol 'Cari member' harus HILANG di rekap member");
+  // pengganti 'Cari member': dropdown tanggal - "Semua sesi" + tanggal yang BENERAN ada sesi member ini
+  const dateSelect = reply.components[0].components[0].toJSON();
+  assert.equal(dateSelect.placeholder, "📅 Cari tanggal");
+  assert.equal(dateSelect.options[0].value, "all");
+  assert.equal(dateSelect.options[0].default, true);
+  // recordMemberSessions menaruh sesi 1, 2, dan 3 jam yang lalu - kalau tesnya jalan lewat tengah malam WIB,
+  // sesi-sesi itu jatuh ke DUA tanggal. Jadi tanggal yang diharapkan dihitung dari datanya, bukan diasumsikan "hari ini".
+  const nowMs = Date.now();
+  const expectedCounts = new Map();
+  for (let hour = 1; hour <= 3; hour++) {
+    const date = getDateWIB(new Date(nowMs - hour * 3600 * 1000 + 1800 * 1000)); // tanggal sesi SELESAI (mulai + 30 menit)
+    expectedCounts.set(date, (expectedCounts.get(date) || 0) + 1);
+  }
+  const expectedDates = [...expectedCounts.keys()].sort().reverse();
+  assert.deepEqual(
+    dateSelect.options.slice(1).map((o) => o.value),
+    expectedDates,
+  );
+  assert.deepEqual(
+    dateSelect.options.slice(1).map((o) => o.description),
+    expectedDates.map((date) => `${expectedCounts.get(date)} sesi live`),
+  );
+  assert.equal(
+    dateSelect.options.slice(1).reduce((sum, o) => sum + Number(o.description.split(" ")[0]), 0),
+    3,
+    "jumlah sesi di semua tanggal = 3",
+  );
 });
 
-test("replyRecapMember - lebih dari 20 sesi: Maju + Tutup + Lompat halaman (tanpa Cari member), navigasi customId bawa member, halaman 2 punya Mundur", async () => {
+test("replyRecapMember - lebih dari 20 sesi: dropdown tanggal + Maju + Tutup + Lompat halaman (tanpa Cari member), navigasi customId bawa member, halaman 2 punya Mundur", async () => {
   recordMemberSessions("Mrecpaged JKT48", "jkt48_mrecpaged", 25);
 
   const reply = await replyRecapMember("mrecpaged", "c-mrec2", "u-mrec2");
   assert.match(reply.content, /Halaman 1\/2/);
   const ids = allCustomIds(reply);
-  assert.deepEqual(ids, ["recap_nav:next:ujkt48_mrecpaged:0", "recap_nav:close", "recap_nav:jump:ujkt48_mrecpaged:0"]);
-  assert.equal(reply.components[0].components[0].data.label, "Maju ▶");
+  assert.deepEqual(ids, [
+    "recap_member_date:jkt48_mrecpaged",
+    "recap_nav:next:ujkt48_mrecpaged:0",
+    "recap_nav:close",
+    "recap_nav:jump:ujkt48_mrecpaged:0",
+  ]);
+  assert.equal(reply.components[1].components[0].data.label, "Maju ▶");
 
   // klik "Maju" - pake customId ASLI dari tombolnya (roundtrip encode/decode rentang member)
-  const next = fakeInteraction({ customId: ids[0], channelId: "c-mrec2", authorId: "u-mrec2" });
+  const next = fakeInteraction({ customId: ids[1], channelId: "c-mrec2", authorId: "u-mrec2" });
   await handleRecapNavButton(next);
   assert.equal(next.calls.length, 0, "edit di tempat, bukan pesan baru");
   const page2 = next.updates[0];
   assert.match(page2.content, /Halaman 2\/2/);
   assert.equal((page2.content.match(/Selesai/g) || []).length, 5, "sisa 5 sesi di halaman 2");
-  assert.deepEqual(allCustomIds(page2), ["recap_nav:prev:ujkt48_mrecpaged:1", "recap_nav:close", "recap_nav:jump:ujkt48_mrecpaged:1"]);
+  assert.deepEqual(allCustomIds(page2), [
+    "recap_member_date:jkt48_mrecpaged",
+    "recap_nav:prev:ujkt48_mrecpaged:1",
+    "recap_nav:close",
+    "recap_nav:jump:ujkt48_mrecpaged:1",
+  ]);
 
   // navigasi teks "mundur" juga jalan (pendingRecapPage nyimpen rentang member)
   const back = await tryHandleRecapPageShortcut("mundur", "c-mrec2", "u-mrec2");
@@ -2559,7 +2596,7 @@ test("handleRecapMemberModalSubmit - nama valid -> NGE-EDIT pesan menu jadi tabe
   // nempel - modal ini SATU-SATUNYA jalan buat tabel rekap member, dibuka
   // dari menu 5-opsi rekap (origin di-hardcode "recapmenu" di
   // handleRecapMemberModalSubmit), lihat komen di buildBackRow/withOrigin.
-  assert.deepEqual(allCustomIds(ok.updates[0]), ["recap_nav:close", "recap_nav:backto:recapmenu"]);
+  assert.deepEqual(allCustomIds(ok.updates[0]), ["recap_member_date:jkt48_mrecmodal:recapmenu", "recap_nav:close", "recap_nav:backto:recapmenu"]);
 
   const original = global.fetch;
   global.fetch = fakeIdnFetch({});

@@ -40,7 +40,7 @@ const {
   replyStreak,
   replySchedulePattern,
   replyGifterSnapshot,
-  replyLiveCount,
+  replyLiveCountWithRecap,
   handleSubscribe,
   handleUnsubscribe,
   handleAddPriority,
@@ -151,7 +151,7 @@ const BASE_COMMAND_DEFINITIONS = [
   },
   {
     builder: addMemberOption(new SlashCommandBuilder().setName("berapa-kali").setDescription("Total berapa kali member itu udah live")),
-    handler: async (interaction) => replyLiveCount(interaction.options.getString("member", true)),
+    handler: async (interaction) => replyLiveCountWithRecap(interaction.options.getString("member", true)),
   },
   {
     builder: new SlashCommandBuilder().setName("paling-sering").setDescription("Leaderboard total live count semua member"),

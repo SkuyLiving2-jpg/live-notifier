@@ -44,7 +44,7 @@ const {
   replyPriorityList,
   replyMySubscriptions,
   replyMemberStats,
-  replyLiveCount,
+  replyLiveCountWithRecap,
   replyLiveCountLeaderboard,
   replyLongestNotLiveLeaderboard,
   replySchedulePattern,
@@ -402,7 +402,7 @@ async function routeDurationChart({ text }) {
 // dilaporin user: "lily berapa kali live?" dulu jatuh ke fallback "member gak lagi live").
 function routeLiveCount({ text, commandText }) {
   const match = text.match(/berapa\s+kali\s+(?:si\s+)?(.+?)\s+live\b/) || commandText.match(/^(.+?)\s+(?:udah\s+|sudah\s+)?berapa\s+kali\s+live\b/);
-  return match ? withCloseButton(replyLiveCount(match[1])) : NO_MATCH;
+  return match ? withCloseButton(replyLiveCountWithRecap(match[1])) : NO_MATCH;
 }
 
 function routeGifter({ text }) {

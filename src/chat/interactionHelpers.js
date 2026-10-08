@@ -44,8 +44,12 @@ async function deleteInteractionMessage(interaction) {
 // sini). `withCloseButton` nerima string ATAU objek balasan ({content, files,
 // embeds, components}); balasan yang UDAH punya tombol sendiri dibiarin apa
 // adanya.
+function buildReplyCloseButton() {
+  return new ButtonBuilder().setCustomId("reply_close").setLabel("Tutup").setStyle(ButtonStyle.Danger);
+}
+
 function buildReplyCloseRow() {
-  return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("reply_close").setLabel("Tutup").setStyle(ButtonStyle.Danger));
+  return new ActionRowBuilder().addComponents(buildReplyCloseButton());
 }
 
 function withCloseButton(reply) {
@@ -60,4 +64,4 @@ async function handleReplyCloseButton(interaction) {
   await deleteInteractionMessage(interaction);
 }
 
-module.exports = { deleteInteractionMessage, buildReplyCloseRow, withCloseButton, handleReplyCloseButton };
+module.exports = { deleteInteractionMessage, buildReplyCloseButton, buildReplyCloseRow, withCloseButton, handleReplyCloseButton };
