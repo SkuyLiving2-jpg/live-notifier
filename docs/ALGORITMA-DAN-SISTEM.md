@@ -217,8 +217,10 @@ function computeNextPollDelay(elapsedMs) {
 
 ### 2.15 Router perintah chat: rantai pencocokan berurutan
 
-- **Di mana:** `buildChatReplyCore` di [src/chat/router.js](../src/chat/router.js).
-- **Cara kerja:** pola _chain of responsibility_. Daftar pemeriksa dijalankan berurutan dan **yang pertama cocok menang**. Fitur baru (personal, tebak, wrapped) dipasang sebagai pencegat di depan, supaya perilaku lama tidak berubah. Pesan yang tidak cocok apa pun jatuh ke menu bantuan.
+- **Di mana:** `ROUTES` dan `buildChatReply` di [src/chat/commandRoutes.js](../src/chat/commandRoutes.js). Tombol, dropdown, dan modal memakai pola yang sama di [src/chat/interactionRoutes.js](../src/chat/interactionRoutes.js) (tabel `customId` ke handler).
+- **Cara kerja:** pola _chain of responsibility_. `ROUTES` adalah daftar fungsi kecil bernama (`routeStreak`, `routeCompareList`, ...). Tiap fungsi mengembalikan `NO_MATCH` (bukan urusan saya, lanjut) atau balasannya. Daftar dijalankan berurutan dan **yang pertama menjawab menang**. Fitur baru (personal, tebak, wrapped) dipasang sebagai pencegat di depan, supaya perilaku lama tidak berubah. Pesan yang tidak cocok apa pun jatuh ke menu bantuan.
+- **Kenapa `NO_MATCH` berupa `Symbol`, bukan `null`:** `null` adalah balasan sah (artinya "pesan ini bukan untuk bot, diam saja"). Penanda "lanjut" harus nilai yang tidak mungkin tertukar dengan balasan apa pun, dan `Symbol` unik menjamin itu.
+- **Riwayat:** dulu ini satu fungsi ~600 baris. Dipecah menjadi tabel karena fungsi sepanjang itu tidak bisa dibaca, dites per aturan, atau diubah tanpa takut. Cara membuktikan pemecahannya tidak mengubah perilaku dijelaskan di bagian 3.10.
 - **Konsekuensi:** urutan adalah bagian dari logika. Menambah pola di tempat yang salah bisa diam-diam mencuri pesan dari pola lain. Karena itu ada tes yang memeriksa jawaban untuk ratusan kalimat, dan skrip fuzz yang mengirim ribuan pesan acak.
 
 ---
@@ -291,7 +293,7 @@ Sistem harus bisa memberi tahu kalau sedang sakit:
 
 ### 3.8 Strategi pengujian
 
-Sekitar 835 tes dengan `node --test`, tanpa framework tambahan. Lapisannya:
+Sekitar 850 tes dengan `node --test`, tanpa framework tambahan. Lapisannya:
 
 | Lapisan               | Contoh                                                                   |
 | --------------------- | ------------------------------------------------------------------------ |
@@ -315,21 +317,39 @@ Praktik penting:
 - `ARCHITECTURE.md` mencatat keputusan, audit, dan titik ekstensi.
 - Aturan sederhana: kalau sesuatu terlihat berlebihan di kode, harus ada komentar yang menjelaskan alasannya.
 
+### 3.10 Refactor yang dibuktikan, bukan diyakini (golden master)
+
+Memecah fungsi 600 baris itu berisiko: urutan pencocokan adalah logika, dan satu `if` yang bergeser bisa diam-diam mengubah jawaban bot untuk kalimat yang tidak ada di tes. Tes yang ada (835 saat itu) lulus tidak cukup membuktikan "perilakunya sama", karena tes hanya mencakup kalimat yang terpikir oleh penulisnya.
+
+Teknik yang dipakai: **characterization test / golden master**.
+
+1. **Rekam dulu, ubah kemudian.** Sebelum menyentuh kode, jalankan versi lama untuk korpus besar (semua kalimat dari tes + ratusan kombinasi perintah × nama, termasuk nama aneh, dalam lima konteks: channel bot, channel biasa, owner, DM) dan simpan semua jawabannya: 4.185 kombinasi.
+2. **Buat lingkungan deterministik.** Waktu, `Math.random`, dan jaringan dibuat tetap. Dua rekaman dari kode yang sama harus identik byte-per-byte. Kalau tidak, jaring pengamannya tidak bisa dipercaya.
+3. **Ubah struktur saja**, jangan perilaku. Setelah itu rekam lagi dan bandingkan. Hasilnya: 0 perbedaan.
+4. **Perilaku yang memang salah diperbaiki terpisah**, bukan terselip dalam refactor. Saat memindahkan kode ditemukan bug lama (`cok constructor` dibalas dengan fungsi karena kunci objek berasal dari input pengguna). Perbaikannya dikerjakan sebagai langkah tersendiri dengan tes yang terbukti gagal pada kode lama.
+
+Pelajaran umumnya: **refactor = mengubah struktur tanpa mengubah perilaku**. Kalau keduanya dicampur, saat ada yang rusak tidak ada yang tahu penyebabnya. Dan kalau kamu tidak bisa membuktikan perilakunya sama, kamu sebenarnya tidak sedang merefaktor, kamu sedang berharap.
+
+Dua pelajaran kecil dari bug yang ditemukan:
+
+- **Input pengguna jangan dipakai langsung sebagai kunci objek biasa.** `obj[input]` juga membaca `constructor`, `__proto__`, `toString` dari `Object.prototype`. Pakai `Object.prototype.hasOwnProperty.call(obj, key)`, `Map`, atau `Object.create(null)`. Pola ini sudah benar di `aliases.js` dan `guessGame.js`, dan sekarang juga di router.
+- **Tes yang baik harus terbukti bisa gagal.** Tes untuk bug itu dijalankan terhadap kode lama yang sengaja dikembalikan, dan benar-benar gagal. Tes yang tidak pernah terlihat gagal belum membuktikan apa-apa.
+
 ---
 
 ## 4. Trade-off dan keterbatasan yang jujur
 
 Desain yang baik bukan desain tanpa kelemahan. Ini yang sengaja diterima:
 
-| Pilihan                                  | Keuntungan                                | Harga yang dibayar                                                                 |
-| ---------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------- |
-| Penyimpanan file JSON                    | Tanpa database, murah, mudah di-backup    | Tidak ada transaksi, tidak ada query, penulisan `writeFileSync` memblokir sebentar |
-| Cache di memori                          | Cepat, tanpa baca ulang                   | Asumsi **satu proses saja**. Dua instance akan saling menimpa dan notif ganda      |
-| Polling 20 detik                         | Satu-satunya cara dengan API IDN          | Notif bisa terlambat hingga ~20 detik; ada beban request tetap                     |
-| At-least-once                            | Notif tidak hilang                        | Duplikat mungkin terjadi pada kasus langka                                         |
-| State percakapan di `Map` memori         | Sederhana                                 | Hilang saat restart (menu "balas angka" gugur, tidak merusak data)                 |
-| Pola jadwal dari 10 sesi                 | Sederhana, mudah dijelaskan               | Bisa meleset kalau pola live berubah; sengaja diberi ambang keyakinan              |
-| Satu file besar `router.js` (~990 baris) | Urutan pencocokan terlihat di satu tempat | Sulit dibaca; kandidat dipecah jika terus tumbuh                                   |
+| Pilihan                                      | Keuntungan                                         | Harga yang dibayar                                                                                                                              |
+| -------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Penyimpanan file JSON                        | Tanpa database, murah, mudah di-backup             | Tidak ada transaksi, tidak ada query, penulisan `writeFileSync` memblokir sebentar                                                              |
+| Cache di memori                              | Cepat, tanpa baca ulang                            | Asumsi **satu proses saja**. Dua instance akan saling menimpa dan notif ganda                                                                   |
+| Polling 20 detik                             | Satu-satunya cara dengan API IDN                   | Notif bisa terlambat hingga ~20 detik; ada beban request tetap                                                                                  |
+| At-least-once                                | Notif tidak hilang                                 | Duplikat mungkin terjadi pada kasus langka                                                                                                      |
+| State percakapan di `Map` memori             | Sederhana                                          | Hilang saat restart (menu "balas angka" gugur, tidak merusak data)                                                                              |
+| Pola jadwal dari 10 sesi                     | Sederhana, mudah dijelaskan                        | Bisa meleset kalau pola live berubah; sengaja diberi ambang keyakinan                                                                           |
+| `replies.js` berisi ~2.800 baris, 118 fungsi | Semua pembuat balasan di satu tempat, mudah dicari | Terlalu besar: kandidat dipecah per fitur (rekap, statistik, langganan). Belum dikerjakan karena risikonya lebih besar dari manfaatnya sekarang |
 
 **Kapan perlu pindah ke database:** bila datanya perlu di-query lintas entitas (misalnya "semua sesi di atas 5.000 penonton bulan lalu"), bila ada lebih dari satu instance, atau bila file data melewati puluhan MB. Untuk skala sekarang (puluhan member, ratusan sesi), file JSON adalah pilihan yang tepat. Memakai PostgreSQL sejak awal akan menambah biaya dan kerumitan tanpa manfaat.
 
