@@ -24,6 +24,7 @@ const { SlashCommandBuilder, MessageFlags } = require("discord.js");
 const { activeLives, findMemberByNameFragment } = require("../storage/activeLives");
 const { loadLiveCount } = require("../storage/liveCount");
 const { formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
+const { withCloseButton } = require("./interactionHelpers");
 const {
   replyListLive,
   replyBotStatus,
@@ -434,18 +435,25 @@ async function handleSlashCommand(interaction) {
   // narik avatar, /tambah-alias validasi target) - ditambah latensi Discord,
   // bisa lewat batas dan user dapet "The application did not respond".
   // Abis defer, batasnya jadi 15 menit, jawabannya diisi lewat editReply().
+  // Command personal dijawab ephemeral (cuma kelihatan pemakainya, bisa di-"Dismiss" sendiri);
+  // sisanya publik, jadi dikasih tombol "Tutup" yang beneran ngehapus pesannya (sama kayak
+  // balasan chat teks) biar channel gak numpuk. withCloseButton gak nambah apa-apa kalau
+  // balasannya udah punya tombol sendiri (rekap/grafik/menu punya "Tutup"-nya masing-masing).
+  // Ephemeral SENGAJA gak dikasih: bot gak bisa menghapus pesan ephemeral, tombolnya bakal mati.
+  const isEphemeral = EPHEMERAL_COMMANDS.has(interaction.commandName);
+  const finalize = (reply) => safeReplyOptions(isEphemeral ? reply : withCloseButton(reply));
+
   try {
-    // Command personal dijawab ephemeral (cuma kelihatan pemakainya); sisanya publik seperti biasa.
-    await interaction.deferReply(EPHEMERAL_COMMANDS.has(interaction.commandName) ? { flags: MessageFlags.Ephemeral } : undefined);
+    await interaction.deferReply(isEphemeral ? { flags: MessageFlags.Ephemeral } : undefined);
     const reply = await handler(interaction);
-    await interaction.editReply(safeReplyOptions(reply));
+    await interaction.editReply(finalize(reply));
   } catch (error) {
     console.error(`Gagal jalanin slash command "/${interaction.commandName}":`, error.message, error.stack);
     const content = "Cok, ada error pas ngejalanin command ini. Coba lagi bentar ya.";
     if (interaction.replied || interaction.deferred) {
-      await interaction.editReply(safeReplyOptions(content));
+      await interaction.editReply(finalize(content));
     } else {
-      await interaction.reply(safeReplyOptions(content));
+      await interaction.reply(finalize(content));
     }
   }
 }
