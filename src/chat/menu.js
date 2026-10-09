@@ -564,184 +564,144 @@ async function handleWatchConfirmButton(interaction) {
   );
 }
 
-// Diklik dari tombol replyFallbackMenu(). Pilihan 1/2/3/5/6/7/8 langsung
-// dijawab lewat resolveBareMenuChoice (fungsi sama yang dipake shortcut
-// angka). Pilihan 4/9 beda - butuh tau membernya SIAPA, jadi alih-alih nyuruh
-// ngetik nama manual, langsung dikasih dropdown isinya member yang lagi live.
-//
-// SEMUA cabang di sini pake interaction.update() (EDIT pesan menu yang
-// tombolnya nempel), BUKAN interaction.reply() (pesan BARU) - owner ngeluh
-// tiap kali mencet tombol yang beda-beda di menu ini, jawabannya numpuk jadi
-// pesan baru satu-satu, sama persis keluhan yang dulu diomongin soal tabel
-// rekap (lihat handleRecapNavButton). Konsekuensinya: langkah dropdown milih
-// member/gifter (opsi 4/9, di bawah) yang DULU ephemeral (cuma keliatan
-// orang yang mimic) sekarang ikutan jadi publik juga - gak ada cara nge-edit
-// pesan publik jadi ephemeral, dan mengedit pesan yang sama itu justru
-// intinya di sini, bukan bug. Opsi 1/2/3/5/6/7/9(kosong)/4(kosong) balikin
-// STRING polos (gak ada tombol sendiri) - buildFallbackMenuComponents(pageIndexForOption(...))
-// ditempelin ULANG di bawahnya (di HALAMAN ASAL opsi itu, bukan selalu
-// halaman 1) biar user bisa lanjut mencet opsi LAIN dari pesan yang sama,
-// gak perlu manggil ulang "cok bantuan". Opsi 8 (rekap hari ini) BEDA -
-// baliknya udah bawa tombol navigasi rekap sendiri (Maju/Mundur/Tutup
-// rekap/Cari member), jadi dipake apa adanya tanpa ditempelin menu lagi
-// (nge-gabung 2 sistem tombol beda konteks di 1 pesan cuma bikin bingung).
-async function handleFallbackMenuButton(interaction) {
-  const parts = interaction.customId.split(":");
-  const optionId = parts[1];
+// Aksi tombol "fallback_menu:<aksi>[:...]" - satu fungsi per aksi (dulu satu fungsi ~158 baris). Semua menerima
+// (interaction, parts, optionId) dan HARUS pakai interaction.update() (EDIT pesan menu), BUKAN reply() - lihat komentar
+// handleFallbackMenuButton di bawah.
 
-  // Tombol "Menu lainnya ➡️" (lihat buildFallbackMenuComponents) - customId-nya
-  // bawa LANGSUNG nomor halaman tujuan ("fallback_menu:goto:<page>"), jadi
-  // gak butuh state tersimpan di server buat "lagi di halaman berapa" -
-  // sama pola self-contained-nya kayak recap_nav's tombol Maju/Mundur.
-  if (optionId === "goto") {
-    const targetPage = Number(parts[2]) || 0;
-    await interaction.update(safeReplyOptions(replyFallbackMenu(targetPage)));
+// "Menu lainnya ➡️" (buildFallbackMenuComponents) - customId bawa LANGSUNG nomor halaman tujuan
+// ("fallback_menu:goto:<page>"), jadi gak butuh state tersimpan di server buat "lagi di halaman berapa" - sama pola
+// self-contained-nya kayak recap_nav's tombol Maju/Mundur.
+async function menuGotoPage(interaction, parts) {
+  const targetPage = Number(parts[2]) || 0;
+  await interaction.update(safeReplyOptions(replyFallbackMenu(targetPage)));
+}
+
+// Dropdown milih SATU member dari `sorted` (opsi 4 dan 9 sama bentuknya, beda sumber, id, dan teks pertanyaannya).
+// Kalau `sorted` kosong, jawab dengan `emptyContent` (teks, atau fungsi yang menghasilkan teks - baru dipanggil kalau
+// memang kosong) + menu fallback lagi di halaman asal opsi itu.
+async function updateWithMemberPicker(interaction, optionId, { sorted, selectId, question, emptyContent }) {
+  if (sorted.length === 0) {
+    const content = typeof emptyContent === "function" ? emptyContent() : emptyContent;
+    await interaction.update(safeReplyOptions({ content, components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }));
     return;
   }
 
-  // Opsi 4 (cek member) HARUS dari activeLives (nanya "masih live gak?"
-  // cuma masuk akal buat yang emang lagi live). Opsi 9 (gifter) BEDA -
-  // datanya snapshot yang independen dari status live sekarang, jadi
-  // sumber dropdown-nya juga beda (lihat getSortedGifterSnapshotMembers).
-  if (optionId === "4") {
-    const sorted = getSortedActiveLives();
-    if (sorted.length === 0) {
-      await interaction.update(safeReplyOptions({ content: replyListLive(), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }));
-      return;
-    }
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(selectId)
+    .setPlaceholder("Pilih member...")
+    .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
+  const row = new ActionRowBuilder().addComponents(selectMenu);
+  await interaction.update(safeReplyOptions({ content: question, components: [row, buildFallbackPickActionRow(pageIndexForOption(optionId))] }));
+}
 
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId("fallback_select:4")
-      .setPlaceholder("Pilih member...")
-      .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.update(
-      safeReplyOptions({ content: "Mau cek member yang mana?", components: [row, buildFallbackPickActionRow(pageIndexForOption(optionId))] }),
-    );
-    return;
-  }
+// Opsi 4 (cek member) HARUS dari activeLives (nanya "masih live gak?" cuma masuk akal buat yang emang lagi live).
+async function menuPickLiveMember(interaction, parts, optionId) {
+  await updateWithMemberPicker(interaction, optionId, {
+    sorted: getSortedActiveLives(),
+    selectId: "fallback_select:4",
+    question: "Mau cek member yang mana?",
+    emptyContent: replyListLive,
+  });
+}
 
-  if (optionId === "9") {
-    const sorted = getSortedGifterSnapshotMembers();
-    if (sorted.length === 0) {
-      await interaction.update(
-        safeReplyOptions({
-          content: 'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
-          components: buildFallbackMenuComponents(pageIndexForOption(optionId)),
-        }),
-      );
-      return;
-    }
+// Opsi 9 (gifter) BEDA - datanya snapshot yang independen dari status live sekarang, jadi sumber dropdown-nya juga
+// beda (lihat getSortedGifterSnapshotMembers).
+async function menuPickGifterMember(interaction, parts, optionId) {
+  await updateWithMemberPicker(interaction, optionId, {
+    sorted: getSortedGifterSnapshotMembers(),
+    selectId: "fallback_select:9",
+    question: "Mau cek top gifter member yang mana?",
+    emptyContent: 'Cok, belum ada data top gifter buat siapapun. Yang pegang akun IDN-nya bisa jalanin "npm run cek-gifter" dulu biar ke-update.',
+  });
+}
 
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId("fallback_select:9")
-      .setPlaceholder("Pilih member...")
-      .addOptions(sorted.slice(0, 25).map((entry) => ({ label: entry.name, value: entry.username })));
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.update(
-      safeReplyOptions({
-        content: "Mau cek top gifter member yang mana?",
-        components: [row, buildFallbackPickActionRow(pageIndexForOption(optionId))],
-      }),
-    );
-    return;
-  }
+// Halaman terakhir (owner minta, biar fitur-fitur baru yang masih keyword-only kekenal user baru - lihat komentar
+// panjang di MENU_PAGES). "notlive"/"aliaslist" gak butuh nama/parameter apapun, jadi langsung jawab di tempat.
+async function menuNotLive(interaction, parts, optionId) {
+  await interaction.update(
+    safeReplyOptions({ content: replyLongestNotLiveLeaderboard(), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }),
+  );
+}
 
-  // Halaman terakhir (owner minta, biar fitur-fitur baru yang masih
-  // keyword-only kekenal user baru - lihat komen panjang di MENU_PAGES).
-  // "notlive"/"aliaslist" gak butuh nama/parameter apapun, jadi langsung
-  // jawab di tempat - SAMA POLA persis kayak opsi 1/2/3/5/6/7 (balikin
-  // STRING polos, buildFallbackMenuComponents() ditempelin ULANG biar bisa
-  // lanjut pencet opsi lain dari halaman yang sama).
-  if (optionId === "notlive") {
-    await interaction.update(
-      safeReplyOptions({ content: replyLongestNotLiveLeaderboard(), components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }),
-    );
-    return;
-  }
-  if (optionId === "aliaslist") {
-    await interaction.update(safeReplyOptions(buildAliasListMenuScreen()));
-    return;
-  }
+async function menuAliasList(interaction) {
+  await interaction.update(safeReplyOptions(buildAliasListMenuScreen()));
+}
 
-  // "❓ Fitur lainnya" - owner minta dirombak jadi DROPDOWN (EXTRA_FEATURES,
-  // lihat komen panjangnya di situ), bukan lagi nunjukkin replyHelp() (daftar
-  // LENGKAP) apa adanya kayak sebelumnya - replyHelp() sendiri TETEP ada,
-  // tetep dipanggil dari "cok bantuan" (chat/router.js), cuma gak dipanggil
-  // dari SINI lagi. Alasannya: dropdown ini isinya CUMA fitur yang beneran
-  // gak ada tombolnya di menu 12-opsi manapun (dikurasi manual), jadi gak
-  // ngulang-ngulang nunjukkin fitur yang udah ada tombolnya sendiri - lebih
-  // gampang di-scan ketimbang satu tumpukan ~20 baris teks. "cok bantuan"
-  // (nyebut SEMUA command tanpa kurasi) tetep disebut di teksnya buat yang
-  // mau baca lengkap sekaligus. StringSelectMenu harus sendirian di
-  // baris-nya (gak bisa gabung tombol lain), jadi Tutup+Kembali
-  // (buildFallbackPickActionRow) nempel di baris KEDUA di bawahnya, sama
-  // pola-nya kayak dropdown opsi 4/9.
-  if (optionId === "more") {
-    const content =
-      'Ini fitur-fitur yang masih ketik manual (belum ada tombolnya) - pilih salah satu di bawah buat liat cara pakenya. Mau lihat SEMUA command sekaligus? Ketik "cok bantuan".';
-    await interaction.update(
-      safeReplyOptions({ content, components: [buildExtraFeaturesSelectRow(), buildFallbackPickActionRow(pageIndexForOption(optionId))] }),
-    );
-    return;
-  }
+// "❓ Fitur lainnya" - DROPDOWN (EXTRA_FEATURES, lihat komentar panjangnya di situ) isinya CUMA fitur yang beneran gak
+// ada tombolnya di menu manapun (dikurasi manual), jadi gak ngulang-ngulang fitur yang udah ada tombolnya sendiri.
+// replyHelp() (daftar LENGKAP) tetep dipanggil dari "cok bantuan" (chat/router.js). StringSelectMenu harus sendirian
+// di baris-nya (gak bisa gabung tombol lain), jadi Tutup+Kembali (buildFallbackPickActionRow) nempel di baris KEDUA.
+async function menuExtraFeatures(interaction, parts, optionId) {
+  const content =
+    'Ini fitur-fitur yang masih ketik manual (belum ada tombolnya) - pilih salah satu di bawah buat liat cara pakenya. Mau lihat SEMUA command sekaligus? Ketik "cok bantuan".';
+  await interaction.update(
+    safeReplyOptions({ content, components: [buildExtraFeaturesSelectRow(), buildFallbackPickActionRow(pageIndexForOption(optionId))] }),
+  );
+}
 
-  // Tombol "Tutup" - DUA tempat beda nempelinnya (mismatch customId sengaja
-  // dipertahanin buat jejak/logging, tapi PERILAKUNYA sekarang IDENTIK, lihat
-  // §10's thirty-fifth item):
-  // - "fallback_menu:delete" - nempel LANGSUNG di menu fallback (buildFallbackMenuComponents,
-  //   §10's thirty-fourth item), buat kasus salah pencet/salah ketik pas
-  //   menu-nya baru aja muncul.
-  // - "fallback_menu:close" - nempel di BAWAH dropdown milih member/gifter
-  //   (opsi 4/9, buildFallbackPickActionRow), buat kasus salah pencet opsi
-  //   4/9 dan gak jadi mau milih siapa-siapa (beda dari watch-confirm's
-  //   tombol "Tutup" sendiri, yang nutup pertanyaan "mau nonton?" SETELAH
-  //   member kepilih - dua-duanya sekarang sama-sama ngehapus pesan juga,
-  //   lihat handleWatchConfirmButton, cuma beda di function/state yang
-  //   dibersihin).
-  // Dua-duanya sama-sama ngakhirin SELURUH flow menu ini (bukan cuma satu
-  // langkah), jadi dua-duanya juga clearMenuShown - biar angka mentah yang
-  // ke-ketik abis pesannya kehapus gak ketangkep sebagai "lanjutan" menu
-  // yang udah gak ada lagi. clearMenuShown di-require LAZY (bukan di atas
-  // file bareng require lain) SENGAJA - pendingState.js sendiri
-  // require("./menu") buat resolveBareMenuChoice dkk, jadi
-  // require("./pendingState") di ATAS file ini bakal bikin circular require
-  // (menu.js keburu balik ngambil menu.js versi BELUM SELESAI load,
-  // module.exports-nya masih kosong). Require di DALAM function (dieksekusi
-  // pas beneran dipanggil, bukan pas file-nya di-load) aman soalnya di
-  // titik itu proses loading dua-duanya udah lama kelar.
-  if (optionId === "delete" || optionId === "close") {
-    const { clearMenuShown } = require("./pendingState");
-    clearMenuShown(interaction.channelId, interaction.user.id);
-    await deleteInteractionMessage(interaction);
-    return;
-  }
+// Tombol "Tutup" - DUA tempat beda nempelinnya (customId sengaja dibedain buat jejak/logging, tapi PERILAKUNYA IDENTIK):
+// - "fallback_menu:delete" - nempel LANGSUNG di menu fallback (buildFallbackMenuComponents), buat salah pencet/salah ketik.
+// - "fallback_menu:close" - nempel di BAWAH dropdown milih member/gifter (buildFallbackPickActionRow).
+// Dua-duanya ngakhirin SELURUH flow menu ini, jadi dua-duanya juga clearMenuShown - biar angka mentah yang ke-ketik
+// abis pesannya kehapus gak ketangkep sebagai "lanjutan" menu yang udah gak ada. clearMenuShown di-require LAZY
+// SENGAJA: pendingState.js sendiri require("./menu") (resolveBareMenuChoice dkk), jadi require di ATAS file ini bakal
+// circular (menu.js keburu balik ngambil menu.js versi BELUM SELESAI load).
+async function menuClose(interaction) {
+  const { clearMenuShown } = require("./pendingState");
+  clearMenuShown(interaction.channelId, interaction.user.id);
+  await deleteInteractionMessage(interaction);
+}
 
-  // Tombol "Kembali" - nempel di baris yang sama kayak "Tutup" di atas, tapi
-  // beda tujuan: bukan ngakhirin interaksinya, cuma balikin pesan ini ke
-  // tampilan menu (replyFallbackMenu()) lagi, biar user bisa pilih opsi LAIN
-  // tanpa harus nutup dulu terus manggil ulang "cok bantuan" dari nol. Sama
-  // pola in-place-edit-nya kayak "close" - satu pesan yang sama terus dipake
-  // bolak-balik, gak numpuk pesan baru. Halaman tujuannya dari customId
-  // ("fallback_menu:back:<page>", lihat buildFallbackPickActionRow) - balik
-  // ke HALAMAN ASAL opsi yang tadi diklik, bukan selalu direset ke halaman 1.
-  if (optionId === "back") {
-    const page = Number(parts[2]) || 0;
-    await interaction.update(safeReplyOptions(replyFallbackMenu(page)));
-    return;
-  }
+// Tombol "Kembali" - bukan ngakhirin interaksinya, cuma balikin pesan ini ke tampilan menu lagi, biar user bisa pilih
+// opsi LAIN tanpa manggil ulang "cok bantuan". Halaman tujuannya dari customId ("fallback_menu:back:<page>") - balik ke
+// HALAMAN ASAL opsi yang tadi diklik, bukan selalu halaman 1.
+async function menuBack(interaction, parts) {
+  const page = Number(parts[2]) || 0;
+  await interaction.update(safeReplyOptions(replyFallbackMenu(page)));
+}
 
+// Pilihan 1/2/3/5/6/7/8 langsung dijawab lewat resolveBareMenuChoice (fungsi sama yang dipake shortcut angka).
+async function menuBareChoice(interaction, parts, optionId) {
   const reply = await resolveBareMenuChoice(optionId, interaction.channelId, interaction.user.id);
   if (!reply) return;
 
+  // Jawaban STRING polos (gak ada tombol sendiri): menu ditempelin ULANG di halaman asal opsi itu, biar user bisa
+  // lanjut mencet opsi LAIN dari pesan yang sama.
   if (typeof reply === "string") {
     await interaction.update(safeReplyOptions({ content: reply, components: buildFallbackMenuComponents(pageIndexForOption(optionId)) }));
     return;
   }
 
-  // Opsi 8 (rekap hari ini) - udah bawa tombol navigasi sendiri, dipake
-  // apa adanya (lihat komen di atas function ini).
+  // Opsi 8 (rekap hari ini) - udah bawa tombol navigasi sendiri, dipake apa adanya (nge-gabung 2 sistem tombol beda
+  // konteks di 1 pesan cuma bikin bingung).
   await interaction.update(safeReplyOptions(reply));
+}
+
+const FALLBACK_MENU_ACTIONS = new Map([
+  ["goto", menuGotoPage],
+  ["4", menuPickLiveMember],
+  ["9", menuPickGifterMember],
+  ["notlive", menuNotLive],
+  ["aliaslist", menuAliasList],
+  ["more", menuExtraFeatures],
+  ["delete", menuClose],
+  ["close", menuClose],
+  ["back", menuBack],
+]);
+
+// Diklik dari tombol replyFallbackMenu(). Pilihan 4/9 butuh tau membernya SIAPA, jadi alih-alih nyuruh ngetik nama
+// manual, langsung dikasih dropdown isinya member (yang lagi live / yang punya snapshot gifter).
+//
+// SEMUA cabang pake interaction.update() (EDIT pesan menu yang tombolnya nempel), BUKAN interaction.reply() (pesan
+// BARU) - owner ngeluh tiap kali mencet tombol yang beda-beda di menu ini, jawabannya numpuk jadi pesan baru
+// satu-satu (sama keluhan soal tabel rekap, lihat navChangePage). Konsekuensinya langkah dropdown milih member/gifter
+// (opsi 4/9) yang DULU ephemeral sekarang ikutan jadi publik - gak ada cara nge-edit pesan publik jadi ephemeral, dan
+// mengedit pesan yang sama itu justru intinya. Jawaban STRING polos ditempelin ulang buildFallbackMenuComponents.
+async function handleFallbackMenuButton(interaction) {
+  const parts = interaction.customId.split(":");
+  const optionId = parts[1];
+  const action = FALLBACK_MENU_ACTIONS.get(optionId) || menuBareChoice;
+  await action(interaction, parts, optionId);
 }
 
 // Diklik abis milih member dari dropdown yang dimunculin handleFallbackMenuButton.

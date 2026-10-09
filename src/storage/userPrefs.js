@@ -84,4 +84,4 @@ function listUsersWithOshis() {
   return Object.keys(all).filter((id) => getUserPrefs(id).oshis.length > 0);
 }
 
-module.exports = { USER_PREFS_FILE, MAX_OSHIS, loadAll, getUserPrefs, updateUserPrefs, touchLastSeen, isQuietHour, listUsersWithOshis };
+module.exports = { MAX_OSHIS, loadAll, getUserPrefs, updateUserPrefs, touchLastSeen, isQuietHour, listUsersWithOshis };

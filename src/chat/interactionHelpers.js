@@ -64,4 +64,4 @@ async function handleReplyCloseButton(interaction) {
   await deleteInteractionMessage(interaction);
 }
 
-module.exports = { deleteInteractionMessage, buildReplyCloseButton, buildReplyCloseRow, withCloseButton, handleReplyCloseButton };
+module.exports = { deleteInteractionMessage, buildReplyCloseButton, withCloseButton, handleReplyCloseButton };

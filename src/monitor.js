@@ -144,145 +144,165 @@ async function recordCompletedSession(username, memberData, durationHistory) {
   saveActiveLives();
 }
 
+// Ambil daftar live dari IDN. Kegagalan dicatat ke pollHealth (lihat notePollFailure) lalu dilempar
+// lagi supaya siklus ini berhenti dan ditangkap catch di checkLiveMembers.
+async function fetchCurrentLives() {
+  try {
+    return await fetchAllLivestreams();
+  } catch (error) {
+    await notePollFailure(error);
+    throw error;
+  }
+}
+
+// Member putus lalu LANGSUNG live lagi (sesi BARU - slug beda) sebelum ENDED_GRACE_POLLS siklus absen lewat:
+// tanpa ini bot ngira masih sesi lama - notif live kedua gak pernah kekirim, link basi, dua sesi menyatu di
+// rekap. Sesi lama ditutup sekarang (durasi = sampai sekarang, selisihnya dengan akhir aslinya paling banyak
+// beberapa siklus), lalu pemanggil jatuh ke jalur "mulai live" normal.
+async function closeReplacedSession(live, username, durationHistory) {
+  const previous = activeLives.get(username);
+  if (previous && live.slug && previous.slug && previous.slug !== live.slug) {
+    await sendDiscordNotif(previous.name, previous.username, previous.slug, "end", previous.imageUrl);
+    await recordCompletedSession(username, previous, durationHistory);
+  }
+}
+
+// Member baru mulai live: kirim notif, lalu (HANYA kalau terkirim) daftarkan ke activeLives.
+async function handleNewLive(live, username, displayName) {
+  const terkirim = await sendDiscordNotif(displayName, live.creator.username, live.slug, "start", live.image_url, live.live_at);
+  // kalau gagal kirim, username sengaja nggak ditambahin biar dicoba lagi di polling berikutnya
+  if (!terkirim) return;
+
+  activeLives.set(username, {
+    name: displayName,
+    username,
+    slug: live.slug,
+    liveAt: live.live_at,
+    viewCount: live.view_count,
+    peakViewCount: live.view_count ?? null,
+    imageUrl: live.image_url || null,
+    endingSoonAlerted: false,
+    alertedMilestones: [],
+    viewSamples: [],
+  });
+  await safely("Sampel penonton", () => addViewerSample(activeLives.get(username), live.view_count));
+  saveActiveLives();
+  await safely("Hasil tebak berikutnya", () => maybeResolveNextStarter(username, displayName)); // mini-game "siapa live berikutnya"
+  if (getPriorityConfig(displayName, live.creator.username)) {
+    await maybePartyModeAlert();
+  }
+}
+
+// Udah live dari sebelumnya - update data terbaru & cek heuristik "kemungkinan mendekati akhir"
+// (cuma buat member prioritas) + milestone jumlah penonton (buat semua member JKT48).
+async function handleOngoingLive(live, username, durationHistory) {
+  const entry = activeLives.get(username);
+  entry.viewCount = live.view_count;
+  entry.missingStreak = 0; // beneran keliatan lagi di respons ini - reset penghitung absen (kalau ada) dari ENDED_GRACE_POLLS
+  if (typeof live.view_count === "number") {
+    entry.peakViewCount = Math.max(entry.peakViewCount ?? 0, live.view_count);
+  }
+  await safely("Sampel penonton", () => addViewerSample(entry, live.view_count));
+  await maybeAlertEndingSoon(entry, durationHistory);
+  await maybeAlertViewerMilestone(entry);
+  // BUG SEBELUMNYA: viewCount/peakViewCount di atas cuma dimutasi di Map in-memory - saveActiveLives()
+  // sebelumnya cuma kepanggil kalau maybeAlertEndingSoon/maybeAlertViewerMilestone kebetulan nge-trigger
+  // (nyimpen SENDIRI pas nulis flag alert-nya). Kalau bot restart (redeploy Railway, dll) SEBELUM itu
+  // ke-trigger lagi, active-lives-cache.json di disk masih punya peakViewCount BASI dari awal live-nya
+  // doang - abis restart, puncak penonton yang beneran udah dicapai sebelum restart itu HILANG, bikin
+  // "cok siapa yang paling rame ditonton" salah buat live yang nyebrang restart. Disimpen tiap siklus
+  // sekarang, bukan cuma pas ada alert.
+  saveActiveLives();
+}
+
+// Proses semua live di respons IDN. Balikin Set username yang kelihatan di respons ini (dipakai
+// processEndedLives buat nentuin siapa yang absen).
+async function processCurrentLives(currentLives, durationHistory) {
+  const currentLiveUsernames = new Set();
+
+  for (const live of currentLives) {
+    const username = live?.creator?.username;
+    if (!username) continue; // skip entry yang datanya nggak lengkap
+    if (!isJkt48Member(live.creator)) continue; // cuma peduli member JKT48
+    // Satu username cuma diproses sekali per respons. Kalau IDN somehow nampilin username yang sama dua kali
+    // dengan slug beda (mis. paging bergeser pas live lama selesai dan live baru mulai), deteksi "slug berubah"
+    // bakal nutup-buka sesi bolak-balik tiap siklus (spam notif selesai/mulai). Entry pertama yang menang.
+    if (currentLiveUsernames.has(username)) continue;
+
+    currentLiveUsernames.add(username);
+    // Nama tampilan bisa kosong/null dari IDN - jangan sampai notif nulis "**undefined**".
+    const displayName = (typeof live.creator.name === "string" && live.creator.name.trim()) || username;
+
+    await closeReplacedSession(live, username, durationHistory);
+
+    if (!activeLives.has(username)) {
+      await handleNewLive(live, username, displayName);
+    } else {
+      await handleOngoingLive(live, username, durationHistory);
+    }
+  }
+
+  return currentLiveUsernames;
+}
+
+// Kirim notif "sudah selesai" + bersihkan cache kalau member udah selesai live (absen ENDED_GRACE_POLLS
+// siklus berturut-turut).
+async function processEndedLives(currentLiveUsernames, durationHistory) {
+  for (const [username, memberData] of activeLives) {
+    if (currentLiveUsernames.has(username)) continue;
+
+    memberData.missingStreak = (memberData.missingStreak || 0) + 1;
+    if (memberData.missingStreak < ENDED_GRACE_POLLS) {
+      // Baru absen 1x - kemungkinan glitch sesaat di respons IDN, bukan beneran selesai. Ditunggu 1 siklus
+      // lagi sebelum diproses sebagai "selesai" - kalau dia balik muncul di siklus berikutnya, missingStreak-nya
+      // di-reset di handleOngoingLive, jadi gak pernah sampe ke notif/pencatatan "selesai" sama sekali.
+      saveActiveLives();
+      continue;
+    }
+
+    const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end", memberData.imageUrl);
+    if (terkirim) {
+      await recordCompletedSession(username, memberData, durationHistory);
+    }
+    // kalau gagal kirim, sengaja nggak dihapus dari cache biar dicoba lagi di polling berikutnya
+  }
+}
+
+// Pekerjaan berkala yang dicek tiap siklus (rekap, heads-up, ringkasan, dashboard, status bot). Masing-masing
+// memutuskan sendiri apakah sudah waktunya.
+async function runPeriodicJobs() {
+  await maybeSendDailyRecap();
+  await maybeSendWeeklyRecap();
+  await maybeSendMonthlyRecap();
+  await maybeSendScheduleDigest();
+  await maybeSendHeadsUpAlerts();
+  await maybeSendPublicHeadsUpAlerts();
+  await safely("Ringkasan mingguan oshi", () => maybeSendOshiDigests()); // DM Minggu malam
+  // BUG YANG DITEMUKAN (debug pass §10, live streak) - lihat komentar lengkap di notify/publicAlerts.js's
+  // maybeCleanupBrokenStreaks: tanpa panggilan rutin terpisah ini, streak yang putus gara-gara member VAKUM
+  // (gak live sama sekali, bukan gara-gara baru selesai live) gak pernah ke-deteksi, dan lastAlertedStreak-nya
+  // nyangkut permanen - milestone yang sama di streak BARU jadi ke-skip diem-diem. Murah - cuma nyisir entry
+  // streak-alerts.json yang jumlahnya kecil, gak ada network.
+  await maybeCleanupBrokenStreaks();
+  // Dashboard live - dipanggil PALING TERAKHIR, setelah member baru mulai live/udah selesai beres semua buat
+  // siklus ini, biar roster yang direnderin reflect state FINAL siklus ini, bukan state di tengah-tengah proses.
+  await maybeUpdateDashboard();
+  await safely("Status bot", () => updateBotPresence()); // "Watching 🔴 Nala (live)" di daftar anggota
+}
+
+// Satu siklus polling: ambil daftar live dari IDN, proses yang baru/masih jalan/selesai, lalu jalankan
+// pekerjaan berkala. Error apa pun di sini cuma dicatat - siklus berikutnya tetap jalan.
 async function checkLiveMembers() {
   try {
-    let currentLives;
-    try {
-      currentLives = await fetchAllLivestreams();
-    } catch (error) {
-      await notePollFailure(error);
-      throw error; // tetap dicatat catch luar di bawah, siklus ini berhenti
-    }
+    const currentLives = await fetchCurrentLives();
     await notePollSuccess();
-    const currentLiveUsernames = new Set();
-    // Dibaca sekali per siklus polling (bukan sekali per member yang live)
-    // biar nggak buka file yang sama berkali-kali kalau lagi banyak yang live.
+    // Dibaca sekali per siklus polling (bukan sekali per member yang live) biar nggak buka file yang sama
+    // berkali-kali kalau lagi banyak yang live.
     const durationHistory = loadDurationHistory();
 
-    for (const live of currentLives) {
-      const username = live?.creator?.username;
-      if (!username) continue; // skip entry yang datanya nggak lengkap
-      if (!isJkt48Member(live.creator)) continue; // cuma peduli member JKT48
-      // Satu username cuma diproses sekali per respons. Kalau IDN somehow
-      // nampilin username yang sama dua kali dengan slug beda (mis. paging
-      // bergeser pas live lama selesai dan live baru mulai), deteksi "slug
-      // berubah" di bawah bakal nutup-buka sesi bolak-balik tiap siklus
-      // (spam notif selesai/mulai). Entry pertama yang menang.
-      if (currentLiveUsernames.has(username)) continue;
-
-      currentLiveUsernames.add(username);
-      // Nama tampilan bisa kosong/null dari IDN - jangan sampai notif nulis "**undefined**".
-      const displayName = (typeof live.creator.name === "string" && live.creator.name.trim()) || username;
-
-      // Member putus lalu LANGSUNG live lagi (sesi BARU - slug beda) sebelum
-      // ENDED_GRACE_POLLS siklus absen lewat: tanpa ini bot ngira masih sesi
-      // lama - notif live kedua gak pernah kekirim, link basi, dua sesi
-      // menyatu di rekap. Sesi lama ditutup sekarang (durasi = sampai sekarang,
-      // selisihnya dengan akhir aslinya paling banyak beberapa siklus), lalu
-      // jatuh ke jalur "mulai live" normal di bawah.
-      const previous = activeLives.get(username);
-      if (previous && live.slug && previous.slug && previous.slug !== live.slug) {
-        await sendDiscordNotif(previous.name, previous.username, previous.slug, "end", previous.imageUrl);
-        await recordCompletedSession(username, previous, durationHistory);
-      }
-
-      // Kirim notif cuma kalo member baru mulai live
-      if (!activeLives.has(username)) {
-        const terkirim = await sendDiscordNotif(displayName, live.creator.username, live.slug, "start", live.image_url, live.live_at);
-        if (terkirim) {
-          activeLives.set(username, {
-            name: displayName,
-            username,
-            slug: live.slug,
-            liveAt: live.live_at,
-            viewCount: live.view_count,
-            peakViewCount: live.view_count ?? null,
-            imageUrl: live.image_url || null,
-            endingSoonAlerted: false,
-            alertedMilestones: [],
-            viewSamples: [],
-          });
-          await safely("Sampel penonton", () => addViewerSample(activeLives.get(username), live.view_count));
-          saveActiveLives();
-          await safely("Hasil tebak berikutnya", () => maybeResolveNextStarter(username, displayName)); // mini-game "siapa live berikutnya"
-          if (getPriorityConfig(displayName, live.creator.username)) {
-            await maybePartyModeAlert();
-          }
-        }
-        // kalau gagal kirim, username sengaja nggak ditambahin
-        // biar dicoba lagi di polling berikutnya
-      } else {
-        // udah live dari sebelumnya - update data terbaru & cek heuristik
-        // "kemungkinan mendekati akhir" (cuma buat member prioritas) + cek
-        // milestone jumlah penonton (buat semua member JKT48)
-        const entry = activeLives.get(username);
-        entry.viewCount = live.view_count;
-        entry.missingStreak = 0; // beneran keliatan lagi di respons ini - reset penghitung absen (kalau ada) dari ENDED_GRACE_POLLS
-        if (typeof live.view_count === "number") {
-          entry.peakViewCount = Math.max(entry.peakViewCount ?? 0, live.view_count);
-        }
-        await safely("Sampel penonton", () => addViewerSample(entry, live.view_count));
-        await maybeAlertEndingSoon(entry, durationHistory);
-        await maybeAlertViewerMilestone(entry);
-        // BUG SEBELUMNYA: viewCount/peakViewCount di atas cuma dimutasi di
-        // Map in-memory - saveActiveLives() sebelumnya cuma kepanggil kalau
-        // maybeAlertEndingSoon/maybeAlertViewerMilestone kebetulan nge-trigger
-        // (nyimpen SENDIRI pas nulis flag alert-nya). Kalau bot restart
-        // (redeploy Railway, dll) SEBELUM itu ke-trigger lagi, active-lives-cache.json
-        // di disk masih punya peakViewCount BASI dari awal live-nya doang -
-        // abis restart, puncak penonton yang beneran udah dicapai sebelum
-        // restart itu HILANG (peak "reset" ke angka lama), bikin "cok siapa
-        // yang paling rame ditonton" salah buat live yang nyebrang restart.
-        // Disimpen tiap siklus sekarang, bukan cuma pas ada alert.
-        saveActiveLives();
-      }
-    }
-
-    // Kirim notif "sudah selesai" + bersihkan cache kalau member udah selesai live
-    for (const [username, memberData] of activeLives) {
-      if (!currentLiveUsernames.has(username)) {
-        memberData.missingStreak = (memberData.missingStreak || 0) + 1;
-        if (memberData.missingStreak < ENDED_GRACE_POLLS) {
-          // Baru absen 1x - kemungkinan glitch sesaat di respons IDN, bukan
-          // beneran selesai. Ditunggu 1 siklus lagi (lihat ENDED_GRACE_POLLS
-          // di atas) sebelum diproses sebagai "selesai" - kalau dia balik
-          // muncul di siklus berikutnya, missingStreak-nya di-reset di
-          // branch "udah live dari sebelumnya" di atas, jadi gak pernah
-          // sampe ke notif/pencatatan "selesai" sama sekali.
-          saveActiveLives();
-          continue;
-        }
-
-        const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end", memberData.imageUrl);
-        if (terkirim) {
-          await recordCompletedSession(username, memberData, durationHistory);
-        }
-        // kalau gagal kirim, sengaja nggak dihapus dari cache
-        // biar dicoba lagi di polling berikutnya
-      }
-    }
-
-    await maybeSendDailyRecap();
-    await maybeSendWeeklyRecap();
-    await maybeSendMonthlyRecap();
-    await maybeSendScheduleDigest();
-    await maybeSendHeadsUpAlerts();
-    await maybeSendPublicHeadsUpAlerts();
-    await safely("Ringkasan mingguan oshi", () => maybeSendOshiDigests()); // DM Minggu malam
-    // BUG YANG DITEMUKAN (debug pass §10, live streak) - lihat komen lengkapnya
-    // di notify/publicAlerts.js's maybeCleanupBrokenStreaks: tanpa panggilan
-    // rutin terpisah ini, streak yang putus gara-gara member VAKUM (gak live
-    // sama sekali, bukan gara-gara baru selesai live) gak pernah ke-deteksi,
-    // dan lastAlertedStreak-nya nyangkut permanen - milestone yang sama di
-    // streak BARU jadi ke-skip diem-diem. Dipanggil tiap siklus (murah - cuma
-    // nyisir entry streak-alerts.json yang jumlahnya kecil, gak ada network).
-    await maybeCleanupBrokenStreaks();
-    // Dashboard live (§10's kelimapuluh+item, saran fitur ke-7) - dipanggil
-    // PALING TERAKHIR, setelah dua loop di atas (member baru mulai live/udah
-    // selesai) beres semua buat siklus ini, biar roster yang direnderin
-    // reflect state FINAL siklus ini, bukan state di tengah-tengah proses.
-    await maybeUpdateDashboard();
-    await safely("Status bot", () => updateBotPresence()); // "Watching 🔴 Nala (live)" di daftar anggota
+    const currentLiveUsernames = await processCurrentLives(currentLives, durationHistory);
+    await processEndedLives(currentLiveUsernames, durationHistory);
+    await runPeriodicJobs();
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);
   }

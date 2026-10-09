@@ -225,7 +225,7 @@ module.exports = {
   getTimeOfDayBucket,
   getGreeting,
   WEEKDAY_FORMATTER_WIB,
-  NEW_LIVE_THRESHOLD_MS,
+
   describeElapsed,
   matchesNameFragment,
   containsWholeWord,
@@ -236,6 +236,6 @@ module.exports = {
   NEXT_PAGE_PATTERN,
   PREV_PAGE_PATTERN,
   safeReplyOptions,
-  clampDiscordContent,
+
   DISCORD_CONTENT_LIMIT,
 };

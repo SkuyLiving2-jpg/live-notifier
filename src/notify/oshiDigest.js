@@ -51,4 +51,4 @@ async function maybeSendOshiDigests(now = new Date()) {
   }
 }
 
-module.exports = { maybeSendOshiDigests, digestWeekKey, buildDigestText };
+module.exports = { maybeSendOshiDigests, digestWeekKey };

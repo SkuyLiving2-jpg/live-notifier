@@ -47,4 +47,4 @@ function getViewerTimelines(username) {
   return listFor(loadViewerTimelines(), username);
 }
 
-module.exports = { loadViewerTimelines, recordViewerTimeline, getViewerTimelines, VIEWER_TIMELINES_FILE, MAX_SESSIONS_PER_MEMBER };
+module.exports = { loadViewerTimelines, recordViewerTimeline, getViewerTimelines, MAX_SESSIONS_PER_MEMBER };

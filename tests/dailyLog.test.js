@@ -234,12 +234,14 @@ test("getDistinctSessionDatesForMember - balikin Set tanggal WIB DISTINCT (2 ses
 
   // Nala live 2x hari ini (harus cuma 1 tanggal di hasilnya) + 1x kemarin +
   // 1x 10 hari lalu (buat nguji daysBack motong yang ini).
-  recordLiveEnded("Nala", "jkt48_streaktest", new Date(now - 3 * 60_000), new Date(now - 2 * 60_000), 5);
-  recordLiveEnded("Nala", "jkt48_streaktest", new Date(now - 2 * 60_000), new Date(now - 1 * 60_000), 5);
+  // Jangkar ke tanggal HARI INI secara eksplisit (bukan "1-3 menit yang lalu"): kalau test jalan di menit
+  // pertama setelah 00:00 WIB, "menit yang lalu" jatuh ke KEMARIN dan tanggal hari ini tidak pernah muncul.
+  recordLiveEnded("Nala", "jkt48_streaktest", new Date(`${today}T00:00:01+07:00`), new Date(`${today}T00:00:02+07:00`), 5);
+  recordLiveEnded("Nala", "jkt48_streaktest", new Date(`${today}T00:00:02+07:00`), new Date(`${today}T00:00:03+07:00`), 5);
   recordLiveEnded("Nala", "jkt48_streaktest", new Date(`${yesterday}T10:00:00+07:00`), new Date(`${yesterday}T11:00:00+07:00`), 5);
   recordLiveEnded("Nala", "jkt48_streaktest", new Date(tenDaysAgo.getTime() - 60_000), tenDaysAgo, 5);
   // Member LAIN gak boleh ikut ke-campur.
-  recordLiveEnded("Levi", "jkt48_streaklain", new Date(now - 2 * 60_000), new Date(now - 1 * 60_000), 5);
+  recordLiveEnded("Levi", "jkt48_streaklain", new Date(`${today}T00:00:02+07:00`), new Date(`${today}T00:00:03+07:00`), 5);
 
   // daysBack default (SESSION_RETENTION_DAYS, 35 hari) - semuanya kebawa.
   const dates = getDistinctSessionDatesForMember("jkt48_streaktest");

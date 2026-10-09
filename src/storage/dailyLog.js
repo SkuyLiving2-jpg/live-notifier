@@ -272,7 +272,7 @@ module.exports = {
   SESSION_RETENTION_DAYS,
   loadDailyLog,
   saveDailyLog,
-  getTodayWIBRangeUnix,
+
   fetchExternalTodayLiveHistory,
   resetExternalHistoryCache,
   getCompletedSessionsToday,
@@ -283,6 +283,6 @@ module.exports = {
   getEarliestSessionDate,
   getDistinctSessionDatesForMember,
   getStreakDatesForMember,
-  STREAK_DATES_RETENTION_DAYS,
+
   recordLiveEnded,
 };

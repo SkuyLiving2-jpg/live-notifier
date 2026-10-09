@@ -207,7 +207,6 @@ async function handleMemberChannelFallbackButton(interaction) {
 }
 
 module.exports = {
-  buildMemberChannelFallbackComponents,
   replyMemberChannelFallback,
   replyMemberLiveToday,
   replyMemberLiveCount,

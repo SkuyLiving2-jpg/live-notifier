@@ -31,4 +31,4 @@ function markAlertedToday(username, todayWIB) {
   saveHeadsUpAlerts(data);
 }
 
-module.exports = { loadHeadsUpAlerts, saveHeadsUpAlerts, wasAlertedToday, markAlertedToday };
+module.exports = { wasAlertedToday, markAlertedToday };

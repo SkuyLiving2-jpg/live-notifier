@@ -39,4 +39,4 @@ function clearStreakAlert(username) {
   }
 }
 
-module.exports = { loadStreakAlerts, saveStreakAlerts, getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert };
+module.exports = { loadStreakAlerts, getLastAlertedStreak, setLastAlertedStreak, clearStreakAlert };

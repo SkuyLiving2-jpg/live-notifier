@@ -293,7 +293,7 @@ Sistem harus bisa memberi tahu kalau sedang sakit:
 
 ### 3.8 Strategi pengujian
 
-Sekitar 850 tes dengan `node --test`, tanpa framework tambahan. Lapisannya:
+Sekitar 880 tes dengan `node --test`, tanpa framework tambahan. Lapisannya:
 
 | Lapisan               | Contoh                                                                   |
 | --------------------- | ------------------------------------------------------------------------ |
@@ -308,6 +308,7 @@ Sekitar 850 tes dengan `node --test`, tanpa framework tambahan. Lapisannya:
 Praktik penting:
 
 - **Waktu dikendalikan** (`Date.now` di-stub), jadi tes tidak flaky dan tidak bergantung jam sungguhan.
+- **Tes diuji pada jam yang dibekukan.** Seluruh suite dijalankan ulang pada puluhan jam palsu di sekitar tengah malam, pergantian bulan, tahun, dan pekan. Cara ini menemukan tes yang hanya gagal pada menit tertentu (misalnya data "1 menit yang lalu" yang pada pukul 00:00:30 ternyata jatuh ke hari atau bulan sebelumnya). Pelajarannya: data uji sebaiknya dijangkar ke tanggal eksplisit, bukan "sekarang dikurangi N".
 - **Tes ditulis dari bug nyata.** Tiap perbaikan menambah tes yang akan gagal kalau bug muncul lagi.
 - **CI** (`.github/workflows`) menjalankan semua tes tiap push, di Node 20.
 

@@ -260,5 +260,4 @@ module.exports = {
   handleClearQuietHours,
   handleSetDigest,
   buildCatchup,
-  parseCatchupWindow,
 };

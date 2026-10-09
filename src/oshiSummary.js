@@ -106,4 +106,4 @@ function formatWeeklyLine(summary) {
   return `⭐ **${summary.name}** - ${summary.weekCount}x live${describeTrend(summary.weekCount, summary.prevWeekCount, "x")}, total ${formatDuration(summary.weekDurationMs)}${peak}${summary.streak >= 2 ? `, 🔥 streak ${summary.streak} hari` : ""}`;
 }
 
-module.exports = { summarizeMember, displayNameFor, formatMemberBlock, formatWeeklyLine, formatPatternHint };
+module.exports = { summarizeMember, formatMemberBlock, formatWeeklyLine };

@@ -174,6 +174,15 @@ function unixAt(dateWIB, timeHHMM) {
   return Math.floor(new Date(`${dateWIB}T${timeHHMM}:00+07:00`).getTime() / 1000);
 }
 
+// "3 hari lalu" untuk data uji = TENGAH HARI WIB pada tanggal itu, bukan "jam sekarang - 3 hari". Sesi yang dibuat
+// relatif ke jam sekarang bisa menyeberang tengah malam (mulai di hari A, selesai di hari B) kalau test kebetulan
+// jalan menjelang 00:00 WIB, padahal rekap mengelompokkan sesi berdasarkan tanggal SELESAI-nya - akibatnya test gagal
+// hanya di jam-jam tertentu. Tengah hari + beberapa menit selalu satu tanggal.
+function threeDaysAgoNoonUnix() {
+  const date = getDateWIB(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000));
+  return unixAt(date, "12:00");
+}
+
 function yesterdayWIB() {
   const d = new Date(`${getTodayWIB()}T00:00:00+07:00`);
   d.setDate(d.getDate() - 1);
@@ -1006,8 +1015,7 @@ test("replyRecapRange - arsip UDAH nyakup rentang penuh -> TANPA catatan penjela
 test("tryHandleRecapPageShortcut - bisa maju ('y') DAN mundur ('mundur') bolak-balik antar halaman", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange, tryHandleRecapPageShortcut } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   // 25 sesi -> 2 halaman (RECAP_TABLE_PAGE_SIZE = 20).
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
@@ -1058,8 +1066,7 @@ test("tryHandleRecapPageShortcut - bisa maju ('y') DAN mundur ('mundur') bolak-b
 test("tryHandleRecapPageShortcut - 'maju'/'forward' juga jalan buat ke halaman berikutnya (alternatif dari 'y')", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange, tryHandleRecapPageShortcut } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 45; i++) {
     freshRecordLiveEnded(`Fwd${i}`, `jkt48_fwdtest${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
   }
@@ -1085,8 +1092,7 @@ test("tryHandleRecapPageShortcut - 'maju'/'forward' juga jalan buat ke halaman b
 test("tryHandleRecapPageShortcut - 'n' tetep ngebatalin navigasi sepenuhnya (beda dari 'mundur')", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, replyRecapRange: freshReplyRecapRange, tryHandleRecapPageShortcut } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
       `Batal${i}`,
@@ -1123,8 +1129,7 @@ test("tryHandleRecapPageShortcut - 'n' tetep ngebatalin navigasi sepenuhnya (bed
 // (.updates, bukan .calls) plus mastiin reply() BENERAN gak kepanggil sama
 // sekali, biar gak keulang diem-diem balik ke reply().
 test("handleRecapNavButton - action 'next'/'prev' EDIT pesan yang ada (update), BUKAN kirim pesan baru (reply)", async () => {
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     recordLiveEnded(`Navbtn${i}`, `jkt48_navbtntest${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
   }
@@ -1172,8 +1177,7 @@ test("handleRecapNavButton - action 'close' nge-clear pendingRecapPage, jadi 'y'
     handleRecapNavButton: freshHandleRecapNavButton,
   } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
       `Close${i}`,
@@ -1250,8 +1254,7 @@ test("buildRecapPageBlock - tombol 'Lompat halaman' CUMA muncul buat rangeDays n
 test("handleRecapJumpModalSubmit - input angka -> EDIT pesan yang sama (update) ke halaman itu, bukan pesan baru", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 65; i++) {
     freshRecordLiveEnded(`Jm${i}`, `jkt48_jumpmodal${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
   }
@@ -1266,8 +1269,7 @@ test("handleRecapJumpModalSubmit - input angka -> EDIT pesan yang sama (update) 
 test("handleRecapJumpModalSubmit - 'awal'/'akhir' alias buat halaman pertama/terakhir, gak perlu tau nomor halaman terakhirnya berapa", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 65; i++) {
     freshRecordLiveEnded(`Al${i}`, `jkt48_jumpalias${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
   }
@@ -1284,8 +1286,7 @@ test("handleRecapJumpModalSubmit - 'awal'/'akhir' alias buat halaman pertama/ter
 test("handleRecapJumpModalSubmit - angka melebihi total halaman -> otomatis ke-clamp ke halaman terakhir (bukan error)", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(`Ov${i}`, `jkt48_jumpover${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
   }
@@ -1298,8 +1299,7 @@ test("handleRecapJumpModalSubmit - angka melebihi total halaman -> otomatis ke-c
 test("handleRecapJumpModalSubmit - input gak keparse sama sekali -> tetep di halaman SEKARANG (dari customId) plus catetan, TETEP update() bukan reply()", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(`Bad${i}`, `jkt48_jumpbad${i}`, new Date((threeDaysAgo + i * 60) * 1000), new Date((threeDaysAgo + i * 60 + 30) * 1000), 5);
   }
@@ -1335,8 +1335,7 @@ test("handleRecapNavButton - action 'delrecap' juga nge-clear pendingRecapPage (
     handleRecapNavButton: freshHandleRecapNavButton,
   } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
       `Del${i}`,
@@ -1393,7 +1392,7 @@ test("handleRecapNavButton - action 'closesearch' GAK ngerusak pendingRecapPage 
     handleRecapNavButton: freshHandleRecapNavButton,
   } = freshRepliesForRecapRange();
 
-  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
       `Cs${i}`,
@@ -1416,8 +1415,7 @@ test("handleRecapNavButton - action 'closesearch' GAK ngerusak pendingRecapPage 
 });
 
 test("handleRecapSearchModalSubmit - nama ketemu -> tabel hasil filter cuma nunjukkin sesi member itu, TANPA tombol kalau interaction.message gak keisi", async () => {
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   recordLiveEnded("Searchtarget", "jkt48_searchtarget", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
   recordLiveEnded("Searchother", "jkt48_searchother", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
 
@@ -1447,8 +1445,7 @@ test("handleRecapSearchModalSubmit - nama gak ketemu -> pesan gak ketemu, bukan 
 // dari modal submission cuma keisi kalau modal-nya dibuka dari tombol yang
 // nempel di sebuah pesan - persis kasus "🔍 Cari member").
 test("handleRecapSearchModalSubmit - interaction.message keisi -> nanya 'masih mau ditampilin?' + tombol Ya/Enggak bawa ID pesan rekap aslinya", async () => {
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   recordLiveEnded("Searchbtn", "jkt48_searchbtntest", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
 
   const interaction = fakeInteraction({
@@ -1518,7 +1515,7 @@ test("buildRecapDateSelectRow - arsip kosong sama sekali -> 25 opsi PENUH, opsi 
 
 test("buildRecapDateSelectRow - sesi paling tua cuma 3 hari lalu -> dropdown dipotong di situ, gak nawarin tanggal sebelum bot mulai nge-track", () => {
   const fresh = freshRepliesForRecapRange();
-  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   fresh.recordLiveEnded("Datecutoff", "jkt48_datecutoff", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
 
   const row = fresh.buildRecapDateSelectRow();
@@ -1831,7 +1828,7 @@ test("replyRecapMonthGeneric - lebih dari 1 bulan yang punya data -> dropdown mi
 
 test("replyRecapSpecificDate - tanggal yang ada sesinya -> langsung tabel rekap tanggal itu", async () => {
   const fresh = freshRepliesForRecapRange();
-  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
   fresh.recordLiveEnded("Specdate", "jkt48_specdate", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
 
@@ -1895,7 +1892,14 @@ test("replyRecapMonth - bulan dengan lebih dari 1 halaman dapet tombol '🔢 Lom
   const fresh = freshRepliesForRecapRange();
   const thisMonth = getTodayWIB().slice(0, 7);
   for (let i = 0; i < 25; i++) {
-    fresh.recordLiveEnded(`Monthpage${i}`, `jkt48_monthpagetest${i}`, new Date(Date.now() - 120_000), new Date(Date.now() - 60_000), 5);
+    // Dijangkar ke tanggal HARI INI (bukan "1-2 menit lalu"): di menit pertama setiap bulan, "menit lalu" jatuh ke bulan SEBELUMNYA.
+    fresh.recordLiveEnded(
+      `Monthpage${i}`,
+      `jkt48_monthpagetest${i}`,
+      new Date(`${getTodayWIB()}T00:00:01+07:00`),
+      new Date(`${getTodayWIB()}T00:00:02+07:00`),
+      5,
+    );
   }
 
   const reply = await fresh.replyRecapMonth(thisMonth, "c-monthjump", "u-monthjump");
@@ -1938,8 +1942,7 @@ test("handleRecapMenuButton - nge-clear pendingRecapPage SEBELUM render, biar re
     handleRecapMenuButton: freshHandleRecapMenuButton,
   } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
       `Menubtn${i}`,
@@ -2049,8 +2052,7 @@ test("Maju/Mundur/Lompat halaman NGIKUTIN origin tabel asalnya - tombol '🔙 Ke
     handleRecapJumpModalSubmit: freshHandleRecapJumpModalSubmit,
   } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
       `Navorigin${i}`,
@@ -2098,8 +2100,7 @@ test("'y' via teks (tryHandleRecapPageShortcut) JUGA nge-preserve origin - tombo
     tryHandleRecapPageShortcut: freshTryHandleRecapPageShortcut,
   } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(
       `Textorigin${i}`,
@@ -2125,8 +2126,7 @@ test("'y' via teks (tryHandleRecapPageShortcut) JUGA nge-preserve origin - tombo
 test("handleRecapDateSelect - dropdown yang dibuka dari menu 5-opsi rekap (origin 'recapmenu') NGIKUTIN origin itu di tabel hasilnya", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, handleRecapDateSelect: freshHandleRecapDateSelect } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
   freshRecordLiveEnded("Dateorigin", "jkt48_dateorigin", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 1800) * 1000), 5);
 
@@ -2159,8 +2159,7 @@ test("handleRecapMenuButton - pilihan 'date' lalu handleRecapDateSelect - origin
     handleRecapDateSelect: freshHandleRecapDateSelect,
   } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
   freshRecordLiveEnded("Datepickerorigin", "jkt48_datepickerorigin", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 1800) * 1000), 5);
 
@@ -2181,8 +2180,7 @@ test("handleRecapMenuButton - pilihan 'date' lalu handleRecapDateSelect - origin
 test("handleRecapDateSelect - tanggal yang ada sesinya -> tabel rekap tanggal itu, EDIT pesan (update), bukan pesan baru", async () => {
   const { recordLiveEnded: freshRecordLiveEnded, handleRecapDateSelect: freshHandleRecapDateSelect } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
   freshRecordLiveEnded("Datepicked", "jkt48_datepicked", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
 
@@ -2226,8 +2224,7 @@ test("handleRecapDateSelect - tanggal yang KOSONG (gak ada sesi) -> pesan 'belum
 });
 
 test("handleRecapDateSelect - customId tombol Maju/Mundur/Cari di tabel yang dihasilin pake encoding tanggal 'd<YYYY-MM-DD>', bukan angka hari-mundur", async () => {
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
   recordLiveEnded("Datepicked2", "jkt48_datepicked2", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
 
@@ -2245,7 +2242,7 @@ test("handleRecapDateSelect - customId tombol Maju/Mundur/Cari di tabel yang dih
 // balik nunjukkin SEMUA tanggal, bukan tetep di-filter ke hari itu doang.
 test("handleRecapDateSelect - milih tanggal dari dropdown WEEKDAY (ke-tag '#W') -> dropdown yang nempel di tabelnya TETEP di-filter ke hari itu, BUKAN balik ke semua tanggal", async () => {
   const fresh = freshRepliesForRecapRange();
-  const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   const targetDate = getDateWIB(new Date(threeDaysAgo * 1000));
   const weekdayIdx = WEEKDAY_NAMES_ID_TEST.indexOf(WEEKDAY_FORMATTER_WIB.format(new Date(threeDaysAgo * 1000)));
   fresh.recordLiveEnded("Weekdaytagged", "jkt48_weekdaytagged", new Date(threeDaysAgo * 1000), new Date((threeDaysAgo + 60) * 1000), 5);
@@ -2289,8 +2286,7 @@ test("handleRecapDateSelect - milih tanggal LAIN nge-clear pendingRecapPage tang
     handleRecapDateSelect: freshHandleRecapDateSelect,
   } = freshRepliesForRecapRange();
 
-  const now = Date.now();
-  const threeDaysAgo = Math.floor(now / 1000) - 3 * 24 * 60 * 60;
+  const threeDaysAgo = threeDaysAgoNoonUnix();
   const firstDate = getDateWIB(new Date(threeDaysAgo * 1000));
   for (let i = 0; i < 25; i++) {
     freshRecordLiveEnded(

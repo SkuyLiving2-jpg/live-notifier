@@ -1178,150 +1178,154 @@ async function tryHandleRecapPageShortcut(text, channelId, authorId) {
 // numpuk di bawahnya. update() nge-edit di tempat, jadi cuma ADA SATU pesan
 // tabel per sesi rekap sepanjang orangnya masih maju-mundur, mau berapa kali
 // pun diklik.
-async function handleRecapNavButton(interaction) {
-  const parts = interaction.customId.split(":");
-  const action = parts[1];
+// Aksi tombol "recap_nav:<aksi>:..." - satu fungsi per aksi (dulu satu fungsi ~145 baris). Semua fungsi menerima
+// (interaction, parts) dengan parts = customId.split(":"), jadi parts[1] = aksi.
 
-  if (action === "close") {
-    // Bersihin pending state teks juga - abis "tutup rekap", jawaban "y"/
-    // "mundur" nyasar berikutnya (misal orangnya lupa) gak boleh diem-diem
-    // nerusin ke halaman rekap yang udah "ditutup".
+// "Tutup rekap". Bersihin pending state teks juga - abis "tutup rekap", jawaban "y"/"mundur" nyasar berikutnya
+// (misal orangnya lupa) gak boleh diem-diem nerusin ke halaman rekap yang udah "ditutup". BENERAN ngehapus pesannya
+// (deleteInteractionMessage), sama logika "tutup" yang konsisten di seluruh bot.
+async function navClose(interaction) {
+  pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+  await deleteInteractionMessage(interaction);
+}
+
+// Tutup balesan PENCARIAN member (buildSearchResultCloseRow) - gak ada pending state yang perlu dibersihin.
+async function navCloseSearch(interaction) {
+  await deleteInteractionMessage(interaction);
+}
+
+// Diklik dari tombol "Ya, biarin"/"Enggak, hapus aja" di BALESAN PENCARIAN (buildKeepOrDeleteRecapComponents):
+// owner ngeluh tabel rekap ASLI (yang tombol "🔍 Cari member"-nya diklik) tetep numpang di channel walau yang
+// dicari udah ketemu, jadi ditanya eksplisit abis nunjukkin hasil cari. customId bawa ID pesan rekap ASLI itu
+// (parts[2]) - "delrecap" hapus pesan itu by ID (channel.messages.delete nerima ID langsung), "keeprecap" gak
+// ngapa-ngapain selain nutup pertanyaannya. Dua-duanya ngedit BALESAN PENCARIAN ini sendiri (update, bukan pesan
+// baru) buat ngilangin tombol Ya/Enggak-nya, dengan tombol "Tutup" TETEP nempel.
+async function navKeepOrDeleteRecap(interaction, parts) {
+  if (parts[1] === "delrecap") {
+    const originalMessageId = parts[2];
     pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
-    // §10's thirty-fifth item - dulu diedit jadi teks "Terima kasih..." +
-    // components:[], sekarang BENERAN ngehapus pesannya (deleteInteractionMessage),
-    // sama logika "tutup" yang sekarang konsisten di seluruh bot (menu 9-opsi,
-    // dropdown 4/9, watch-confirm, channel khusus member).
-    await deleteInteractionMessage(interaction);
-    return;
-  }
-
-  // Diklik dari tombol "Ya, biarin"/"Enggak, hapus aja" yang nempel di
-  // BALESAN PENCARIAN (lihat buildKeepOrDeleteRecapComponents di bawah) -
-  // owner ngeluh tabel rekap ASLI (yang tombol "🔍 Cari member"-nya diklik)
-  // tetep numpang di channel walau yang dicari udah ketemu, jadi ditanya
-  // eksplisit abis nunjukkin hasil cari. customId-nya bawa ID pesan rekap
-  // ASLI itu (dari interaction.message punya modal submission, lihat
-  // handleRecapSearchModalSubmit) - "delrecap" hapus pesan itu by ID
-  // (gak perlu fetch dulu, channel.messages.delete nerima ID langsung),
-  // "keeprecap" gak ngapa-ngapain selain nutup pertanyaannya. Dua-duanya
-  // ngedit BALESAN PENCARIAN ini sendiri (interaction.update, bukan pesan
-  // baru) buat ngilangin tombol Ya/Enggak-nya abis dijawab - konsisten sama
-  // pola "close" di atas.
-  if (action === "closesearch") {
-    await deleteInteractionMessage(interaction);
-    return;
-  }
-
-  if (action === "keeprecap" || action === "delrecap") {
-    if (action === "delrecap") {
-      const originalMessageId = parts[2];
-      pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
-      if (originalMessageId && interaction.channel) {
-        await interaction.channel.messages.delete(originalMessageId).catch(() => {});
-      }
+    if (originalMessageId && interaction.channel) {
+      await interaction.channel.messages.delete(originalMessageId).catch(() => {});
     }
-    // Pertanyaan Ya/Enggak-nya ilang, tapi tombol "Tutup" TETEP nempel biar
-    // balesan pencarian ini sendiri masih bisa ditutup abis dibaca.
-    await interaction.update(safeReplyOptions({ content: interaction.message.content, components: [buildSearchResultCloseRow()] }));
+  }
+  await interaction.update(safeReplyOptions({ content: interaction.message.content, components: [buildSearchResultCloseRow()] }));
+}
+
+// Tombol "🔙 Kembali ke ..." (buildBackRow). customId "recap_nav:backto:<origin>" - parts[2] LANGSUNG origin-nya
+// (bukan encoded range kayak aksi lain), soalnya balik ke menu asalnya gak butuh tau lagi tabel yang lagi
+// ditampilin isinya apa. Nge-clear pendingRecapPage juga (sama kayak "close") - jawaban "y"/"mundur" yang nyasar
+// gak boleh diem-diem nerusin ke tabel rekap yang udah ditinggalin.
+async function navBackTo(interaction, parts) {
+  const origin = parts[2];
+  pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
+  if (isLiveCountOrigin(origin)) {
+    // Balik ke jawaban jumlah live member itu (lengkap dengan tombol "Lihat rekap").
+    const block = buildLiveCountBlockForUsername(usernameFromLiveCountOrigin(origin));
+    await interaction.update(safeReplyOptions(block || replyRecapMenu()));
     return;
   }
-
-  // Tombol "🔙 Kembali ke ..." (buildBackRow) - BUG YANG DILAPORIN OWNER,
-  // lihat komen panjangnya di buildBackRow/withOrigin. customId-nya
-  // "recap_nav:backto:<origin>" - `parts[2]` di sini LANGSUNG origin-nya
-  // sendiri (bukan encoded range kayak action lain), soalnya balik ke menu
-  // asalnya gak butuh tau lagi tabel yang lagi ditampilin isinya apa.
-  // Nge-clear pendingRecapPage juga (sama kayak "close") - abis balik ke
-  // menu, jawaban "y"/"mundur" yang nyasar gak boleh diem-diem nerusin ke
-  // tabel rekap yang udah ditinggalin.
-  if (action === "backto") {
-    const origin = parts[2];
-    pendingRecapPage.delete(`${interaction.channelId}:${interaction.user.id}`);
-    if (isLiveCountOrigin(origin)) {
-      // Balik ke jawaban jumlah live member itu (lengkap dengan tombol "Lihat rekap").
-      const block = buildLiveCountBlockForUsername(usernameFromLiveCountOrigin(origin));
-      await interaction.update(safeReplyOptions(block || replyRecapMenu()));
-      return;
-    }
-    if (origin === "fallback") {
-      // require lazy (bukan di atas file) - chat/menu.js require dari sini
-      // (chat/replies.js) buat reply builder-nya, jadi require balik di sini
-      // di ATAS file bakal circular. Sama pola-nya kayak menu.js's lazy
-      // require("./pendingState") di handleFallbackMenuButton.
-      const { replyFallbackMenu } = require("./menu");
-      await interaction.update(safeReplyOptions(replyFallbackMenu()));
-      return;
-    }
-    await interaction.update(safeReplyOptions(replyRecapMenu()));
+  if (origin === "fallback") {
+    // require lazy (bukan di atas file) - chat/menu.js require dari sini (chat/replies.js) buat reply builder-nya,
+    // jadi require balik di ATAS file bakal circular. Sama pola-nya kayak menu.js's lazy require("./pendingState").
+    const { replyFallbackMenu } = require("./menu");
+    await interaction.update(safeReplyOptions(replyFallbackMenu()));
     return;
   }
+  await interaction.update(safeReplyOptions(replyRecapMenu()));
+}
 
-  // Tombol "📋 Lihat rekap" di jawaban jumlah live (buildLiveCountRow) - customId-nya
-  // "recap_nav:memberrecap:<username>". Nge-EDIT pesan yang sama jadi rekap member itu
-  // (tabel + Maju/Mundur/Tutup + dropdown tanggal + "Kembali ke jumlah live").
-  if (action === "memberrecap") {
-    const view = buildMemberRecapFromUsername(parts[2], interaction.channelId, interaction.user.id);
-    await interaction.update(safeReplyOptions(view));
-    return;
-  }
+// Tombol "📋 Lihat rekap" di jawaban jumlah live (buildLiveCountRow) - customId "recap_nav:memberrecap:<username>".
+// Nge-EDIT pesan yang sama jadi rekap member itu (tabel + Maju/Mundur/Tutup + dropdown tanggal + "Kembali ke jumlah live").
+async function navOpenMemberRecap(interaction, parts) {
+  const view = buildMemberRecapFromUsername(parts[2], interaction.channelId, interaction.user.id);
+  await interaction.update(safeReplyOptions(view));
+}
 
-  const rangeDays = decodeRecapRange(parts[2]);
+// "🔍 Cari member" - buka modal input nama; customId modal bawa range supaya hasil pencarian tahu tabel mana yang dicari.
+async function navSearchMember(interaction, parts) {
+  const modal = new ModalBuilder()
+    .setCustomId(`recap_search_modal:${parts[2]}`)
+    .setTitle("Cari member di rekap")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("member_name")
+          .setLabel("Nama member")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("misal: Nala")
+          .setRequired(true),
+      ),
+    );
+  await interaction.showModal(modal);
+}
 
-  if (action === "search") {
-    const modal = new ModalBuilder()
-      .setCustomId(`recap_search_modal:${parts[2]}`)
-      .setTitle("Cari member di rekap")
-      .addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("member_name")
-            .setLabel("Nama member")
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder("misal: Nala")
-            .setRequired(true),
-        ),
-      );
-    await interaction.showModal(modal);
-    return;
-  }
+// "🔢 Lompat halaman" - customId-nya bawa halaman SEKARANG (parts[3]) buat modal-nya, dipake sebagai fallback kalau
+// input yang diketik ternyata gak keparse (lihat handleRecapJumpModalSubmit). `origin` (parts[4], opsional - lihat
+// withOrigin) ikut ditempelin ke customId modal juga, biar tombol "🔙 Kembali" tetep nempel di tabel hasil lompat.
+async function navJumpPage(interaction, parts) {
+  const origin = parts[4] || "";
+  const modal = new ModalBuilder()
+    .setCustomId(withOrigin(`recap_jump_modal:${parts[2]}:${parts[3]}`, origin))
+    .setTitle("Lompat ke halaman")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("page_number")
+          .setLabel("Halaman berapa?")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Angka (misal "5"), atau "awal"/"akhir"')
+          .setRequired(true),
+      ),
+    );
+  await interaction.showModal(modal);
+}
 
-  // "🔢 Lompat halaman" (§10's thirty-third item) - customId-nya bawa
-  // halaman SEKARANG (parts[3]) buat modal-nya, dipake sebagai fallback kalau
-  // input yang diketik ternyata gak keparse (lihat handleRecapJumpModalSubmit).
-  // `origin` (parts[4], opsional - lihat withOrigin) ikut ditempelin ke
-  // customId modal-nya juga, biar tombol "🔙 Kembali" tetep nempel di tabel
-  // hasil lompat halaman, bukan ilang abis dipake sekali.
-  if (action === "jump") {
-    const origin = parts[4] || "";
-    const modal = new ModalBuilder()
-      .setCustomId(withOrigin(`recap_jump_modal:${parts[2]}:${parts[3]}`, origin))
-      .setTitle("Lompat ke halaman")
-      .addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("page_number")
-            .setLabel("Halaman berapa?")
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('Angka (misal "5"), atau "awal"/"akhir"')
-            .setRequired(true),
-        ),
-      );
-    await interaction.showModal(modal);
-    return;
-  }
-
-  // Sesi-nya di-ambil ULANG dari sumbernya (bukan snapshot lama) - sama
-  // alasannya kayak tryHandleRecapPageShortcut di atas, dan buildRecapTablePage
-  // sendiri udah nge-clamp target page ke totalPages TERKINI, jadi aman
-  // walau datanya berubah (mis. ada live yang baru aja selesai) sejak
-  // tombol ini pertama kali ditampilin.
+// "Maju ▶" / "◀ Mundur". Sesi-nya di-ambil ULANG dari sumbernya (bukan snapshot lama) - buildRecapTablePage sendiri
+// udah nge-clamp target page ke totalPages TERKINI, jadi aman walau datanya berubah (mis. ada live yang baru
+// selesai) sejak tombol ini pertama kali ditampilin. Aksi selain "next" diperlakukan sebagai "prev".
+async function navChangePage(interaction, parts, rangeDays) {
   const origin = parts[4] || "";
   const sessions = getSessionsForRange(rangeDays);
   const currentPage = Number(parts[3]);
-  const targetPage = action === "next" ? currentPage + 1 : currentPage - 1;
+  const targetPage = parts[1] === "next" ? currentPage + 1 : currentPage - 1;
   await interaction.update(
     safeReplyOptions(buildRecapPageBlock(sessions, targetPage, interaction.channelId, interaction.user.id, rangeDays, origin)),
   );
+}
+
+// Aksi yang TIDAK butuh range di parts[2].
+const RECAP_NAV_PLAIN_ACTIONS = new Map([
+  ["close", navClose],
+  ["closesearch", navCloseSearch],
+  ["keeprecap", navKeepOrDeleteRecap],
+  ["delrecap", navKeepOrDeleteRecap],
+  ["backto", navBackTo],
+  ["memberrecap", navOpenMemberRecap],
+]);
+// Aksi yang membawa range (parts[2]) - dan modal-nya sendiri. "next"/"prev" (dan aksi lain) jatuh ke navChangePage.
+const RECAP_NAV_MODAL_ACTIONS = new Map([
+  ["search", navSearchMember],
+  ["jump", navJumpPage],
+]);
+
+async function handleRecapNavButton(interaction) {
+  const parts = interaction.customId.split(":");
+
+  const plain = RECAP_NAV_PLAIN_ACTIONS.get(parts[1]);
+  if (plain) return plain(interaction, parts);
+
+  // Sisanya (search/jump/next/prev) wajib membawa range di parts[2]. customId yang rusak atau aksinya tidak dikenal
+  // (tombol di pesan lama, customId palsu) cukup di-acknowledge tanpa mengubah pesan - dulu jatuh ke TypeError tak
+  // sengaja di decodeRecapRange dan user melihat pesan error.
+  const modalAction = RECAP_NAV_MODAL_ACTIONS.get(parts[1]);
+  const isPaging = parts[1] === "next" || parts[1] === "prev";
+  if ((!modalAction && !isPaging) || !parts[2]) {
+    await interaction.deferUpdate();
+    return;
+  }
+
+  if (modalAction) return modalAction(interaction, parts);
+  return navChangePage(interaction, parts, decodeRecapRange(parts[2]));
 }
 
 // Balesan buat "cok rekap tanggal" DAN buat tombol "Rekap per tanggal"
@@ -2904,7 +2908,7 @@ module.exports = {
   replyLiveCountLeaderboard,
   replyLongestNotLiveLeaderboard,
   replySchedulePattern,
-  formatGifterSnapshotReply,
+
   replyGifterSnapshot,
   replyGifterSnapshotByUsername,
   replyTodayRecapSoFar,

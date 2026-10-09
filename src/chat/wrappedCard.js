@@ -195,4 +195,4 @@ async function replyWrapped(fragment) {
   };
 }
 
-module.exports = { replyWrapped, drawWrappedCard, buildServerCard, buildMemberCard, hoursText, WRAPPED_DAYS };
+module.exports = { replyWrapped, drawWrappedCard, buildServerCard, buildMemberCard, hoursText };

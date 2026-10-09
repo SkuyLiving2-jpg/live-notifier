@@ -119,4 +119,4 @@ function resolveAliasInFragment(fragment) {
     .join(" ");
 }
 
-module.exports = { loadAliases, saveAliases, addAlias, removeAlias, resolveAliasInFragment, validateAliasKey, ALIAS_MAX_LENGTH };
+module.exports = { loadAliases, addAlias, removeAlias, resolveAliasInFragment, validateAliasKey, ALIAS_MAX_LENGTH };

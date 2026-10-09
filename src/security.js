@@ -100,4 +100,4 @@ function requireSignedRequest(secret, handler) {
   };
 }
 
-module.exports = { signPayload, verifySignature, requireSignedRequest, SIGNATURE_TTL_MS, MAX_REQUEST_BODY_BYTES };
+module.exports = { signPayload, requireSignedRequest, MAX_REQUEST_BODY_BYTES };
