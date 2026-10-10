@@ -1,6 +1,7 @@
 const { postToWebhook } = require("./webhook");
 const { getPriorityConfig } = require("../priority");
 const { sendPriorityDM } = require("./priorityDm");
+const { deliveryKey, wasDelivered, markDelivered, forgetSession } = require("./deliveryLedger");
 const { loadSubscriptions } = require("../storage/subscriptions");
 const { getChannelWebhookFor } = require("../storage/channelRouting");
 const { getRoleIdFor } = require("../storage/memberRoles");
@@ -115,6 +116,9 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
   const parsedLiveAt = liveAt ? new Date(liveAt) : null;
   const timestamp = status === "start" && parsedLiveAt && !Number.isNaN(parsedLiveAt.getTime()) ? parsedLiveAt : new Date();
   const payload = buildNormalPayload(memberName, liveUrl, status, imageUrl, timestamp);
+  // Kunci sesi buat deliveryLedger.js: notif channel gabungan yang gagal DIULANG monitor.js tiap siklus,
+  // jadi pengiriman sampingan (DM, channel khusus) dicatat per sesi supaya cukup berhasil sekali.
+  const sessionKey = `${username}:${slug}:${status}`;
 
   // Channel KHUSUS member ini (fitur "Q2", storage/channelRouting.js). Dihitung
   // DULUAN karena nentuin role mana yang di-ping di channel mana (di bawah).
@@ -135,15 +139,19 @@ async function sendDiscordNotif(memberName, username, slug, status = "start", im
     const allSubscribers = getSubscribersFor(memberName, username);
     let subscriberIds = allSubscribers;
     try {
-      const { tag, dm } = splitByPreference(allSubscribers);
+      const { tag, dm: dmAll } = splitByPreference(allSubscribers);
       subscriberIds = tag;
+      // Yang sudah berhasil di-DM pada percobaan sebelumnya (notif channel gagal lalu diulang) tidak
+      // di-DM lagi, dan juga tidak di-tag: mereka sudah dapat kabarnya.
+      const dm = dmAll.filter((id) => !wasDelivered(deliveryKey(sessionKey, "dm", id)));
       if (dm.length > 0) {
         const dmPayload = {
           ...payload,
           content: `${payload.content}
 _(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di channel.)_`,
         };
-        const { failed } = await sendDirectMessages(dm, dmPayload);
+        const { sent, failed } = await sendDirectMessages(dm, dmPayload);
+        sent.forEach((id) => markDelivered(deliveryKey(sessionKey, "dm", id)));
         subscriberIds = [...tag, ...failed];
       }
     } catch (error) {
@@ -166,11 +174,16 @@ _(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di chan
   // - kegagalan kirim ke channel khusus (mis. webhook-nya keburu dihapus)
   // dianggep best-effort, sama kayak sendPriorityDM di bawah, BUKAN dianggep
   // "notif ini gagal" secara keseluruhan.
+  // Kalau channel gabungan gagal dan notif ini diulang, channel khusus yang SUDAH menerimanya tidak dikirimi lagi.
+  const dedicatedKey = deliveryKey(sessionKey, "dedicated");
+  const sendToDedicated = Boolean(dedicatedWebhookUrl) && !wasDelivered(dedicatedKey);
   const [terkirim] = await Promise.all([
     postToWebhook(sharedPayload),
-    dedicatedWebhookUrl
+    sendToDedicated
       ? postToWebhook(dedicatedPayload, `Gagal ngirim notif ke channel khusus ${memberName}:`, dedicatedWebhookUrl).then((ok) => {
-          if (ok) console.log(`Notif ${status} terkirim ke channel khusus ${memberName}`);
+          if (!ok) return;
+          markDelivered(dedicatedKey);
+          console.log(`Notif ${status} terkirim ke channel khusus ${memberName}`);
         })
       : null,
   ]);
@@ -183,10 +196,13 @@ _(Kamu pilih dikabari lewat DM - ketik "cok notif tag" buat balik ke tag di chan
   // walau DM-nya gagal, mis. pemilik nutup DM dari member server) - biar
   // activeLives/riwayat tetap ke-track normal, cuma sisi flashy-nya yang
   // sempet kelewat sekali.
-  if (priority) {
-    await sendPriorityDM(memberName, liveUrl, status, priority, imageUrl, timestamp);
+  const priorityKey = deliveryKey(sessionKey, "priority");
+  if (priority && !wasDelivered(priorityKey)) {
+    if (await sendPriorityDM(memberName, liveUrl, status, priority, imageUrl, timestamp)) markDelivered(priorityKey);
   }
 
+  // Notif channel berhasil -> tidak akan diulang lagi; bersihkan catatan sesi ini (lihat deliveryLedger.js).
+  if (terkirim) forgetSession(sessionKey);
   return terkirim;
 }
 

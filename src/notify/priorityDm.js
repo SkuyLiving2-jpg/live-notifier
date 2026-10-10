@@ -17,17 +17,21 @@ const { formatDuration, getDateWIB, getHourWIBOf, WEEKDAY_FORMATTER_WIB } = requ
 // "dipaksa" liat 3 member itu diistimewain. Versi flashy-nya dikirim
 // TERPISAH lewat DM pribadi ke pemilik doang (fungsi di bawah ini), gak
 // numpang tampil di channel sama sekali.
+// Balikin true HANYA kalau DM-nya beneran terkirim (pemanggil, notify/liveNotify.js, mencatatnya
+// supaya percobaan ulang notif channel tidak mengirim DM yang sama lagi - lihat deliveryLedger.js).
 async function sendPriorityDM(memberName, liveUrl, status, priority, imageUrl, timestamp) {
   const client = getDiscordClient();
-  if (!client || !PRIORITY_PING_USER_ID) return; // fitur bot token/owner ID belum diset - flashy DM dimatiin, channel tetap dapet notif biasa
+  if (!client || !PRIORITY_PING_USER_ID) return false; // fitur bot token/owner ID belum diset - flashy DM dimatiin, channel tetap dapet notif biasa
 
   const payload = buildPriorityPayload(memberName, liveUrl, status, priority, imageUrl, { includeMention: false, timestamp });
   try {
     const user = await client.users.fetch(PRIORITY_PING_USER_ID);
     await user.send(payload);
     console.log(`DM prioritas (${status}) terkirim untuk ${memberName}`);
+    return true;
   } catch (error) {
     console.error("Gagal ngirim DM prioritas (channel tetap dapet notif biasa, ini nggak fatal):", error.message);
+    return false;
   }
 }
 
