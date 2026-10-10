@@ -52,7 +52,12 @@ const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/;
 function isValidRoutingEntry(entry) {
   if (typeof entry === "string") return DISCORD_WEBHOOK_URL_RE.test(entry);
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
-  return typeof entry.webhookUrl === "string" && DISCORD_WEBHOOK_URL_RE.test(entry.webhookUrl) && DISCORD_SNOWFLAKE_RE.test(entry.channelId);
+  return (
+    typeof entry.webhookUrl === "string" &&
+    DISCORD_WEBHOOK_URL_RE.test(entry.webhookUrl) &&
+    typeof entry.channelId === "string" &&
+    DISCORD_SNOWFLAKE_RE.test(entry.channelId)
+  );
 }
 
 async function main() {

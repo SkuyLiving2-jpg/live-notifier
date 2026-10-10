@@ -219,6 +219,25 @@ test("POST /api/channel-routing - value bentuk object dengan channelId BUKAN sno
   }
 });
 
+test("POST /api/channel-routing - channelId ditulis sebagai ANGKA (tanpa tanda kutip) ditolak: presisi snowflake sudah rusak dan tidak akan pernah cocok", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    // String mentah (bukan JSON.stringify): 1234567890123456789 sebagai angka JSON jadi 1234567890123456800 saat di-parse.
+    const body = '{"jkt48_numericid":{"webhookUrl":"https://discord.com/api/webhooks/111/token-num","channelId":1234567890123456789}}';
+    const { timestamp, signature } = sign(body);
+    const res = await fetch(`http://127.0.0.1:${port}/api/channel-routing`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual((await res.json()).invalidUsernames, ["jkt48_numericid"]);
+  } finally {
+    server.close();
+  }
+});
+
 test("POST /api/channel-routing - value yang bukan webhook URL valid ditolak (400), gak nimpa data yang udah ada", async () => {
   const server = await startTestServer();
   try {

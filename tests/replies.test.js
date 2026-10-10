@@ -1695,6 +1695,27 @@ test("replyTopViewersForRange - bulan BERJALAN ikut gabung peak penonton dari se
   }
 });
 
+test("replyTopViewersForRange - dibatasi 10 baris + catatan sisanya (dulu tanpa batas: 45+ member melewati 2000 karakter dan ujungnya terpotong paksa)", () => {
+  const fresh = freshRepliesForRecapRange();
+  for (let i = 1; i <= 45; i++) {
+    const name = `Member${String(i).padStart(2, "0")} JKT48`;
+    fresh.recordLiveEnded(name, `jkt48_toplimit${i}`, new Date(Date.now() - 60_000), new Date(), 1000 + i);
+  }
+  const reply = fresh.replyTopViewersForRange(7, "minggu ini");
+  const rows = reply.split("\n").filter((l) => /\*\*Member\d+ JKT48\*\*/.test(l));
+  assert.equal(rows.length, 10);
+  assert.match(rows[0], /🥇 \*\*Member45 JKT48\*\*/, "puncak tertinggi di atas");
+  assert.match(rows[9], /\*\*Member36 JKT48\*\*/);
+  assert.match(reply, /_\.\.\.dan 35 member lainnya_/);
+  assert.ok(reply.length < 2000);
+});
+
+test("replyTopViewersForRange - persis 10 member -> tanpa catatan 'dan N lainnya'", () => {
+  const fresh = freshRepliesForRecapRange();
+  for (let i = 1; i <= 10; i++) fresh.recordLiveEnded(`Pas${i} JKT48`, `jkt48_pas${i}`, new Date(Date.now() - 60_000), new Date(), 500 + i);
+  assert.doesNotMatch(fresh.replyTopViewersForRange(7, "minggu ini"), /lainnya/);
+});
+
 test("replyTopViewersForRange - rentang yang kosong sama sekali -> pesan 'belum ada data', bukan throw", () => {
   const fresh = freshRepliesForRecapRange();
   assert.equal(fresh.replyTopViewersForRange(7, "minggu ini"), "Cok, belum ada data penonton buat minggu ini.");

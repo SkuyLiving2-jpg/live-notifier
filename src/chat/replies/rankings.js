@@ -52,6 +52,10 @@ function replyLongestLive() {
 // item) - `peakViewCount` sesi yang MASIH LIVE udah keisi (getOngoingSessionsForRecap
 // narik dari activeLives-nya langsung), jadi gak butuh perlakuan khusus
 // kayak durationMs di atas.
+// Dibatasi sama kayak papan peringkat lain di file ini (10): rentang panjang ("bulan ini") bisa memuat 40+ member,
+// dan balasan tanpa batas melewati 2000 karakter lalu dipotong paksa di tengah baris oleh safeReplyOptions.
+const TOP_VIEWERS_LIMIT = 10;
+
 function replyTopViewersForRange(rangeDays, label) {
   const sessions = getSessionsForRange(rangeDays);
   const peakByUsername = new Map();
@@ -68,12 +72,14 @@ function replyTopViewersForRange(rangeDays, label) {
 
   const sorted = [...peakByUsername.values()].sort((a, b) => b.peak - a.peak);
   const medals = ["🥇", "🥈", "🥉"];
-  const lines = sorted.map((entry, i) => {
+  const lines = sorted.slice(0, TOP_VIEWERS_LIMIT).map((entry, i) => {
     const medal = medals[i] || `${i + 1}.`;
     return `${medal} **${entry.name}** - 👁️ ${formatViewCount(entry.peak)} (puncak)`;
   });
+  const hidden = sorted.length - lines.length;
+  const moreNote = hidden > 0 ? `\n_...dan ${hidden} member lainnya_` : "";
 
-  return `👀 Paling rame ditonton ${label} (puncak penonton):\n${lines.join("\n")}`;
+  return `👀 Paling rame ditonton ${label} (puncak penonton):\n${lines.join("\n")}${moreNote}`;
 }
 
 function replyTopViewers() {
