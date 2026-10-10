@@ -97,7 +97,7 @@ test("getCompletedSessionsToday - sesi yang beneran selesai HARI INI (relatif ke
 // getCompletedSessionsForDate dites LANGSUNG (dulu getCompletedSessionsToday
 // nulis filter-nya sendiri, sekarang getCompletedSessionsToday cuma delegasi
 // ke sini pake getTodayWIB() - lihat dailyLog.js) buat rekap per tanggal
-// (chat/replies.js's "cok rekap tanggal") - harus bisa nge-query tanggal
+// (chat/replies/recap/views.js's "cok rekap tanggal") - harus bisa nge-query tanggal
 // SEMBARANG (bukan cuma hari ini), termasuk tanggal yang gak ada sesinya
 // sama sekali (array kosong, BUKAN error/undefined).
 test("getCompletedSessionsForDate - nge-query tanggal SEMBARANG (bukan cuma hari ini), dan tanggal kosong balikin array kosong", () => {
@@ -174,7 +174,7 @@ test("getCompletedSessionsSince - filter berdasarkan jendela waktu (dipake buat 
 
 // getCompletedSessionsForMonth/getDistinctSessionMonths dites LANGSUNG
 // (§10's thirty-sixth item, dasar buat "cok rekap september"/"cok rekap
-// bulan" polos di chat/replies.js) - mirip getCompletedSessionsForDate/
+// bulan" polos di chat/replies/) - mirip getCompletedSessionsForDate/
 // getEarliestSessionDate di atas tapi granularitasnya BULAN.
 test("getCompletedSessionsForMonth - nge-query bulan SEMBARANG, dan gak nyangkut ke bulan lain yang prefix-nya mirip", () => {
   const { recordLiveEnded, getCompletedSessionsForMonth } = freshDailyLog();

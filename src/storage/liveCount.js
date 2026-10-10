@@ -126,7 +126,7 @@ function searchLiveCountByNameFragment(fragment) {
 // dikeluarin dulu" itu butuh activeLives.js, dan storage/ modules sengaja
 // gak saling require satu sama lain (lihat komen di schedulePattern.js soal
 // alasan yang sama) - jadi filter + pembatesan jumlah itu tanggung jawab
-// pemanggil (chat/replies.js's replyLongestNotLiveLeaderboard), sama pola
+// pemanggil (chat/replies/rankings.js's replyLongestNotLiveLeaderboard), sama pola
 // pembagian tanggung jawabnya kayak getSessionsForRange yang gabungin
 // beberapa sumber storage di layer chat, bukan di layer storage.
 function getLongestNotLiveLeaderboard() {

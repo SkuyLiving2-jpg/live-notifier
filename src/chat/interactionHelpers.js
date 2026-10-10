@@ -2,7 +2,7 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
 // Helper bersama buat tombol "Tutup" yang beneran NGEHAPUS pesannya (bukan
 // diedit jadi teks dismiss kayak "Oke, dibatalin."/"Terima kasih...") -
-// dipake bareng-bareng oleh chat/menu.js, chat/replies.js, DAN
+// dipake bareng-bareng oleh chat/menu.js, chat/replies/, DAN
 // chat/memberChannelReply.js (§10's thirty-fifth item). Sebelum ini, ada 2
 // logika "tutup" beda yang nyebar di 3 file: sebagian nge-edit jadi teks
 // dismiss + components:[] (masih nyisain 1 pesan sebagai jejak), sebagian
@@ -12,12 +12,12 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 //
 // Modul TERPISAH (bukan taro fungsi ini di salah satu dari 3 file itu terus
 // di-export dari sana) SENGAJA - menu.js sendiri udah require("./replies")
-// di atasnya, jadi kalau fungsi ini ditaro di menu.js lalu replies.js
+// di atasnya, jadi kalau fungsi ini ditaro di menu.js lalu replies/
 // require balik ke menu.js buat pake fungsi ini, itu numbuhin circular
 // require ASLI (persis kelas masalah yang udah kejadian & didokumentasiin
 // di menu.js's handleFallbackMenuButton's "delete" branch, soal kenapa
 // clearMenuShown dari pendingState.js di-require LAZY di situ). Modul BARU
-// yang berdiri sendiri (gak require apapun dari menu.js/replies.js/
+// yang berdiri sendiri (gak require apapun dari menu.js/replies//
 // memberChannelReply.js, dan gak ada satupun dari ketiganya yang saling
 // require satu sama lain buat fungsi ini) bisa di-require SEMUA ARAH tanpa
 // resiko siklus sama sekali.

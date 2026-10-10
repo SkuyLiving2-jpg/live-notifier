@@ -336,21 +336,35 @@ Dua pelajaran kecil dari bug yang ditemukan:
 - **Input pengguna jangan dipakai langsung sebagai kunci objek biasa.** `obj[input]` juga membaca `constructor`, `__proto__`, `toString` dari `Object.prototype`. Pakai `Object.prototype.hasOwnProperty.call(obj, key)`, `Map`, atau `Object.create(null)`. Pola ini sudah benar di `aliases.js` dan `guessGame.js`, dan sekarang juga di router.
 - **Tes yang baik harus terbukti bisa gagal.** Tes untuk bug itu dijalankan terhadap kode lama yang sengaja dikembalikan, dan benar-benar gagal. Tes yang tidak pernah terlihat gagal belum membuktikan apa-apa.
 
+### 3.11 Memecah modul besar: kelompokkan per alasan berubah, dan jaga graf tanpa siklus
+
+File `chat/replies.js` tumbuh menjadi hampir 3.000 baris dengan 165 deklarasi. Ukuran itu sendiri bukan dosa; masalahnya apa yang terjadi di dalamnya: orang yang ingin tahu "bagaimana rekap per member bekerja" harus menyaring file sepuluh kali lebih besar dari jawabannya, setiap tes memuat semuanya, dan semua fitur berbagi satu namespace.
+
+Cara memecahnya supaya hasilnya rapi, bukan sekadar lebih banyak file:
+
+1. **Kelompokkan berdasarkan alasan berubah** (_single responsibility_), bukan berdasarkan jumlah baris. Hasilnya: `recap/` (semua tentang rekap: tabel, parsing tanggal, data sesi, komponen, navigasi, menu, rekap member, tampilan), lalu modul per topik lain (`compare`, `rankings`, `schedule`, `subscribe`, dan seterusnya). Kalau aturan tabel rekap berubah, yang disentuh `recap/table.js`, bukan file raksasa.
+2. **Hitung dulu ketergantungannya, baru potong.** Untuk setiap fungsi dihitung fungsi lain yang dipakainya, lalu dibuat graf antar-modul. Rancangan pertama punya **dua siklus** (modul A butuh B dan B butuh A). Siklus diselesaikan dengan memindahkan yang dipakai bersama ke lapisan bawah: fungsi pencarian member dipakai hampir semua fitur, maka dipisahkan menjadi `memberLookup.js`; layar statis menu rekap dipakai tampilan dan penangan tombol, menjadi `recap/screens.js`. Cara ini lebih baik daripada `require` di dalam fungsi, karena arah ketergantungannya jadi jelas dan satu arah.
+3. **Satu pintu masuk publik** (_facade_). `index.js` meneruskan 84 nama yang sama seperti sebelumnya, jadi 20-an pemanggil dan ratusan tes tidak berubah sama sekali. Sebaliknya, modul di dalam folder dilarang require `index.js`; kalau tidak, siklus tersembunyi kembali.
+4. **Pindahkan kode, jangan tulis ulang.** Teks tiap fungsi disalin apa adanya oleh skrip; yang dibangun ulang hanya baris import/export per modul. Kesalahan mengetik tidak mungkin terjadi pada kode yang tidak diketik ulang.
+5. **Buktikan dengan golden master** (bagian 3.10): 4.215 jawaban chat, 689 interaksi tombol, dan skenario pemantauan 16 siklus identik byte-per-byte, dan 879 tes lulus.
+
+Satu hal yang diajarkan tes: dua tes memuat ulang `replies` dengan menghapus cache `require` agar mendapat data bersih. Setelah dipecah, 27 tes gagal karena modul di dalam folder masih memegang referensi data lama. Bug-nya ada di _asumsi tes_ (satu modul = satu cache), bukan di bot. Perbaikannya satu fungsi bantu bersama. Pelajaran: struktur modul adalah kontrak tak tertulis bagi tes yang mengutak-atik internal.
+
 ---
 
 ## 4. Trade-off dan keterbatasan yang jujur
 
 Desain yang baik bukan desain tanpa kelemahan. Ini yang sengaja diterima:
 
-| Pilihan                                      | Keuntungan                                         | Harga yang dibayar                                                                                                                              |
-| -------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Penyimpanan file JSON                        | Tanpa database, murah, mudah di-backup             | Tidak ada transaksi, tidak ada query, penulisan `writeFileSync` memblokir sebentar                                                              |
-| Cache di memori                              | Cepat, tanpa baca ulang                            | Asumsi **satu proses saja**. Dua instance akan saling menimpa dan notif ganda                                                                   |
-| Polling 20 detik                             | Satu-satunya cara dengan API IDN                   | Notif bisa terlambat hingga ~20 detik; ada beban request tetap                                                                                  |
-| At-least-once                                | Notif tidak hilang                                 | Duplikat mungkin terjadi pada kasus langka                                                                                                      |
-| State percakapan di `Map` memori             | Sederhana                                          | Hilang saat restart (menu "balas angka" gugur, tidak merusak data)                                                                              |
-| Pola jadwal dari 10 sesi                     | Sederhana, mudah dijelaskan                        | Bisa meleset kalau pola live berubah; sengaja diberi ambang keyakinan                                                                           |
-| `replies.js` berisi ~2.800 baris, 118 fungsi | Semua pembuat balasan di satu tempat, mudah dicari | Terlalu besar: kandidat dipecah per fitur (rekap, statistik, langganan). Belum dikerjakan karena risikonya lebih besar dari manfaatnya sekarang |
+| Pilihan                                                                | Keuntungan                                                             | Harga yang dibayar                                                                                                                                  |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Penyimpanan file JSON                                                  | Tanpa database, murah, mudah di-backup                                 | Tidak ada transaksi, tidak ada query, penulisan `writeFileSync` memblokir sebentar                                                                  |
+| Cache di memori                                                        | Cepat, tanpa baca ulang                                                | Asumsi **satu proses saja**. Dua instance akan saling menimpa dan notif ganda                                                                       |
+| Polling 20 detik                                                       | Satu-satunya cara dengan API IDN                                       | Notif bisa terlambat hingga ~20 detik; ada beban request tetap                                                                                      |
+| At-least-once                                                          | Notif tidak hilang                                                     | Duplikat mungkin terjadi pada kasus langka                                                                                                          |
+| State percakapan di `Map` memori                                       | Sederhana                                                              | Hilang saat restart (menu "balas angka" gugur, tidak merusak data)                                                                                  |
+| Pola jadwal dari 10 sesi                                               | Sederhana, mudah dijelaskan                                            | Bisa meleset kalau pola live berubah; sengaja diberi ambang keyakinan                                                                               |
+| `chat/replies/` punya 20 modul topik dan satu pintu masuk (`index.js`) | Tiap topik di file kecil; pemanggil tetap cukup `require("./replies")` | Satu lapisan tambahan (`index.js`) yang harus dirawat daftar ekspornya; modul di dalam folder wajib saling require langsung, bukan lewat `index.js` |
 
 **Kapan perlu pindah ke database:** bila datanya perlu di-query lintas entitas (misalnya "semua sesi di atas 5.000 penonton bulan lalu"), bila ada lebih dari satu instance, atau bila file data melewati puluhan MB. Untuk skala sekarang (puluhan member, ratusan sesi), file JSON adalah pilihan yang tepat. Memakai PostgreSQL sejak awal akan menambah biaya dan kerumitan tanpa manfaat.
 

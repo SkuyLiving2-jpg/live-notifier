@@ -53,7 +53,7 @@ const INTERACTION_ROUTES = [
   { kind: "modal", prefix: "recap_jump_modal:", handler: handleRecapJumpModalSubmit },
   { kind: "button", prefix: "recap_menu:", handler: handleRecapMenuButton },
   // startsWith tanpa ":" (bukan exact) - BUG YANG DILAPORIN OWNER (tombol "🔙 Kembali",
-  // lihat replies.js's buildBackRow/withOrigin): customId dropdown ini bisa bawa origin
+  // lihat replies/recap/components.js's buildBackRow/withOrigin): customId dropdown ini bisa bawa origin
   // tambahan ("recap_date_select:recapmenu"), bukan cuma "recap_date_select" polos.
   { kind: "select", prefix: "recap_date_select", handler: handleRecapDateSelect },
   { kind: "select", prefix: "recap_month_select", handler: handleRecapMonthSelect },

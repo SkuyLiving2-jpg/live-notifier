@@ -1,6 +1,6 @@
 const { getTimeOfDayBucket, getHourWIBOf, WEEKDAY_FORMATTER_WIB } = require("./utils");
 
-// Diekstrak dari chat/replies.js's replySchedulePattern (§10's forty-third
+// Diekstrak dari chat/replies/schedule.js's replySchedulePattern (§10's forty-third
 // item) - matematika "pola jam/hari paling sering muncul dari riwayat durasi
 // live" ini dibutuhin di DUA tempat sekarang: replySchedulePattern ("cok
 // jadwal <nama>", jawaban ATAS PERTANYAAN user) dan notify/priorityDm.js's

@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { clearRepliesCache } = require("./helpers/clearRepliesCache");
 const { getTodayWIB, getDateWIB, WEEKDAY_FORMATTER_WIB } = require("../src/utils");
 const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { activeLives } = require("../src/storage/activeLives");
@@ -78,17 +79,16 @@ const {
 // test above accumulates sessions into it too - so replyRecapRange's own
 // tests (which assert on exact totals, not just "does this one username
 // show up") need a truly clean store, not just unique usernames. Clears
-// BOTH storage/dailyLog's AND chat/replies's require cache (replies.js
-// captures its own reference to dailyLog's functions at require-time, so
-// resetting only dailyLog's cache wouldn't be enough - replies.js would
-// still be holding the stale one) and re-requires both fresh.
+// BOTH storage/dailyLog's AND every chat/replies/* module's require cache
+// (those modules capture their own reference to dailyLog's functions at
+// require-time, so resetting only dailyLog's cache wouldn't be enough - they
+// would still be holding the stale one) and re-requires both fresh.
 const DAILYLOG_MODULE_PATH = require.resolve("../src/storage/dailyLog");
-const REPLIES_MODULE_PATH = require.resolve("../src/chat/replies");
 const DAILY_LOG_FILE = path.join(tempCacheDir, "daily-log.json");
 
 function freshRepliesForRecapRange() {
   delete require.cache[DAILYLOG_MODULE_PATH];
-  delete require.cache[REPLIES_MODULE_PATH];
+  clearRepliesCache();
   try {
     fs.unlinkSync(DAILY_LOG_FILE);
   } catch {
@@ -140,7 +140,7 @@ function fakeInteraction({
   const deferUpdateCalls = [];
   // Kalau `message` dikasih (buat test yang butuh, mis. "delrecap"/"keeprecap"
   // yang baca .id/.content-nya, ATAU "close" yang sekarang manggil
-  // .delete()-nya lewat deleteInteractionMessage - lihat replies.js), auto
+  // .delete()-nya lewat deleteInteractionMessage - lihat replies/), auto
   // ditempelin .delete() yang nyatet ke deletedMessageIds yang SAMA kayak
   // channel.messages.delete di bawah, biar satu assertion array-nya nyakup
   // dua-duanya. Kalau `message` GAK dikasih (default undefined), TETEP
@@ -155,7 +155,7 @@ function fakeInteraction({
     values,
     message: finalMessage,
     // channel.messages.delete(id) - satu-satunya method discord.js yang
-    // dipake handleRecapNavButton's "delrecap" (lihat replies.js), gak
+    // dipake handleRecapNavButton's "delrecap" (lihat replies/), gak
     // perlu mock library beneran.
     channel: { messages: { delete: async (id) => deletedMessageIds.push(id) } },
     reply: async (payload) => calls.push(payload),
@@ -1971,7 +1971,7 @@ test("handleRecapMenuButton - nge-clear pendingRecapPage SEBELUM render, biar re
 // fallback-nya "Rekap hari ini" (opsi 8), ATAU dari salah satu tombol menu
 // 5-opsi rekap (replyRecapMenu), gak punya jalan balik ke menu asalnya -
 // cuma Maju/Mundur/Tutup/Cari member/Lompat halaman. Lihat komen panjang di
-// src/chat/replies.js's buildBackRow/withOrigin buat desain lengkapnya. ====
+// src/chat/replies/recap/components.js's buildBackRow/withOrigin buat desain lengkapnya. ====
 test("buildRecapPageBlock - origin kosong (default, ngetik langsung) -> TETEP GAK ADA tombol 'Kembali' sama sekali (perilaku lama gak kesentuh)", () => {
   const sessions = [{ name: "Norigin", username: "jkt48_norigin", startedAtUnix: 1000, endedAtUnix: 1060, durationMs: 60_000, peakViewCount: null }];
   const block = buildRecapPageBlock(sessions, 0, "c-norigin", "u-norigin");

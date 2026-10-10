@@ -16,7 +16,7 @@ const { getTodayWIB, getDateWIB } = require("../utils");
 // live" - file ini CUMA nyimpen sesi yang UDAH SELESAI, gak pernah lagi
 // nyimpen apapun yang "terbuka". Pemanggil yang butuh gambaran LENGKAP hari
 // ini (lagi live + udah selesai) gabungin sendiri di layer-nya (lihat
-// chat/replies.js) dari getCompletedSessionsToday() di sini + activeLives.
+// chat/replies/) dari getCompletedSessionsToday() di sini + activeLives.
 const DAILY_LOG_FILE = path.join(CACHE_DIR, "daily-log.json");
 const store = createJsonStore(DAILY_LOG_FILE, { sessions: [], recapSentDate: null }, { errorLabel: "log harian" });
 
@@ -151,7 +151,7 @@ function saveDailyLog(log) {
 
 // Sesi yang UDAH SELESAI dan tanggal WIB pas dia SELESAI itu jatuh di
 // `dateWIB` ("YYYY-MM-DD") - dasar buat getCompletedSessionsToday() di bawah
-// (today = getTodayWIB()) DAN buat rekap "per tanggal" (chat/replies.js's
+// (today = getTodayWIB()) DAN buat rekap "per tanggal" (chat/replies/recap/sessions.js's
 // getCompletedSessionsForDate re-export), yang butuh nge-query tanggal
 // SEMBARANG, bukan cuma hari ini.
 function getCompletedSessionsForDate(dateWIB) {
@@ -162,7 +162,7 @@ function getCompletedSessionsForDate(dateWIB) {
 // dipake buat semua query "hari ini" (rekap, paling lama, paling rame).
 // Sesi yang MASIH LIVE SEKARANG itu tanggung jawab activeLives (lihat
 // storage/activeLives.js), BUKAN di sini - pemanggil yang butuh gabungan
-// keduanya gabungin sendiri di layernya (lihat chat/replies.js).
+// keduanya gabungin sendiri di layernya (lihat chat/replies/).
 function getCompletedSessionsToday() {
   return getCompletedSessionsForDate(getTodayWIB());
 }
@@ -179,7 +179,7 @@ function getCompletedSessionsSince(daysBack) {
 }
 
 // Sesi yang UDAH SELESAI dan tanggal WIB pas dia SELESAI itu jatuh di bulan
-// `monthWIB` ("YYYY-MM") - dasar buat rekap PER BULAN (chat/replies.js's
+// `monthWIB` ("YYYY-MM") - dasar buat rekap PER BULAN (chat/replies/recap/views.js's
 // replyRecapMonth), mirip getCompletedSessionsForDate di atas tapi
 // granularitasnya bulan, bukan tanggal spesifik.
 function getCompletedSessionsForMonth(monthWIB) {
@@ -187,7 +187,7 @@ function getCompletedSessionsForMonth(monthWIB) {
 }
 
 // Daftar bulan ("YYYY-MM") yang PUNYA sesi selesai di arsip, urut dari yang
-// paling baru - dasar buat dropdown "cok rekap bulan" polos (chat/replies.js's
+// paling baru - dasar buat dropdown "cok rekap bulan" polos (chat/replies/recap/views.js's
 // replyRecapMonthGeneric) pas user gak nyebut bulan/tahun spesifik sama sekali.
 function getDistinctSessionMonths() {
   const months = new Set(loadDailyLog().sessions.map((s) => getDateWIB(new Date(s.endedAtUnix * 1000)).slice(0, 7)));
@@ -195,7 +195,7 @@ function getDistinctSessionMonths() {
 }
 
 // Tanggal WIB (YYYY-MM-DD) sesi TERTUA yang ada di arsip SAAT INI - dipake
-// chat/replies.js's replyRecapRange buat ngasih tau kalau arsipnya belum
+// chat/replies/recap/views.js's replyRecapRange buat ngasih tau kalau arsipnya belum
 // nyakup rentang yang diminta secara penuh (mis. arsip baru mulai kecatet
 // H-3, tapi user nanya rekap 7 hari) - biar recap-nya jujur ngasih tau
 // KENAPA rentangnya keliatan pendek, bukan diem-diem keliatan kayak bug.

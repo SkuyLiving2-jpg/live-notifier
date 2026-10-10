@@ -162,7 +162,7 @@ function isSundayWIB(now = new Date()) {
 
 // Hari TERAKHIR di bulan kalender WIB - dicek dengan "besok" udah beda bulan
 // apa belum, bukan tabel jumlah-hari-per-bulan manual (otomatis bener buat
-// tahun kabisat juga, sama trik yang dipake chat/replies.js's daysInMonth,
+// tahun kabisat juga, sama trik yang dipake chat/replies/recap/dateParsing.js's daysInMonth,
 // cuma dari arah sebaliknya).
 function isLastDayOfMonthWIB(now = new Date()) {
   const todayMonth = getDateWIB(now).slice(0, 7);
@@ -251,7 +251,7 @@ function buildScheduleDigestPayload(candidates, todayWeekdayName) {
 // di atas (§10's thirty-ninth item) - biar gerbang jam/dedup-nya bisa dites
 // deterministik.
 // Kandidat "kemungkinan live hari ini" - dipake digest otomatis pagi hari DAN
-// jawaban on-demand "cok jadwal hari ini" (chat/replies.js), biar dua-duanya
+// jawaban on-demand "cok jadwal hari ini" (chat/replies/), biar dua-duanya
 // selalu sepakat soal siapa yang masuk daftar.
 function getScheduleDigestCandidates(now = new Date()) {
   const todayWeekdayName = WEEKDAY_FORMATTER_WIB.format(now);
@@ -402,7 +402,7 @@ async function maybeSendPublicHeadsUpAlerts(now = new Date()) {
 // monitor.js pas sebuah live SELESAI (titik yang SAMA kayak maybeAnnounceNewRecord
 // di atas, cuma buat sesi yang durasinya udah lolos validasi plausible),
 // jadi tanggal hari ini (WIB) UDAH pasti masuk arsip completed di titik ini -
-// beda dari chat/replies.js's replyStreak yang ON-DEMAND (bisa dipanggil
+// beda dari chat/replies/memberStats.js's replyStreak yang ON-DEMAND (bisa dipanggil
 // KAPAN AJA termasuk pas membernya LAGI live, belum selesai, makanya versi
 // itu perlu isLiveNow, versi ini enggak).
 async function sendStreakMilestoneAlert(memberName, streak) {

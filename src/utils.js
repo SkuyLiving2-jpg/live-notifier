@@ -31,7 +31,7 @@ function formatClockWIB(date) {
 // biar bisa dipake buat ngecek tanggal WIB dari waktu LAIN, bukan cuma
 // sekarang - misalnya buat bandingin tanggal mulai sebuah sesi live ke
 // tanggal "hari ini", pas sesi itu mulai H-1 tapi baru kecatet/selesai
-// setelah lewat tengah malam WIB (lihat chat/replies.js's buildRecapTablePage).
+// setelah lewat tengah malam WIB (lihat chat/replies/recap/table.js's buildRecapTablePage).
 function getDateWIB(date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(date);
 }
@@ -50,7 +50,7 @@ function formatShortDateWIB(date) {
 // "13 September 2026" dari sebuah Date (WIB) - versi PANJANG/gampang dibaca,
 // beda dari formatShortDateWIB ("13/09") yang emang didesain buat nempel
 // ringkes di sebelah jam. Dipake buat label opsi dropdown "rekap per
-// tanggal" (chat/replies.js) dan buat nyebut tanggal yang dipilih di teks
+// tanggal" (chat/replies/) dan buat nyebut tanggal yang dipilih di teks
 // balesannya - orang milih dari dropdown ngeliat "13 September 2026", jadi
 // balesannya juga harus nyebut tanggal yang sama persis biar nggak keliatan
 // kayak nunjuk tanggal yang beda.
@@ -59,7 +59,7 @@ function formatLongDateWIB(date) {
 }
 
 // "September 2026" dari sebuah string bulan "YYYY-MM" - dipake buat rekap
-// PER BULAN (chat/replies.js's replyRecapMonth dkk), sama tujuannya kayak
+// PER BULAN (chat/replies/recap/views.js's replyRecapMonth dkk), sama tujuannya kayak
 // formatLongDateWIB tapi granularitasnya BULAN, bukan tanggal spesifik.
 // Dianchor ke tanggal 1 bulan itu lewat Date.UTC (bukan WIB) - kita cuma
 // butuh bulan+tahunnya doang buat label ini, jadi zona waktu gak ngaruh sama
@@ -165,7 +165,7 @@ function pickRandom(list) {
 const YES_PATTERN = /^(y|ya|iya|iyah|iy|yes|yup|yoi|oke|ok|gas|mau|boleh)$/i;
 const NO_PATTERN = /^(n|no|ga|gak|kaga|nggak|enggak|tidak|males|ga\s*mau|nggak\s*mau)$/i;
 
-// Khusus buat navigasi MAJU/MUNDUR di halaman rekap (chat/replies.js's
+// Khusus buat navigasi MAJU/MUNDUR di halaman rekap (chat/replies/recap/navigation.js's
 // tryHandleRecapPageShortcut) - dipisah dari YES_PATTERN/NO_PATTERN (yang
 // tetep dipake apa adanya di flow konfirmasi LAIN, mis. watch-confirm di
 // chat/menu.js) biar gak nabrak arti "y"/"n" di situ ("mau nonton?"/"gak
@@ -179,7 +179,7 @@ const PREV_PAGE_PATTERN = /^(mundur|balik|kembali|sebelumnya|prev|previous|back)
 // chat/menu.js - nyegah pesan bot ke-abuse buat mention massal. Banyak
 // balesan bot nge-echo teks ketikan user MENTAH ke dalam content (nama
 // member yang gak ketemu, keyword subscribe/prioritas, dst - lihat
-// chat/replies.js's replyMemberNotFound/replyMemberStats/replyLiveCount/
+// chat/replies/info.js's replyMemberNotFound/replyMemberStats/replyLiveCount/
 // replyGifterSnapshot/replySchedulePattern/replyMySubscriptions dst), dan
 // SIAPA AJA di channel (bukan cuma owner - mis. "cok ingetin <apa aja>" gak
 // di-gate) bisa ngetik apapun sebagai argumennya. Tanpa allowedMentions,

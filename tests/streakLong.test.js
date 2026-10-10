@@ -5,14 +5,16 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { clearRepliesCache } = require("./helpers/clearRepliesCache");
 const { computeStreakStartDate, computeCurrentStreak, shiftDateWIB, STREAK_MILESTONES } = require("../src/streakMath");
 const { getTodayWIB, getDateWIB } = require("../src/utils");
 
 const DAY = 24 * 60 * 60 * 1000;
-const RELOAD = ["../src/storage/dailyLog", "../src/notify/publicAlerts", "../src/chat/replies"].map((p) => require.resolve(p));
+const RELOAD = ["../src/storage/dailyLog", "../src/notify/publicAlerts"].map((p) => require.resolve(p));
 
 function fresh() {
   RELOAD.forEach((p) => delete require.cache[p]);
+  clearRepliesCache();
   fs.rmSync(path.join(tempCacheDir, "daily-log.json"), { force: true });
   return {
     log: require("../src/storage/dailyLog"),

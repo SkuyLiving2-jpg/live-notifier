@@ -5,13 +5,13 @@
 // di command picker "/" tanpa perlu apal syntax "cok ...").
 //
 // PRINSIP DESAIN UTAMA: setiap handler slash command di sini SEDAPAT
-// MUNGKIN cuma manggil fungsi reply/handle yang UDAH ADA di replies.js
+// MUNGKIN cuma manggil fungsi reply/handle yang UDAH ADA di replies/
 // (yang sama persis dipake command teks, dan udah puluhan test-nya) -
 // hampir gak ada logic BARU yang ditulis di sini, cuma "ekstrak opsi dari
 // interaction, panggil fungsi yang sama, relay hasilnya". Ini KEPUTUSAN
 // KEAMANAN eksplisit (owner nanya "apakah berbahaya"), bukan cuma soal
 // males nulis ulang: command yang khusus-owner (tambah/hapus alias/prioritas)
-// ngecek `isOwner()` DI DALAM fungsi replies.js yang dipanggil, jadi gak ada
+// ngecek `isOwner()` DI DALAM fungsi replies/ yang dipanggil, jadi gak ada
 // cara buat lupa masang gate itu di sisi slash command - gate-nya bukan
 // duplikasi yang bisa divergen, dia struktural nempel di fungsi yang sama
 // yang udah dipercaya buat jalur teks.

@@ -622,7 +622,7 @@ test("status - dispatch ke replyBotStatus", async () => {
 // replyHelp() balikin OBJECT {content, embeds} sekarang (bukan string polos
 // lagi - content-nya doang dulu 2900-an karakter, ngelewatin batas 2000
 // karakter Discord, itu penyebab bug "tombol Fitur lainnya kok kayak rusak"
-// yang dilaporin owner, lihat replies.js's replyHelp). buildChatReply cuma
+// yang dilaporin owner, lihat replies/info.js's replyHelp). buildChatReply cuma
 // nerusin apa adanya (safeReplyOptions di router.js's messageCreate nerima
 // object), jadi dites di sini bentuknya, bukan lewat assert.match ke string.
 test("help/bantuan - dispatch ke replyHelp", async () => {

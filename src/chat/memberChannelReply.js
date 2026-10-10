@@ -49,7 +49,7 @@ function replyMemberChannelFallback(username) {
 
 // Opsi 1: "udah live hari ini?" - gabungan sesi yang UDAH SELESAI hari ini
 // (daily log) + yang MASIH LIVE SEKARANG (activeLives), sama pola gabungnya
-// kayak replies.js's replyLongestLive/getTodaySessionsForRecap tapi
+// kayak replies/rankings.js's replyLongestLive/getTodaySessionsForRecap tapi
 // difilter ke SATU username doang.
 function replyMemberLiveToday(username) {
   const name = resolveMemberDisplayName(username);
@@ -88,7 +88,7 @@ function replyMemberLiveCount(username) {
 
 // Klik "y" abis replyMemberLiveCount - tabel rekap sesi yang ke-track
 // (daily-log.json, cuma nyimpen 35 hari terakhir - lihat storage/dailyLog.js)
-// difilter ke SATU member doang. Reuse buildRecapTablePage dari replies.js
+// difilter ke SATU member doang. Reuse buildRecapTablePage dari replies/
 // (sama fungsi yang dipake "cok rekap") biar formatnya konsisten, cuma
 // nunjukkin HALAMAN PERTAMA doang (gak ada navigasi halaman kayak rekap
 // biasa) - sengaja diringkes sesuai instruksi "lebih simple", riwayat 1
@@ -150,7 +150,7 @@ const THANKS_ENJOY_REPLY = { content: "Oke, terima kasih ya, semoga enjoy! 🎉"
 // - channel khusus member (fitur per-member dedicated channel) numpuk 1
 // pesan baru TIAP KALI ada yang mencet tombol apapun di sini, persis keluhan
 // yang udah dibenerin duluan buat menu 9-opsi (chat/menu.js's
-// handleFallbackMenuButton) dan tabel rekap (chat/replies.js's
+// handleFallbackMenuButton) dan tabel rekap (chat/replies/recap/navigation.js's
 // handleRecapNavButton), cuma file ini kelewatan pas itu dibenerin. Sekarang
 // SEMUA cabang pake interaction.update() (EDIT pesan yang tombolnya nempel),
 // sama polanya kayak dua file itu:

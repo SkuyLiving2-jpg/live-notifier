@@ -10,7 +10,7 @@ const { createJsonStore } = require("./jsonStore");
 // membernya jelas ada. Bukan hardcode ditebak sendiri di kode (nama panggung
 // fans itu FAKTA soal orang beneran, salah tebak lebih buruk daripada gak
 // ada) - kosong by default, diisi OWNER lewat chat ("cok tambah alias <alias>
-// = <nama asli>", lihat chat/replies.js's handleAddAlias), sama pola
+// = <nama asli>", lihat chat/replies/priorityAlias.js's handleAddAlias), sama pola
 // owner-managed-nya kayak storage/priorityStore.js.
 //
 // Keyed persis { "<alias lowercase>": "<nama asli/fragment lowercase>" } -
@@ -43,7 +43,7 @@ function saveAliases(map) {
 
 // Alias/target dinormalisasi SEKALI di sini (lowercase+trim) - satu-satunya
 // tempat yang nulis ke file ini (handleAddAlias/handleRemoveAlias di
-// chat/replies.js), jadi gak perlu diulang normalisasi di pemanggil.
+// chat/replies/), jadi gak perlu diulang normalisasi di pemanggil.
 // Lookup alias HARUS pakai hasOwnProperty - kata biasa kayak "constructor" atau
 // "toString" di kalimat user dulu ngambil fungsi bawaan Object ("in"/[] ikut
 // nelusur prototype) dan ketulis "function Object() { [native code] }" ke nama

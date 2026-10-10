@@ -74,7 +74,7 @@ async function fetchAllLivestreams() {
 // Profil publik SATU member by username - dipake buat narik foto profilnya
 // (`avatar`, field ini beneran ada di skema IDN, dicek langsung lewat
 // introspeksi manual soalnya gak didokumentasiin di mana pun) buat fitur
-// "cok bandingin <member> vs <member>" (chat/replies.js's replyCompareMembers,
+// "cok bandingin <member> vs <member>" (chat/replies/compare.js's replyCompareMembers,
 // §10's forty-second item) - beda dari fetchAllLivestreams yang narik
 // SEMUA yang lagi live, ini query `getPublicProfileByUsername` yang IDN
 // sediain buat SATU akun spesifik, jalan independen dari status live-nya

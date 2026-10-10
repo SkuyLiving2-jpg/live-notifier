@@ -35,7 +35,7 @@ function buildDashboardPayload(sorted) {
     };
   }
 
-  // Format baris SAMA persis kayak chat/replies.js's replyListLive ("cok
+  // Format baris SAMA persis kayak chat/replies/info.js's replyListLive ("cok
   // siapa yang live") - biar dashboard sama jawaban on-demand konsisten,
   // gak ada dua gaya nunjukkin info yang sama.
   const lines = sorted.map((entry, i) => {

@@ -3,7 +3,7 @@ const { getDateWIB } = require("./utils");
 // Saran fitur ke-5 (§10's kelimapuluh+item): LIVE STREAK - berapa hari
 // BERTURUT-TURUT (WIB) seorang member punya live. Modul standalone (murni
 // operasi di atas STRING tanggal WIB, gak nyentuh storage/network sama
-// sekali) - dipake DUA tempat (chat/replies.js's "cok streak <nama>"
+// sekali) - dipake DUA tempat (chat/replies/memberStats.js's "cok streak <nama>"
 // ON-DEMAND, DAN notify/publicAlerts.js's milestone alert pas sesi live
 // selesai), sama alasannya kayak schedulePattern.js/interactionHelpers.js:
 // modul BARU biar gak ngebalik arah dependency chat<->notify yang udah
@@ -13,7 +13,7 @@ const { getDateWIB } = require("./utils");
 // getDateWIB (bukan Date.prototype.getDate manual) biar konsisten pake
 // timezone WIB eksplisit, sama kelas kehati-hatian yang codebase ini pake di
 // semua tempat lain yang ngitung tanggal (lihat komen findRecentDatesForWeekday
-// di chat/replies.js soal kenapa method Date yang zona-lokal-server-dependent
+// di chat/replies/ soal kenapa method Date yang zona-lokal-server-dependent
 // dihindarin).
 function shiftDateWIB(dateWIB, deltaDays) {
   const ms = new Date(`${dateWIB}T00:00:00+07:00`).getTime() + deltaDays * 24 * 60 * 60 * 1000;

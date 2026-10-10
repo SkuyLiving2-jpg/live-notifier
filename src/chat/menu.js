@@ -340,7 +340,7 @@ function buildExtraFeaturesSelectRow() {
 //
 // CATATAN: pilihan #3 dan #5 sekarang beneran ngitung "hari ini" (gabungan
 // live yang lagi jalan + yang udah selesai, dari daily log), BUKAN cuma
-// snapshot siapa yang lagi live detik ini - liat replies.js's
+// snapshot siapa yang lagi live detik ini - liat replies/rankings.js's
 // replyLongestLive() dan replyTopViewers(). Beda sama pilihan #8 ("cok rekap
 // hari ini") yang nampilin TABEL lengkap semua sesi, ini cuma nyebut satu
 // yang paling menonjol.
@@ -388,7 +388,7 @@ async function resolveBareMenuChoice(choice, channelId, authorId) {
     case "8":
       // BUG YANG DILAPORIN OWNER: tabel yang keluar dari opsi ini gak punya
       // jalan balik ke menu fallback ini sendiri - "fallback" (dibaca
-      // replies.js's buildRecapNavComponents/buildBackRow) nempelin tombol
+      // replies/recap/components.js's buildRecapNavComponents/buildBackRow) nempelin tombol
       // "🔙 Kembali ke menu" yang balik ke replyFallbackMenu() persis di
       // sini. Berlaku baik diklik lewat tombol MAUPUN diketik lewat shortcut
       // angka "8" abis menu ini ditampilin (chat/pendingState.js) - dua-duanya

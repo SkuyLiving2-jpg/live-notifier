@@ -47,7 +47,7 @@ const { safeReplyOptions } = require("../utils");
 //      alias/Cari lagi/Batal).
 //   4. "Isi alias" -> modal ketik alias/panggilan -> "Alias 'x' -> 'X',
 //      simpan?" (Simpan/Ubah alias/Ganti target/Batal).
-//   5. "Simpan" -> commit via handleAddAlias (replies.js) - REUSE fungsi yang
+//   5. "Simpan" -> commit via handleAddAlias (replies/) - REUSE fungsi yang
 //      SAMA persis dipake command teks "cok tambah alias", bukan ditulis
 //      ulang. Sama pola keamanan yang dipake slashCommands.js: owner-gate
 //      nempel DI DALEM handleAddAlias sendiri, jadi mustahil kelupaan
@@ -67,7 +67,7 @@ const { safeReplyOptions } = require("../utils");
 //
 // Hapus alias: tombol "🗑️ Hapus alias" (CUMA muncul kalau daftar aliasnya gak
 // kosong) -> owner-gate -> dropdown pilih alias yang mana -> "Yakin hapus
-// 'x'?" (Ya/Batal) -> commit via handleRemoveAlias (replies.js, sama alasan
+// 'x'?" (Ya/Batal) -> commit via handleRemoveAlias (replies/, sama alasan
 // reuse-nya kayak di atas).
 
 // "channelId:authorId" -> { username, aliasText, at } - state SATU-SATUNYA
@@ -260,7 +260,7 @@ function buildCommitConfirmBlock(username, aliasText) {
 // Cek member lokal (activeLives/liveCount, lewat searchLiveCountByNameFragment
 // yang UDAH ngerti alias - lihat storage/aliases.js's resolveAliasInFragment)
 // dulu. Kalau nihil, fallback ke IDN LANGSUNG (sama persis logika
-// replies.js's describeMissingMember) - member yang REAL tapi belum pernah
+// replies/memberLookup.js's describeMissingMember) - member yang REAL tapi belum pernah
 // live (kayak Kimmy) tetep harus bisa didaftarin alias-nya, bukan cuma yang
 // udah pernah kecatet live.
 async function searchTargetCandidates(query) {

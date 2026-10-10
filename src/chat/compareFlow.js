@@ -30,7 +30,7 @@ const { safeReplyOptions } = require("../utils");
 //      -> (0 match: coba lagi, 1 match: langsung kepilih, >1 match: dropdown).
 //      Member yang SAMA kayak yang udah dipilih ditolak dengan pesan jelas.
 //   3. Begitu jumlahnya terpenuhi, hasil perbandingan muncul (tombol Tutup
-//      nempel dari replies.js's buildCompareReply/buildCompareReplyMulti).
+//      nempel dari replies/compare.js's buildCompareReply/buildCompareReplyMulti).
 // "Tutup" ada di SETIAP langkah.
 //
 // State (jumlah target + username yang udah dipilih) dibawa lewat customId di

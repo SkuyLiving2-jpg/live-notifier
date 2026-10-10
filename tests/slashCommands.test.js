@@ -199,7 +199,7 @@ test("handleSlashCommand - deferReply() DULUAN sebelum handler jalan, jawabannya
 });
 
 test("handleSlashCommand - handler yang throw -> ketangkep, balesan error generik (editReply kalau udah defer, reply kalau defer-nya sendiri gagal)", async () => {
-  // Semua fungsi reply di replies.js udah didesain defensif (gak throw buat
+  // Semua fungsi reply di replies/ udah didesain defensif (gak throw buat
   // input aneh - "cek" tanpa member pun cuma jatuh ke replyMemberNotFound
   // biasa), jadi buat mancing jalur catch di sini interaction-nya sendiri
   // yang dibikin rusak (options.getString throw) - simulasi "ada exception

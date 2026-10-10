@@ -13,7 +13,7 @@ const { resolveBareMenuChoice, startWatchConfirm, memberPromptQuestion } = requi
 // lagi (soalnya pending-nya udah "sekali pake" abis dipakai orang pertama).
 // Sekarang di-key bareng channel+author, sama pola-nya kayak
 // menu.js's pendingWatchConfirm/pendingMemberPrompt (di bawah)/pendingRecapPage
-// (di replies.js) - tiap orang punya "menu barusan ditampilin" sendiri-sendiri.
+// (di replies/) - tiap orang punya "menu barusan ditampilin" sendiri-sendiri.
 const pendingMenuByAuthor = new Map();
 const PENDING_MENU_TTL_MS = 3 * 60000;
 
@@ -29,7 +29,7 @@ function markMenuShown(channelId, authorId) {
 // dalam PENDING_MENU_TTL_MS abis pesannya kehapus tetep ketangkep sebagai
 // "lanjutan milih opsi menu" - padahal menu-nya udah eksplisit ditutup
 // (salah pencet/salah ketik), jadi jawabannya bakal keliatan nyasar dari
-// mana asalnya. Sama pola-nya kayak replies.js's "recap_nav:close" yang
+// mana asalnya. Sama pola-nya kayak replies/recap/navigation.js's "recap_nav:close" yang
 // juga nge-clear pendingRecapPage-nya sendiri.
 function clearMenuShown(channelId, authorId) {
   if (channelId && authorId) pendingMenuByAuthor.delete(`${channelId}:${authorId}`);

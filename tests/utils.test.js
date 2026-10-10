@@ -134,7 +134,7 @@ test("YES_PATTERN / NO_PATTERN", () => {
 });
 
 // NEXT_PAGE_PATTERN/PREV_PAGE_PATTERN - alternatif kata kunci navigasi
-// halaman rekap (chat/replies.js's tryHandleRecapPageShortcut), TERPISAH
+// halaman rekap (chat/replies/recap/navigation.js's tryHandleRecapPageShortcut), TERPISAH
 // dari YES_PATTERN/NO_PATTERN biar gak nabrak arti "y"/"n" di flow
 // konfirmasi lain (mis. watch-confirm di chat/menu.js).
 test("NEXT_PAGE_PATTERN / PREV_PAGE_PATTERN", () => {
