@@ -23,6 +23,10 @@
 //   bot di channel itu - tanpa itu Discord nolak, dan itu dicatet jelas di log
 //   satu kali) DAN balesan bot-nya sendiri (selalu boleh).
 //
+// - Di DM (botOnly) yang dihapus CUMA balesan bot-nya sendiri: Discord TIDAK mengizinkan bot menghapus pesan
+//   orang lain di DM (permission "Manage Messages" tidak ada di DM; di DM hanya pengirimnya yang boleh
+//   menghapus pesannya). Ketikan user di DM tetap ada, tapi balesan bot yang numpuk tetap dirapikan.
+//
 // Cuma dipanggil kalau bot BENERAN ngebales pesan itu (router.js) - pesan yang
 // gak ditujukan ke bot (gak ada "cok"/di luar channel bot) gak pernah disentuh.
 const REPEAT_KEEP_LIMIT = 2;
@@ -40,7 +44,7 @@ function keyFor(channelId, authorId) {
 // state-nya SINKRON: kalau user ngetik cepet-cepet beberapa kali, beberapa
 // handler jalan bareng, dan state gak boleh keburu berubah di antara
 // baca-tulisnya. Balikin daftar ID pesan yang harus dihapus.
-function registerExchange({ channelId, authorId, text, userMessageId, botReplyId, now = Date.now() }) {
+function registerExchange({ channelId, authorId, text, userMessageId, botReplyId, now = Date.now(), botOnly = false }) {
   const key = keyFor(channelId, authorId);
   const previous = streaks.get(key);
   const continuing = previous && previous.text === text;
@@ -54,7 +58,9 @@ function registerExchange({ channelId, authorId, text, userMessageId, botReplyId
     toDelete = streak.messageIds;
     streak.messageIds = [];
   }
-  streak.messageIds.push(userMessageId, botReplyId);
+  // botOnly (DM): ketikan user tidak bisa dihapus bot, jadi jangan dicatat sebagai kandidat hapus.
+  if (botOnly) streak.messageIds.push(botReplyId);
+  else streak.messageIds.push(userMessageId, botReplyId);
   streaks.set(key, streak);
   return toDelete;
 }
@@ -74,7 +80,7 @@ function reportDeleteFailure(error, messageId) {
 
 // Dipanggil SETELAH balesan bot berhasil kekirim - `message` = pesan
 // ketikan user, `sentReply` = balesan bot buat pesan itu.
-async function pruneRepeatedExchange(message, normalizedText, sentReply, now = Date.now()) {
+async function pruneRepeatedExchange(message, normalizedText, sentReply, now = Date.now(), { botOnly = false } = {}) {
   const toDelete = registerExchange({
     channelId: message.channel.id,
     authorId: message.author.id,
@@ -82,6 +88,7 @@ async function pruneRepeatedExchange(message, normalizedText, sentReply, now = D
     userMessageId: message.id,
     botReplyId: sentReply.id,
     now,
+    botOnly,
   });
   await Promise.all(toDelete.map((id) => message.channel.messages.delete(id).catch((error) => reportDeleteFailure(error, id))));
 }

@@ -79,6 +79,19 @@ test("getCommandDefinitionsJSON - semua 32 command valid (SlashCommandBuilder#to
   assert.ok(names.includes("grafik"), "fitur grafik/chart harus punya slash command juga");
 });
 
+test("getCommandDefinitionsJSON - default TANPA contexts (pendaftaran per-server tidak berubah); includeDm menambah contexts [Guild, BotDM] ke SEMUA command", () => {
+  const plain = getCommandDefinitionsJSON();
+  assert.ok(plain.every((d) => d.contexts === undefined));
+  const withDm = getCommandDefinitionsJSON({ includeDm: true });
+  assert.equal(withDm.length, plain.length);
+  for (const d of withDm) assert.deepEqual(d.contexts, [0, 1], `/${d.name} harus bisa dipakai di server (0) dan DM bot (1)`);
+  // sisa isi command identik - includeDm cuma menambah contexts
+  assert.deepEqual(
+    withDm.map((d) => ({ ...d, contexts: undefined })),
+    plain,
+  );
+});
+
 test("handleSlashCommand - command zero-parameter ('/live', '/status') balikin jawaban langsung lewat interaction.reply()", async () => {
   const liveInteraction = fakeCommandInteraction({ commandName: "live" });
   await handleSlashCommand(liveInteraction);

@@ -127,3 +127,86 @@ test("pruneRepeatedExchange - gagal hapus (udah kehapus duluan / bot gak punya M
     console.error = originalError;
   }
 });
+
+// DM: Discord tidak mengizinkan bot menghapus pesan user di DM (cuma pengirimnya yang boleh), jadi yang dirapikan
+// hanya balasan bot sendiri - ketikan user tidak pernah masuk daftar hapus.
+test("botOnly (DM) - ketikan ke-3 hanya menghapus BALASAN BOT lama, ID pesan user tidak pernah ikut", () => {
+  const opts = { channelId: "dm-1", authorId: "u-dm1", botOnly: true };
+  assert.deepEqual(exchange({ userMessageId: "u1", botReplyId: "b1" }, opts), []);
+  assert.deepEqual(exchange({ userMessageId: "u2", botReplyId: "b2" }, opts), []);
+  assert.deepEqual(exchange({ userMessageId: "u3", botReplyId: "b3" }, opts), ["b1", "b2"]);
+  assert.deepEqual(exchange({ userMessageId: "u4", botReplyId: "b4" }, opts), ["b3"]);
+  assert.deepEqual(exchange({ userMessageId: "u5", botReplyId: "b5" }, opts), ["b4"]);
+});
+
+test("pruneRepeatedExchange botOnly - memanggil delete hanya untuk balasan bot (spam di DM tidak menyisakan tumpukan balasan bot)", async () => {
+  const ids = { channelId: "dm-prune", authorId: "u-dmprune" };
+  const m = [1, 2, 3, 4].map((n) => fakeMessage({ id: `dmu${n}`, ...ids }));
+  const deleted = [];
+  m.forEach((msg) => {
+    msg.channel.messages.delete = async (id) => {
+      deleted.push(id);
+    };
+  });
+  for (let i = 0; i < m.length; i++) await pruneRepeatedExchange(m[i], "spam", { id: `dmb${i + 1}` }, 1_000_000, { botOnly: true });
+  assert.deepEqual(deleted, ["dmb1", "dmb2", "dmb3"], "hanya ID balasan bot yang dihapus, tidak ada ID ketikan user (dmu*)");
+});
+
+test("tanpa botOnly (server) perilaku lama tetap: ketikan user DAN balasan bot dihapus", () => {
+  const opts = { channelId: "srv-1", authorId: "u-srv1" };
+  exchange({ userMessageId: "u1", botReplyId: "b1" }, opts);
+  exchange({ userMessageId: "u2", botReplyId: "b2" }, opts);
+  assert.deepEqual(exchange({ userMessageId: "u3", botReplyId: "b3" }, opts), ["u1", "b1", "u2", "b2"]);
+});
+
+// Lewat kabel messageCreate asli (chat/router.js): spam teks yang sama di DM -> balasan bot lama dihapus,
+// pesan user TIDAK disentuh (bot memang tidak boleh menghapus pesan user di DM); di server, keduanya dihapus.
+test("messageCreate - spam yang sama di DM: hanya balasan bot yang dihapus; di server ketikan user + balasan dihapus", async () => {
+  const { EventEmitter } = require("node:events");
+  const { wireDiscordEvents } = require("../src/chat/router");
+  const client = new EventEmitter();
+  client.login = () => Promise.resolve();
+  wireDiscordEvents(client);
+  const [listener] = client.listeners("messageCreate");
+
+  async function spam({ guildId, channelId, authorId }, times) {
+    const deleted = [];
+    let replyCounter = 0;
+    for (let i = 1; i <= times; i++) {
+      await listener({
+        id: `${channelId}-user${i}`,
+        content: "status",
+        guildId,
+        author: { id: authorId, bot: false },
+        channel: { id: channelId, messages: { delete: async (id) => deleted.push(id) } },
+        reply: async () => ({ id: `${channelId}-bot${++replyCounter}` }),
+      });
+    }
+    return deleted;
+  }
+
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    const dmDeleted = await spam({ guildId: null, channelId: "dm-wire", authorId: "u-wire-dm" }, 4);
+    assert.deepEqual(dmDeleted, ["dm-wire-bot1", "dm-wire-bot2", "dm-wire-bot3"], "DM: hanya balasan bot");
+    assert.ok(dmDeleted.every((id) => id.includes("bot")));
+
+    // Di server wake-word diperlukan ("cok status") dan channel harus channel bot; gunakan teks dengan "cok".
+    const server = [];
+    let n = 0;
+    for (let i = 1; i <= 3; i++) {
+      await listener({
+        id: `srv-user${i}`,
+        content: "cok status",
+        guildId: "guild-1",
+        author: { id: "u-wire-srv", bot: false },
+        channel: { id: "srv-wire", messages: { delete: async (id) => server.push(id) } },
+        reply: async () => ({ id: `srv-bot${++n}` }),
+      });
+    }
+    assert.deepEqual(server, ["srv-user1", "srv-bot1", "srv-user2", "srv-bot2"], "server: ketikan user + balasan bot");
+  } finally {
+    console.log = originalLog;
+  }
+});

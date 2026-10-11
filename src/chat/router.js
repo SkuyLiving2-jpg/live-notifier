@@ -127,8 +127,9 @@ function wireDiscordEvents(client) {
         // Ketikan yang SAMA diulang lebih dari 2x -> ketikan lama + balesan
         // bot lamanya dihapus (lihat repeatedReplyGuard.js). Dipanggil abis
         // balesan kekirim, dan gak pernah throw (kegagalan hapus cuma di-log).
-        // (Di DM dilewati: bot gak bisa menghapus pesan user di DM.)
-        if (!isDm) await pruneRepeatedExchange(message, (message.content || "").trim().toLowerCase(), sent);
+        // Di DM bot gak bisa menghapus pesan user (aturan Discord: di DM cuma pengirimnya yang boleh
+        // menghapus pesannya), jadi yang dirapikan cuma balesan bot-nya sendiri (botOnly).
+        await pruneRepeatedExchange(message, (message.content || "").trim().toLowerCase(), sent, Date.now(), { botOnly: isDm });
       }
     } catch (error) {
       // Sebelumnya cuma nyetak error.message - kalau ini beneran gagal

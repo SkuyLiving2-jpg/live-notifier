@@ -20,7 +20,7 @@
 // lewat button/select-menu interaction seperti biasa - modul ini CUMA
 // nangenin interaction.isChatInputCommand()/isAutocomplete(), dua kelas
 // interaction yang beda sama sekali dari yang udah ada.
-const { SlashCommandBuilder, MessageFlags } = require("discord.js");
+const { SlashCommandBuilder, MessageFlags, InteractionContextType } = require("discord.js");
 const { activeLives, findMemberByNameFragment } = require("../storage/activeLives");
 const { loadLiveCount } = require("../storage/liveCount");
 const { formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
@@ -411,8 +411,16 @@ const HANDLERS_BY_NAME = new Map(COMMAND_DEFINITIONS.map((def) => [def.builder.n
 
 // Dipake scripts/register-slash-commands.js buat PUT ke Discord API - JSON
 // polos (SlashCommandBuilder#toJSON()), bukan instance builder-nya sendiri.
-function getCommandDefinitionsJSON() {
-  return COMMAND_DEFINITIONS.map((def) => def.builder.toJSON());
+//
+// `includeDm: true` menambah `contexts: [Guild, BotDM]` supaya command juga muncul di DM dengan bot. Discord HANYA
+// menampilkan command di DM kalau didaftarkan GLOBAL (command per-server tidak pernah tampil di DM), jadi opsi ini
+// dipakai pendaftaran global saja (`npm run register-slash-commands:global`). Tidak ada command yang butuh server
+// (handler cuma memakai interaction.user), jadi semuanya aman dipakai di DM. Default (tanpa opsi) = JSON apa adanya.
+function getCommandDefinitionsJSON({ includeDm = false } = {}) {
+  return COMMAND_DEFINITIONS.map((def) => {
+    const json = def.builder.toJSON();
+    return includeDm ? { ...json, contexts: [InteractionContextType.Guild, InteractionContextType.BotDM] } : json;
+  });
 }
 
 // Dipanggil chat/router.js's interactionCreate pas interaction.isChatInputCommand().

@@ -43,21 +43,27 @@ function makeMessage({ content, guildId, channelId, sentLog, deleted }) {
   };
 }
 
-test("messageCreate - DM dibalas tanpa wake-word, ketikan berulang di DM TIDAK memicu penghapusan; di server tetap memicu", async () => {
+test("messageCreate - DM dibalas tanpa wake-word; ketikan berulang di DM hanya menghapus BALASAN BOT (pesan user tak bisa dihapus bot di DM); di server keduanya", async () => {
   const fake = new EventEmitter();
   fake.login = () => Promise.resolve();
   wireDiscordEvents(fake);
   const handler = fake.listeners("messageCreate")[0];
   const sent = [];
   const deleted = [];
+  const dmDeleted = [];
   const originalErr = console.error;
   console.error = () => {};
   try {
-    // DM: "pengaturan" tanpa "cok" tetap dijawab; 4x berturut-turut (lewat batas 2) tidak ada penghapusan.
-    for (let i = 0; i < 4; i++) await handler(makeMessage({ content: "pengaturan", guildId: null, channelId: "dm-chan", sentLog: sent, deleted }));
+    // DM: "pengaturan" tanpa "cok" tetap dijawab; 4x berturut-turut (lewat batas 2) -> hanya balasan bot lama yang dihapus.
+    for (let i = 0; i < 4; i++)
+      await handler(makeMessage({ content: "pengaturan", guildId: null, channelId: "dm-chan", sentLog: sent, deleted: dmDeleted }));
     assert.equal(sent.length, 4);
     assert.match(sent[0].content, /Pengaturan notif kamu/);
-    assert.equal(deleted.length, 0, "di DM bot tidak boleh mencoba menghapus pesan");
+    assert.equal(dmDeleted.length, 3, "ketikan ke-3 menghapus balasan bot ke-1 dan ke-2; ketikan ke-4 menghapus balasan ke-3");
+    assert.ok(
+      dmDeleted.every((id) => id.startsWith("b-")),
+      "yang dihapus HANYA balasan bot (b-*), tidak pernah pesan user (m-*) - bot tidak boleh menghapus pesan user di DM",
+    );
 
     // Server (channel biasa): tanpa wake-word -> diabaikan.
     const ignored = [];

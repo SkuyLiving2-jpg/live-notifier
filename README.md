@@ -18,16 +18,17 @@ npm start
 
 ## Scripts
 
-| Command                           | Buat apa                                                                                                        |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `npm start`                       | Nyalain bot (`node src/index.js`)                                                                               |
-| `npm test`                        | Jalanin automated test suite (`node --test`)                                                                    |
-| `npm run lint`                    | Cek gaya kode pake ESLint                                                                                       |
-| `npm run format`                  | Rapiin format kode otomatis pake Prettier                                                                       |
-| `npm run format:check`            | Cek format tanpa ngubah file (dipake CI)                                                                        |
-| `npm run cek-gifter`              | Tool CLI manual buat cek top-gifter (lihat `scripts/cek-top-gifter.js`)                                         |
-| `npm run backup-data`             | Tool CLI manual buat narik backup data bot ke file lokal                                                        |
-| `npm run register-slash-commands` | Daftarin slash command ("/live", "/rekap", dst) ke Discord - jalanin ulang tiap kali daftar command-nya berubah |
+| Command                                  | Buat apa                                                                                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm start`                              | Nyalain bot (`node src/index.js`)                                                                                                    |
+| `npm test`                               | Jalanin automated test suite (`node --test`)                                                                                         |
+| `npm run lint`                           | Cek gaya kode pake ESLint                                                                                                            |
+| `npm run format`                         | Rapiin format kode otomatis pake Prettier                                                                                            |
+| `npm run format:check`                   | Cek format tanpa ngubah file (dipake CI)                                                                                             |
+| `npm run cek-gifter`                     | Tool CLI manual buat cek top-gifter (lihat `scripts/cek-top-gifter.js`)                                                              |
+| `npm run backup-data`                    | Tool CLI manual buat narik backup data bot ke file lokal                                                                             |
+| `npm run register-slash-commands`        | Daftarin slash command ("/live", "/rekap", dst) ke SERVER - jalanin ulang tiap kali daftar command-nya berubah. Tidak muncul di DM   |
+| `npm run register-slash-commands:global` | Sama, tapi GLOBAL: command muncul di server DAN di DM dengan bot (butuh sampai ~1 jam; command per-server lama otomatis dikosongkan) |
 
 ## Deploy
 
