@@ -198,6 +198,14 @@ function handleBackupExport(req, res) {
 // 2 sesi live BEDA dari member yang sama (biasanya berjam-jam/berhari-hari).
 const SESSION_DEDUP_TOLERANCE_SEC = 120;
 
+// Unix detik yang bisa jadi Date valid. `typeof === "number"` saja meloloskan NaN/Infinity/1e13, yang
+// bikin `new Date(x * 1000)` jadi Invalid Date - lalu Intl/toISOString melempar RangeError di recordLiveEnded.
+// Batas atas Date di JS = 8.64e15 ms.
+const MAX_UNIX_SECONDS = 8.64e12;
+function isValidUnixSeconds(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_UNIX_SECONDS;
+}
+
 function isAlreadyInDailyLog(endedAtByUsername, session) {
   const existing = endedAtByUsername.get(session.username);
   if (!existing) return false;
@@ -263,8 +271,8 @@ function handleBackfillLiveHistory(req, res, body) {
       s.name &&
       typeof s.username === "string" &&
       s.username &&
-      typeof s.startedAtUnix === "number" &&
-      typeof s.endedAtUnix === "number" &&
+      isValidUnixSeconds(s.startedAtUnix) &&
+      isValidUnixSeconds(s.endedAtUnix) &&
       s.endedAtUnix > s.startedAtUnix &&
       (s.endedAtUnix - s.startedAtUnix) * 1000 <= MAX_PLAUSIBLE_LIVE_DURATION_MS,
   );

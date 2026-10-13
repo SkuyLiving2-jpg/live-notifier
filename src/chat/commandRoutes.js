@@ -240,7 +240,8 @@ function routeWakeGate(ctx) {
 function routePeriodGuards({ text }) {
   const asksPeriodStat = ["rekap", "export", "paling", "viewer", "penonton"].some((w) => containsWholeWord(text, w));
   if (!asksPeriodStat) return NO_MATCH;
-  if (parseRelativePeriodFromText(text)?.kind === "unsupported") return replyUnsupportedPeriod();
+  const relative = parseRelativePeriodFromText(text);
+  if (relative?.kind === "unsupported") return replyUnsupportedPeriod(relative.shown);
   const impossibleDate = findImpossibleDateInText(text);
   return impossibleDate ? replyImpossibleDate(impossibleDate) : NO_MATCH;
 }

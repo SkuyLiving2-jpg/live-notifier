@@ -936,9 +936,21 @@ test("rekap bulan lalu -> bulan SEBELUM bulan berjalan, bukan bulan ini", async 
 });
 
 test("minggu lalu ditolak EKSPLISIT di rekap/export/paling-rame (dulu diam-diam dijawab pake data minggu ini)", async () => {
-  for (const text of ["rekap minggu lalu", "export rekap minggu lalu", "paling rame minggu lalu", "paling lama live pekan lalu"]) {
-    assert.match(textOf(await inBotChannel(text)), /"minggu lalu" belum bisa dijawab/, text);
+  const cases = [
+    ["rekap minggu lalu", "minggu lalu"],
+    ["export rekap minggu lalu", "minggu lalu"],
+    ["paling rame minggu lalu", "minggu lalu"],
+    ["paling lama live pekan lalu", "pekan lalu"],
+    // "N hari lalu/terakhir" dulu diam-diam dijawab rekap HARI INI (kata "hari" ketangkep rute rekap hari ini)
+    ["rekap 3 hari lalu", "3 hari lalu"],
+    ["rekap 99999 hari lalu", "99999 hari lalu"],
+    ["rekap 7 hari terakhir", "7 hari terakhir"],
+    ["export rekap 30 hari terakhir", "30 hari terakhir"],
+  ];
+  for (const [text, shown] of cases) {
+    assert.match(textOf(await inBotChannel(text)), new RegExp(`"${shown}" belum bisa dijawab`), text);
   }
+  assert.doesNotMatch(textOf(await inBotChannel("rekap hari ini")), /belum bisa dijawab/);
   assert.doesNotMatch(textOf(await inBotChannel("kwrouterx minggu lalu live gak")), /belum bisa dijawab/);
 });
 

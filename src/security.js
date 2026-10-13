@@ -95,7 +95,21 @@ function requireSignedRequest(secret, handler) {
         return;
       }
 
-      handler(req, res, body);
+      // Error di handler (data aneh yang lolos validasi, file data rusak, dst) HARUS jadi respons 500, bukan
+      // dilempar keluar: ini callback event, jadi error yang lolos berubah jadi uncaughtException dan app.js
+      // mematikan SELURUH bot (polling live berhenti sampai restart) gara-gara satu request - klien pun
+      // cuma dapat koneksi menggantung tanpa respons.
+      try {
+        handler(req, res, body);
+      } catch (error) {
+        console.error(`Handler ${req.url} error (bot tetap jalan):`, error.message);
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Internal error" }));
+        } else {
+          res.end();
+        }
+      }
     });
   };
 }

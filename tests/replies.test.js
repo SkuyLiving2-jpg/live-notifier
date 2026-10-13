@@ -2648,12 +2648,20 @@ test("parseRelativePeriodFromText - kemarin / bulan lalu / minggu lalu (dan vari
   assert.deepEqual(parseRelativePeriodFromText("rekap bulan lalu"), { kind: "month", month: expectedPrev });
   assert.deepEqual(parseRelativePeriodFromText("rekap bulan kemarin"), { kind: "month", month: expectedPrev }, "bulan kemarin bukan kemarin polos");
 
-  assert.deepEqual(parseRelativePeriodFromText("rekap minggu lalu"), { kind: "unsupported" });
-  assert.deepEqual(parseRelativePeriodFromText("rekap pekan kemarin"), { kind: "unsupported" });
+  assert.deepEqual(parseRelativePeriodFromText("rekap minggu lalu"), { kind: "unsupported", shown: "minggu lalu" });
+  assert.deepEqual(parseRelativePeriodFromText("rekap pekan kemarin"), { kind: "unsupported", shown: "pekan kemarin" });
+  // "N hari lalu/terakhir" dulu ketangkep rute "rekap hari ini" dan dijawab rekap hari ini tanpa keterangan.
+  assert.deepEqual(parseRelativePeriodFromText("rekap 3 hari lalu"), { kind: "unsupported", shown: "3 hari lalu" });
+  assert.deepEqual(parseRelativePeriodFromText("paling rame 7 hari yang lalu"), { kind: "unsupported", shown: "7 hari yang lalu" });
+  assert.deepEqual(parseRelativePeriodFromText("export rekap 30 hari terakhir"), { kind: "unsupported", shown: "30 hari terakhir" });
+  assert.deepEqual(parseRelativePeriodFromText("rekap beberapa hari lalu"), { kind: "unsupported", shown: "beberapa hari lalu" });
+  assert.equal(parseRelativePeriodFromText("rekap hari ini"), null, "hari ini polos tetap didukung");
+  assert.equal(parseRelativePeriodFromText("rekap hari senin"), null);
 
   assert.equal(parseRelativePeriodFromText("rekap minggu ini"), null);
   assert.equal(parseRelativePeriodFromText("rekap nala"), null);
   assert.match(replyUnsupportedPeriod(), /minggu lalu.*belum bisa/);
+  assert.match(replyUnsupportedPeriod("3 hari lalu"), /"3 hari lalu" belum bisa/);
 });
 
 test("resolveStatRangeFromText - kemarin -> tanggal kemarin, bulan lalu -> bulan sebelumnya (dulu diam-diam jatuh ke hari ini / bulan ini)", () => {

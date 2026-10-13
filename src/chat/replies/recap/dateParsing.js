@@ -83,7 +83,12 @@ function parseMonthOnlyFromText(text) {
 // "minggu/bulan kemarin" dicek DULUAN sebelum "kemarin" polos biar gak
 // kebaca jadi "kemarin" doang.
 function parseRelativePeriodFromText(text) {
-  if (/\b(?:minggu|pekan)\s+(?:lalu|kemarin|kemaren)\b/.test(text)) return { kind: "unsupported" };
+  // "3 hari lalu"/"7 hari terakhir" juga ditolak: dulu kata "hari"-nya ketangkep rute "rekap hari ini" dan
+  // user dijawab rekap HARI INI tanpa keterangan apa pun (padahal minta rentang lain).
+  const unsupported = text.match(
+    /\b(?:(?:minggu|pekan)\s+(?:lalu|kemarin|kemaren)|(?:\d+|beberapa)\s+hari\s+(?:yang\s+)?(?:lalu|terakhir|kebelakang|belakangan))\b/,
+  );
+  if (unsupported) return { kind: "unsupported", shown: unsupported[0].replace(/\s+/g, " ") };
   if (/\bbulan\s+(?:lalu|kemarin|kemaren)\b/.test(text)) {
     const [year, month] = getTodayWIB().split("-").map(Number);
     const prev = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
@@ -112,8 +117,8 @@ function replyImpossibleDate(shown) {
   return `Cok, tanggal "${shown}" itu gak ada di kalender. Cek lagi ya (contoh: "rekap 25 september").`;
 }
 
-function replyUnsupportedPeriod() {
-  return 'Cok, "minggu lalu" belum bisa dijawab. Yang tersedia: hari ini, "kemarin", "minggu ini" (7 hari terakhir), "bulan ini", "bulan lalu", atau tanggal tertentu (misal "rekap 25 september").';
+function replyUnsupportedPeriod(shown = "minggu lalu") {
+  return `Cok, "${shown}" belum bisa dijawab. Yang tersedia: hari ini, "kemarin", "minggu ini" (7 hari terakhir), "bulan ini", "bulan lalu", atau tanggal tertentu (misal "rekap 25 september").`;
 }
 
 // Index hari (konvensi Intl/JS: 0=Minggu...6=Sabtu). "senin".."sabtu" gak

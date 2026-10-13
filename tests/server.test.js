@@ -378,6 +378,46 @@ test("POST /api/backfill-live-history - sesi durasi implausible (>12 jam) ditola
   }
 });
 
+test("POST /api/backfill-live-history - timestamp mustahil (di luar jangkauan Date) difilter jadi tidak valid, TIDAK mematikan proses", async () => {
+  const startFn = freshStartServerForBackfillTest();
+  const server = await startTestServer(startFn);
+  const originalError = console.error;
+  console.error = () => {};
+  let uncaught = null;
+  const onUncaught = (error) => {
+    uncaught = error;
+  };
+  process.on("uncaughtException", onUncaught);
+  try {
+    const { port } = server.address();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const body = JSON.stringify({
+      sessions: [
+        { name: "Wajar", username: "jkt48_wajar", startedAtUnix: nowSec - 3600, endedAtUnix: nowSec },
+        { name: "KejauhanAtas", username: "jkt48_atas", startedAtUnix: 1e13, endedAtUnix: 1e13 + 600 }, // luar jangkauan Date
+        { name: "Negatif", username: "jkt48_neg", startedAtUnix: -100, endedAtUnix: 500 },
+      ],
+    });
+    const { timestamp, signature } = sign(body);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/backfill-live-history`, {
+      method: "POST",
+      headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.totalReceived, 3);
+    assert.equal(data.totalValid, 1, "cuma sesi dengan timestamp wajar yang lolos");
+    assert.equal(uncaught, null);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    console.error = originalError;
+    server.close();
+  }
+});
+
 test("POST /api/backfill-live-history - dryRun:false beneran nulis, dan aman dipanggil ULANG (idempotent, gak dobel)", async () => {
   const server = await startTestServer();
   try {

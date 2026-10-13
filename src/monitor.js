@@ -90,10 +90,10 @@ async function safely(label, fn) {
   }
 }
 
-// Catat sesi yang SUDAH selesai ke stats/rekap/streak (kalau durasinya masuk akal)
-// lalu hapus dari activeLives. Dipake dua jalur: live biasa yang selesai (di
-// bawah) dan sesi lama yang digantiin sesi BARU di tengah toleransi absen.
-async function recordCompletedSession(username, memberData, durationHistory) {
+// Catat sesi yang SUDAH selesai ke stats/rekap/streak (kalau durasinya masuk akal).
+// Dipanggil lewat recordCompletedSession di bawah, yang menjamin sesinya tetap ditutup
+// walau pencatatan di sini melempar error.
+async function recordSessionStats(username, memberData, durationHistory) {
   if (memberData.liveAt) {
     const durationMs = Date.now() - new Date(memberData.liveAt).getTime();
     // BUG SEBELUMNYA: durationMs di sini gak pernah divalidasi sama
@@ -138,6 +138,23 @@ async function recordCompletedSession(username, memberData, durationHistory) {
         `Durasi live ${memberData.name} implausible (${durationMs}ms) - kemungkinan cache activeLives basi (bot sempet mati lama). Sesi ini DIBUANG dari stats/rekap, gak dicatet.`,
       );
     }
+  }
+}
+
+// Tutup sesi yang SUDAH selesai: catat ke stats/rekap/streak lalu hapus dari activeLives. Dipake dua
+// jalur: live biasa yang selesai (di bawah) dan sesi lama yang digantiin sesi BARU di tengah toleransi absen.
+//
+// BUG SEBELUMNYA: error apa pun di pencatatan stats (data JSON rusak, disk penuh, dst) merambat keluar
+// SEBELUM activeLives.delete. Notif "selesai" sudah terkirim (dan catatan pengirimannya sudah dibersihkan),
+// jadi tiap siklus polling berikutnya (~20 detik) mengulang notif "selesai" + pengumuman rekor ke channel,
+// dan langkah pencatatan yang berhasil sebelum error (total live, riwayat durasi) ikut tertulis lagi tiap
+// siklus - satu live tercatat belasan kali. Sekarang kegagalan pencatatan cuma di-log: stats sesi itu
+// mungkin tidak lengkap, tapi sesinya pasti ditutup sekali saja.
+async function recordCompletedSession(username, memberData, durationHistory) {
+  try {
+    await recordSessionStats(username, memberData, durationHistory);
+  } catch (error) {
+    console.error(`Gagal mencatat sesi ${memberData.name} ke stats (sesi tetap ditutup biar notif selesai gak diulang):`, error.message);
   }
   await safely("Buang ronde tebak durasi", () => discardDurationRound(username)); // ronde yang belum ke-resolve (sesi dibuang) gak boleh nyangkut
   activeLives.delete(username);
