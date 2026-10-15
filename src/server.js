@@ -2,7 +2,7 @@ const http = require("http");
 const { requireSignedRequest } = require("./security");
 const { API_SECRET, PORT, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 const { activeLives } = require("./storage/activeLives");
-const { pollHealth } = require("./pollHealth");
+const { pollHealth, evaluatePollHealth } = require("./pollHealth");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
 const { loadDurationHistory, saveDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
 const { loadDailyLog, saveDailyLog, recordLiveEnded, SESSION_RETENTION_DAYS } = require("./storage/dailyLog");
@@ -439,43 +439,71 @@ function signedEndpoint(handler) {
   };
 }
 
+// Kesehatan POLLING (bukan sekadar "proses hidup"): 200 kalau siklus polling IDN masih sukses dalam beberapa menit
+// terakhir, 503 kalau macet (lihat evaluatePollHealth). Publik tanpa signature dan SENGAJA tanpa data member -
+// isinya cuma status + umur sukses terakhir - supaya bisa dipantau uptime monitor luar (mis. UptimeRobot) yang
+// memberi tahu owner kalau bot hidup tapi berhenti mendeteksi live.
+// Endpoint "/" TIDAK diubah: health check deploy Railway menembak path itu dan harus tetap 200 begitu proses
+// menyala, sebelum siklus polling pertama selesai - kalau tidak, deploy baru bisa dianggap gagal.
+function handleHealthz(req, res) {
+  const result = evaluatePollHealth();
+  res.writeHead(result.healthy ? 200 : 503, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+  res.end(
+    JSON.stringify({
+      status: result.status,
+      healthy: result.healthy,
+      lastSuccessAgeSeconds: result.lastSuccessAgeMs === null ? null : Math.round(result.lastSuccessAgeMs / 1000),
+      consecutivePollFailures: pollHealth.failures,
+    }),
+  );
+}
+
 // Railway (dan platform hosting sejenis) ngecek apakah service "sehat" dengan
 // nunggu ada port yang kebuka. Bot ini murni background process tanpa server
 // HTTP, jadi tanpa ini Railway bisa nganggep container-nya nggak sehat dan
 // restart terus-menerus. Server kecil ini cuma buat "ngasih tanda hidup".
 //
-// /api/* sengaja dipisah dan dilindungi signature - health-check di "/"
+// /api/* sengaja dipisah dan dilindungi signature - health-check di "/" dan "/healthz"
 // TETAP publik tanpa signature, karena Railway & UptimeRobot manggil itu
 // tanpa tahu cara nge-sign request.
 function startServer() {
   return http
     .createServer((req, res) => {
-      if (req.url === "/api/status") {
+      // Query string dibuang: "/api/backup?x=1" dulu jatuh ke halaman health check biasa (200 tanpa data),
+      // jadi skrip yang menambah parameter menyangka backup berhasil padahal isinya cuma teks status.
+      const pathname = (req.url || "/").split("?")[0];
+
+      if (pathname === "/healthz") {
+        handleHealthz(req, res);
+        return;
+      }
+
+      if (pathname === "/api/status") {
         signedEndpoint(handleProtectedStatus)(req, res);
         return;
       }
 
-      if (req.url === "/api/gifter-snapshot") {
+      if (pathname === "/api/gifter-snapshot") {
         signedEndpoint(handleGifterSnapshotUpload)(req, res);
         return;
       }
 
-      if (req.url === "/api/channel-routing") {
+      if (pathname === "/api/channel-routing") {
         signedEndpoint(handleChannelRoutingUpload)(req, res);
         return;
       }
 
-      if (req.url === "/api/backup") {
+      if (pathname === "/api/backup") {
         signedEndpoint(handleBackupExport)(req, res);
         return;
       }
 
-      if (req.url === "/api/backfill-live-history") {
+      if (pathname === "/api/backfill-live-history") {
         signedEndpoint(handleBackfillLiveHistory)(req, res);
         return;
       }
 
-      if (req.url === "/api/repair-live-history") {
+      if (pathname === "/api/repair-live-history") {
         signedEndpoint(handleRepairLiveHistory)(req, res);
         return;
       }

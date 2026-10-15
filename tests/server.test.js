@@ -817,3 +817,123 @@ test("GET / - health check TETAP publik, gak butuh signature", async () => {
     server.close();
   }
 });
+
+// --- /healthz: kesehatan POLLING (bukan sekadar proses hidup) ---
+
+const { pollHealth, evaluatePollHealth, POLL_STALE_AFTER_MS } = require("../src/pollHealth");
+
+async function withPollHealth(overrides, fn) {
+  const saved = { ...pollHealth };
+  Object.assign(pollHealth, overrides);
+  try {
+    return await fn();
+  } finally {
+    Object.assign(pollHealth, saved);
+  }
+}
+
+test("evaluatePollHealth - baru menyala (belum ada siklus sukses) masih masa tenggang, lewat tenggang tanpa sukses = rusak", () => {
+  const state = { lastSuccessAt: null };
+  assert.deepEqual(evaluatePollHealth({ state, now: 1_000_000, uptimeMs: 10_000 }), { healthy: true, status: "starting", lastSuccessAgeMs: null });
+  assert.deepEqual(evaluatePollHealth({ state, now: 1_000_000, uptimeMs: POLL_STALE_AFTER_MS - 1 }).healthy, true);
+  assert.deepEqual(evaluatePollHealth({ state, now: 1_000_000, uptimeMs: POLL_STALE_AFTER_MS }), {
+    healthy: false,
+    status: "never_succeeded",
+    lastSuccessAgeMs: null,
+  });
+});
+
+test("evaluatePollHealth - batas umur sukses terakhir: tepat di ambang masih sehat, lewat 1 ms = macet; jam mundur tidak menghasilkan umur negatif", () => {
+  const now = 10_000_000;
+  assert.equal(evaluatePollHealth({ state: { lastSuccessAt: now - 5_000 }, now, uptimeMs: 1e9 }).status, "ok");
+  assert.equal(evaluatePollHealth({ state: { lastSuccessAt: now - POLL_STALE_AFTER_MS }, now, uptimeMs: 1e9 }).healthy, true);
+  const stale = evaluatePollHealth({ state: { lastSuccessAt: now - POLL_STALE_AFTER_MS - 1 }, now, uptimeMs: 1e9 });
+  assert.equal(stale.healthy, false);
+  assert.equal(stale.status, "stale");
+  assert.equal(evaluatePollHealth({ state: { lastSuccessAt: now + 5_000 }, now, uptimeMs: 1e9 }).lastSuccessAgeMs, 0);
+});
+
+test("GET /healthz - polling sehat -> 200 + status ok, tanpa data member", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    await withPollHealth({ lastSuccessAt: Date.now() - 20_000, failures: 0 }, async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("cache-control"), "no-store");
+      const data = await res.json();
+      assert.equal(data.status, "ok");
+      assert.equal(data.healthy, true);
+      assert.ok(data.lastSuccessAgeSeconds >= 19 && data.lastSuccessAgeSeconds <= 25);
+      assert.deepEqual(Object.keys(data).sort(), ["consecutivePollFailures", "healthy", "lastSuccessAgeSeconds", "status"]);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test("GET /healthz - polling macet (sukses terakhir > ambang) -> 503, dan hitungan gagal ikut dilaporkan", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    await withPollHealth({ lastSuccessAt: Date.now() - 10 * 60_000, failures: 31 }, async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(res.status, 503);
+      const data = await res.json();
+      assert.equal(data.status, "stale");
+      assert.equal(data.healthy, false);
+      assert.equal(data.consecutivePollFailures, 31);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test("GET /healthz - HEAD (cara default banyak uptime monitor) juga mengikuti status", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    await withPollHealth({ lastSuccessAt: Date.now() - 10 * 60_000 }, async () => {
+      assert.equal((await fetch(`http://127.0.0.1:${port}/healthz`, { method: "HEAD" })).status, 503);
+    });
+    await withPollHealth({ lastSuccessAt: Date.now() }, async () => {
+      assert.equal((await fetch(`http://127.0.0.1:${port}/healthz`, { method: "HEAD" })).status, 200);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test("GET / - health check deploy TETAP 200 walau polling macet (kalau berubah, deploy baru bisa dianggap gagal sebelum siklus pertama selesai)", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    await withPollHealth({ lastSuccessAt: Date.now() - 60 * 60_000, failures: 500 }, async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/`);
+      assert.equal(res.status, 200);
+      assert.match(await res.text(), /is running/);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test("query string tidak lagi menjatuhkan endpoint ke halaman health: /healthz?x=1 dan /api/backup?x=1 (tetap wajib signature)", async () => {
+  const server = await startTestServer();
+  try {
+    const { port } = server.address();
+    await withPollHealth({ lastSuccessAt: Date.now() }, async () => {
+      assert.equal((await fetch(`http://127.0.0.1:${port}/healthz?uptime=1`)).status, 200);
+    });
+
+    // Tanpa signature -> 401 (dulu: 200 halaman health, seolah-olah backup "berhasil" padahal isinya cuma teks status).
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/backup?x=1`)).status, 401);
+
+    const { timestamp, signature } = sign("");
+    const res = await fetch(`http://127.0.0.1:${port}/api/backup?x=1`, { headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature } });
+    assert.equal(res.status, 200);
+    assert.ok("exportedAt" in (await res.json()));
+  } finally {
+    server.close();
+  }
+});

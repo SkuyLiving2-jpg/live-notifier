@@ -30,6 +30,10 @@ npm start
 | `npm run register-slash-commands`        | Daftarin slash command ("/live", "/rekap", dst) ke SERVER - jalanin ulang tiap kali daftar command-nya berubah. Tidak muncul di DM   |
 | `npm run register-slash-commands:global` | Sama, tapi GLOBAL: command muncul di server DAN di DM dengan bot (butuh sampai ~1 jam; command per-server lama otomatis dikosongkan) |
 
+## Monitoring
+
+`GET /healthz` (publik, tanpa data member) jawab **200** selama polling IDN sukses dalam 5 menit terakhir dan **503** kalau macet (IDN down terus, atau loop polling berhenti). Pasang di uptime monitor (mis. UptimeRobot, interval 5 menit) ke `https://<domain-railway-kamu>/healthz` biar kamu dikabari kalau bot hidup tapi gak lagi mendeteksi live. `/` tetap selalu 200 (dipakai health check deploy Railway).
+
 ## Deploy
 
 Didesain buat jalan di [Railway](https://railway.app) lewat `npm start`. Tempelin sebuah **Volume** ke service-nya biar data (rekap live, riwayat durasi, dll) tahan lintas redeploy — tanpa Volume, data ke-reset tiap kali ada deploy baru (bot bakal nge-log status ini pas boot). Detail lebih lengkap ada di ARCHITECTURE.md §9.
