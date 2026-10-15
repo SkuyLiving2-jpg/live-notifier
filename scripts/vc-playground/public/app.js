@@ -441,9 +441,10 @@
 
   const SCENARIOS = [
     "Ketik “input vc”: muncul pesan rangkuman + panel tombol.",
-    "➕ Tambah sesi → cari “lily” → pilih tanggal → isi form: rangkuman ter-update di pesan yang sama (muncul tanda “diedit”).",
-    "Isi form dengan jam salah (mis. 25.00) dan sesi kosong: semua kesalahan tampil sekaligus, “Perbaiki” membuka form dengan isian terakhir.",
-    "Tambah lagi member + tanggal + sesi yang sama: ditolak sebagai duplikat.",
+    "➕ Tambah sesi → cari “lily” → pilih tanggal → pilih sesi (dropdown, jam buka ikut sesinya) → isi form (Mulai, Link, Tiket): rangkuman ter-update di pesan yang sama (muncul tanda “diedit”).",
+    "Pilih tanggal Senin-Jumat: dropdown cuma sesi 1-3. Pilih Sabtu/Minggu: sesi 1-6. Jendela jam buka tampil di tiap opsi.",
+    "Isi form dengan jam mulai salah (25.00) atau lebih awal dari jam buka: semua kesalahan tampil sekaligus, “Perbaiki” membuka form dengan isian terakhir. Pilih sesi yang sudah ada: ditolak sebagai duplikat.",
+    "Ubah / Hapus → Sesi & jam: isi sesi 5 dengan tanggal hari Senin: ditolak (sesi 4-6 hanya Sabtu-Minggu).",
     "Ganti “Bertindak sebagai” ke Orang lain lalu klik tombol di panel: ditolak (pesan sementara).",
     "Di tab “# channel bot (server)”, ketik “input vc” sebagai Owner: hanya disuruh pakai DM. Sebagai Orang lain: balasannya sama seperti sebelum fitur ada (menu umum), tanpa menyebut VC.",
     "Hapus pesan rangkuman (🗑) lalu ubah sesuatu: rangkuman dikirim ulang otomatis.",

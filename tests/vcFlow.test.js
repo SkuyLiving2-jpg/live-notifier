@@ -62,11 +62,24 @@ const { recordLiveCompleted } = require("../src/storage/liveCount");
 const { getTodayWIB } = require("../src/utils");
 const { shiftDateWIB } = require("../src/streakMath");
 const { MESSAGE_LIMIT } = require("../src/chat/vcRender");
+const { dayOfWeek } = require("../src/chat/vcSlots");
+const { formatDateDisplay } = require("../src/chat/vcInput");
 
 const IDN_NOT_FOUND = { ok: true, json: async () => ({ errors: [{ message: "IDNAccount: User Not found" }], data: null }) };
 const ZOOM = "https://us02web.zoom.us/j/87197929985?pwd=abc";
-const GOOD_FORM = { sesi: "2", buka: "12.45", mulai: "13.00", link: `${ZOOM} 388756`, tiket: "3" };
-const DATE = shiftDateWIB(getTodayWIB(), 3);
+// Tanggal uji HARUS punya jenis hari yang pasti (aturan sesi bergantung pada hari), apa pun hari saat test dijalankan:
+// DATE = Sabtu (sesi 1-6), WEEKDAY = Senin (sesi 1-3), keduanya 2-8 hari ke depan.
+function nextDow(dow) {
+  for (let ahead = 2; ahead <= 8; ahead++) {
+    const date = shiftDateWIB(getTodayWIB(), ahead);
+    if (dayOfWeek(date) === dow) return date;
+  }
+  throw new Error("tidak mungkin");
+}
+const DATE = nextDow(6);
+const WEEKDAY = nextDow(1);
+// Sabtu sesi 2 = jendela buka 13.00-13.15 (vcSlots); jam mulai diisi manual.
+const GOOD_FORM = { mulai: "13.15", link: `${ZOOM} 388756`, tiket: "3" };
 
 let realFetch;
 beforeEach(() => {
@@ -143,12 +156,13 @@ async function mod(customId, fields, opts) {
   return i;
 }
 
-// Alur lengkap tambah sesi untuk "lily" (1 hasil pencarian). Balikin interaksi form terakhir.
-async function addLilySession(form = GOOD_FORM, opts = {}) {
+// Alur lengkap tambah sesi untuk "lily" (1 hasil pencarian): tanggal -> sesi (dropdown) -> form. Balikin interaksi form terakhir.
+async function addLilySession(form = GOOD_FORM, opts = {}, sessionNo = 2, date = DATE) {
   await btn("vc_flow:add", opts);
   await mod("vc_modal:search", { member_query: "lily" }, opts);
   await btn("vc_flow:use", opts);
-  await sel("vc_select:date", [DATE], opts);
+  await sel("vc_select:date", [date], opts);
+  await sel("vc_select:session", [String(sessionNo)], opts);
   return mod("vc_modal:form", form, opts);
 }
 
@@ -277,12 +291,34 @@ test("tambah sesi (member dikenal, 1 hasil): modal cari -> pakai -> dropdown tan
   assert.equal(dateSelect.options[24].data.value, shiftDateWIB(getTodayWIB(), 24));
 
   const picked = await sel("vc_select:date", [DATE]);
-  assert.equal(picked.calls.modals[0].toJSON().custom_id, "vc_modal:form", "memilih tanggal langsung membuka form");
-  const fields = Object.keys(modalValues(picked.calls.modals[0]));
-  assert.deepEqual(fields, ["sesi", "buka", "mulai", "link", "tiket"]);
+  assert.equal(picked.calls.modals.length, 0, "memilih tanggal membuka dropdown sesi dulu, bukan form");
+  assert.match(picked.screen.content, /akhir pekan/);
+  const sessionSelect = picked.screen.components[0].components[0];
+  assert.equal(sessionSelect.data.custom_id, "vc_select:session");
+  assert.deepEqual(
+    sessionSelect.options.map((o) => o.data.label),
+    [
+      "Sesi 1 · Buka 11.30-11.45",
+      "Sesi 2 · Buka 13.00-13.15",
+      "Sesi 3 · Buka 14.30-14.45",
+      "Sesi 4 · Buka 16.15-16.30",
+      "Sesi 5 · Buka 17.45-18.00",
+      "Sesi 6 · Buka 19.15-19.30",
+    ],
+  );
+  assert.ok(idsOf(picked.screen).includes("vc_flow:redate"));
+
+  const chosen = await sel("vc_select:session", ["2"]);
+  const formModal = chosen.calls.modals[0].toJSON();
+  assert.equal(formModal.custom_id, "vc_modal:form");
+  assert.equal(formModal.title, "Sesi 2 · Buka 13.00-13.15", "judul form mengingatkan sesi + jam buka yang dipilih");
+  assert.deepEqual(Object.keys(modalValues(chosen.calls.modals[0])), ["mulai", "link", "tiket"], "jam buka tidak diketik");
+  assert.equal(formModal.components[0].components[0].placeholder, "13.15", "jam mulai manual: placeholder saja, tidak terisi otomatis");
+  assert.equal(formModal.components[0].components[0].value, undefined);
 
   const form = await mod("vc_modal:form", GOOD_FORM);
   assert.match(form.screen.content, /✅ Tersimpan: \*\*Lily\*\* · Sesi 2/);
+  assert.match(form.screen.content, /Buka 13\.00-13\.15 · Mulai 13\.15/);
   assert.deepEqual(idsOf(form.screen), ["vc_flow:again", "vc_flow:add", "vc_flow:edit", "vc_flow:menu", "vc_flow:close"]);
 
   const [s] = loadVc().sessions;
@@ -293,12 +329,24 @@ test("tambah sesi (member dikenal, 1 hasil): modal cari -> pakai -> dropdown tan
       session: s.session,
       date: s.date,
       open: s.open,
+      openEnd: s.openEnd,
       start: s.start,
       tickets: s.tickets,
       passcode: s.passcode,
       link: s.link,
     },
-    { username: "jkt48_lily", name: "Lily JKT48", session: 2, date: DATE, open: "12:45", start: "13:00", tickets: 3, passcode: "388756", link: ZOOM },
+    {
+      username: "jkt48_lily",
+      name: "Lily JKT48",
+      session: 2,
+      date: DATE,
+      open: "13:00",
+      openEnd: "13:15",
+      start: "13:15",
+      tickets: 3,
+      passcode: "388756",
+      link: ZOOM,
+    },
   );
   assert.ok(s.note && s.note.length > 10, "catatan absurd digenerate");
 
@@ -307,6 +355,7 @@ test("tambah sesi (member dikenal, 1 hasil): modal cari -> pakai -> dropdown tan
   assert.match(text, /## 1\. 🚨✨🚨 LILY 🚨✨🚨/, "Lily = prioritas -> format spesial");
   assert.match(text, /🆔 871 9792 9985 · 🔑 388756/, "ID Zoom otomatis dari link");
   assert.match(text, /🎟️ \*\*3 tiket\*\*/);
+  assert.match(text, /🕐 Buka \*\*13\.00-13\.15\*\* · ▶️ Mulai \*\*13\.15\*\*/, "jendela jam buka tampil sebagai rentang");
   assert.match(text, new RegExp(s.note.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "catatan yang tersimpan = yang tampil");
 });
 
@@ -319,6 +368,7 @@ test("member tidak dikenal: pencarian kosong -> pakai nama apa adanya -> tersimp
 
   await btn("vc_flow:manual");
   await sel("vc_select:date", [DATE]);
+  await sel("vc_select:session", ["2"]);
   const form = await mod("vc_modal:form", { ...GOOD_FORM, tiket: "" });
   assert.match(form.screen.content, /Tersimpan/);
 
@@ -354,6 +404,7 @@ test("pencarian: member dari IDN yang belum pernah live (neverLive) tetap bisa d
   assert.match(search.screen.content, /Ketemu: \*\*Kimmy\*\* \(belum pernah live/);
   await btn("vc_flow:use");
   await sel("vc_select:date", [DATE]);
+  await sel("vc_select:session", ["2"]);
   await mod("vc_modal:form", GOOD_FORM);
   assert.equal(loadVc().sessions[0].username, "jkt48_kimmy");
 });
@@ -368,7 +419,7 @@ test("pencarian: IDN error -> tetap ada opsi pakai nama apa adanya (tidak buntu)
   assert.ok(idsOf(search.screen).includes("vc_flow:manual"));
 });
 
-test("tanggal lain (ketik): valid -> layar 'isi detail'; tidak valid -> pesan + coba lagi; form yang dibuka dari situ tetap menyimpan tanggalnya", async () => {
+test("tanggal lain (ketik): valid -> dropdown sesi; tidak valid -> pesan + coba lagi; sesi yang dipilih dari situ tetap menyimpan tanggalnya", async () => {
   await btn("vc_flow:add");
   await mod("vc_modal:search", { member_query: "lily" });
   await btn("vc_flow:use");
@@ -379,14 +430,76 @@ test("tanggal lain (ketik): valid -> layar 'isi detail'; tidak valid -> pesan + 
   assert.match(bad.screen.content, /gak ada di kalender/);
   assert.ok(idsOf(bad.screen).includes("vc_flow:date_other"));
 
-  const good = await mod("vc_modal:datetext", { date_text: "besok" });
+  const premature = await btn("vc_flow:form");
+  assert.match(premature.screen.content, /kelamaan\/ke-reset/, "form tidak bisa dibuka sebelum sesi dipilih");
+
+  const good = await mod("vc_modal:datetext", { date_text: DATE });
   assert.match(good.screen.content, /Tanggal: \*\*/);
-  assert.ok(idsOf(good.screen).includes("vc_flow:form"));
-  const openForm = await btn("vc_flow:form");
-  assert.equal(openForm.calls.modals[0].toJSON().custom_id, "vc_modal:form");
+  assert.equal(good.screen.components[0].components[0].data.custom_id, "vc_select:session");
+  const chosen = await sel("vc_select:session", ["2"]);
+  assert.equal(chosen.calls.modals[0].toJSON().custom_id, "vc_modal:form");
 
   await mod("vc_modal:form", GOOD_FORM);
-  assert.equal(loadVc().sessions[0].date, shiftDateWIB(getTodayWIB(), 1));
+  assert.equal(loadVc().sessions[0].date, DATE);
+});
+
+test("dropdown sesi mengikuti hari: Senin-Jumat cuma sesi 1-3 (jendela buka 16.15/17.45/19.15), Sabtu-Minggu sesi 1-6", async () => {
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "lily" });
+  await btn("vc_flow:use");
+
+  const weekday = await sel("vc_select:date", [WEEKDAY]);
+  assert.match(weekday.screen.content, /hari kerja/);
+  assert.deepEqual(
+    weekday.screen.components[0].components[0].options.map((o) => o.data.label),
+    ["Sesi 1 · Buka 16.15-16.30", "Sesi 2 · Buka 17.45-18.00", "Sesi 3 · Buka 19.15-19.30"],
+  );
+
+  // sesi 4-6 TIDAK ADA di hari kerja walau value-nya dikirim paksa (mis. dari layar lama): ditolak, tidak membuka form
+  const forced = await sel("vc_select:session", ["4"]);
+  assert.equal(forced.calls.modals.length, 0);
+  assert.match(forced.screen.content, /Sesi 4 gak ada di hari Senin/);
+  assert.equal(forced.screen.components[0].components[0].options.length, 3);
+
+  const sunday = shiftDateWIB(DATE, 1);
+  assert.equal(dayOfWeek(sunday), 0);
+  const weekend = await sel("vc_select:date", [sunday]);
+  assert.equal(weekend.screen.components[0].components[0].options.length, 6);
+});
+
+test("sesi dipilih -> jam buka mengikuti sesi (hari kerja sesi 3 = 19.15-19.30; Sabtu sesi 6 = sama dengan sesi 3 hari kerja)", async () => {
+  await addLilySession({ ...GOOD_FORM, mulai: "19.30" }, {}, 3, WEEKDAY);
+  await addLilySession({ ...GOOD_FORM, mulai: "19.30" }, {}, 6, DATE);
+  const [weekday, weekend] = loadVc().sessions;
+  assert.deepEqual([weekday.session, weekday.open, weekday.openEnd], [3, "19:15", "19:30"]);
+  assert.deepEqual([weekend.session, weekend.open, weekend.openEnd], [6, "19:15", "19:30"]);
+});
+
+test("jam mulai lebih awal dari jam buka sesi ditolak (sama atau lebih telat boleh, mis. VC molor)", async () => {
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "lily" });
+  await btn("vc_flow:use");
+  await sel("vc_select:date", [DATE]);
+  await sel("vc_select:session", ["2"]); // buka 13.00-13.15
+
+  const early = await mod("vc_modal:form", { ...GOOD_FORM, mulai: "12.59" });
+  assert.match(early.screen.content, /Jam mulai 12\.59 gak boleh lebih awal dari jam buka sesi 2 \(13\.00\)/);
+  assert.equal(loadVc().sessions.length, 0);
+
+  const late = await mod("vc_modal:form", { ...GOOD_FORM, mulai: "13.40" });
+  assert.match(late.screen.content, /Tersimpan/);
+  assert.equal(loadVc().sessions[0].start, "13:40");
+});
+
+test("'Ganti tanggal' di dropdown sesi kembali ke pilihan tanggal dan membuang sesi/isian lama", async () => {
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "lily" });
+  await btn("vc_flow:use");
+  await sel("vc_select:date", [DATE]);
+  const back = await btn("vc_flow:redate");
+  assert.equal(back.screen.components[0].components[0].data.custom_id, "vc_select:date");
+  const staleSession = await sel("vc_select:session", ["2"]);
+  assert.match(staleSession.screen.content, /kelamaan\/ke-reset/, "tanggal belum dipilih ulang -> sesi lama tidak berlaku");
 });
 
 test("form salah isi: SEMUA kesalahan ditampilkan, tidak ada yang tersimpan, 'Perbaiki' membuka form dengan isian terakhir (tidak mengetik dari nol)", async () => {
@@ -394,16 +507,18 @@ test("form salah isi: SEMUA kesalahan ditampilkan, tidak ada yang tersimpan, 'Pe
   await mod("vc_modal:search", { member_query: "lily" });
   await btn("vc_flow:use");
   await sel("vc_select:date", [DATE]);
+  await sel("vc_select:session", ["2"]);
 
-  const bad = await mod("vc_modal:form", { sesi: "abc", buka: "14.00", mulai: "13.00", link: "bukan link", tiket: "x" });
+  const bad = await mod("vc_modal:form", { mulai: "25.00", link: "bukan link", tiket: "x" });
   assert.match(bad.screen.content, /Ada yang belum bener/);
-  assert.equal((bad.screen.content.match(/^• /gm) || []).length, 4, "sesi, link, tiket, dan buka>mulai");
+  assert.equal((bad.screen.content.match(/^• /gm) || []).length, 3, "mulai, link, dan tiket");
   assert.deepEqual(idsOf(bad.screen), ["vc_flow:form", "vc_flow:menu", "vc_flow:close"]);
   assert.equal(loadVc().sessions.length, 0);
   assert.equal(dm.store.size, 0, "tidak ada pesan rangkuman untuk input yang gagal");
 
   const retry = await btn("vc_flow:form");
-  assert.deepEqual(modalValues(retry.calls.modals[0]), { sesi: "abc", buka: "14.00", mulai: "13.00", link: "bukan link", tiket: "x" });
+  assert.deepEqual(modalValues(retry.calls.modals[0]), { mulai: "25.00", link: "bukan link", tiket: "x" });
+  assert.equal(retry.calls.modals[0].toJSON().title, "Sesi 2 · Buka 13.00-13.15", "form perbaikan tetap untuk sesi yang sama");
 
   const fixed = await mod("vc_modal:form", GOOD_FORM);
   assert.match(fixed.screen.content, /Tersimpan/);
@@ -414,13 +529,22 @@ test("sesi yang sama (member + tanggal + nomor sesi) ditolak sebagai duplikat; n
   await addLilySession();
   assert.equal(loadVc().sessions.length, 1);
 
-  await btn("vc_flow:again");
-  await sel("vc_select:date", [DATE]);
+  // "Sesi lagi": member + tanggal tetap, langsung ke dropdown sesi; sesi yang sudah ada ditandai di dropdown
+  const again = await btn("vc_flow:again");
+  assert.equal(again.screen.components[0].components[0].data.custom_id, "vc_select:session");
+  assert.match(again.screen.content, new RegExp(formatDateDisplay(DATE)));
+  const options = again.screen.components[0].components[0].options;
+  assert.match(options[1].data.description, /Sudah ada/);
+  assert.equal(options[2].data.description, undefined);
+
+  await sel("vc_select:session", ["2"]);
   const dup = await mod("vc_modal:form", GOOD_FORM);
   assert.match(dup.screen.content, /udah ada/);
   assert.equal(loadVc().sessions.length, 1);
 
-  const other = await mod("vc_modal:form", { ...GOOD_FORM, sesi: "3", buka: "14.15", mulai: "14.30" });
+  await btn("vc_flow:again");
+  await sel("vc_select:session", ["3"]); // Sabtu sesi 3 = buka 14.30-14.45
+  const other = await mod("vc_modal:form", { ...GOOD_FORM, mulai: "14.45" });
   assert.match(other.screen.content, /Tersimpan/);
   assert.equal(loadVc().sessions.length, 2);
   assert.equal((summaryText().match(/^## /gm) || []).length, 1, "dua sesi Lily tetap SATU judul");
@@ -434,6 +558,12 @@ test("draft hilang (kelamaan/bot restart) -> layar 'ke-reset', tidak ada yang te
   assert.match(use.screen.content, /kelamaan\/ke-reset/);
   const date = await sel("vc_select:date", [DATE], opts);
   assert.match(date.screen.content, /kelamaan\/ke-reset/);
+  const session = await sel("vc_select:session", ["2"], opts);
+  assert.match(session.screen.content, /kelamaan\/ke-reset/);
+  const retry = await btn("vc_flow:form", opts);
+  assert.match(retry.screen.content, /kelamaan\/ke-reset/);
+  const again = await btn("vc_flow:again", opts);
+  assert.match(again.screen.content, /kelamaan\/ke-reset/);
   const manual = await btn("vc_flow:manual", opts);
   assert.match(manual.screen.content, /kelamaan\/ke-reset/);
   assert.equal(loadVc().sessions.length, 0);
@@ -461,12 +591,13 @@ test("urutan di rangkuman: prioritas selalu paling atas walau diinput terakhir d
     await mod("vc_modal:search", { member_query: query });
     await btn("vc_flow:use");
     await sel("vc_select:date", [date]);
+    await sel("vc_select:session", ["1"]);
     await mod("vc_modal:form", form);
   };
-  await addPlain("aralie", shiftDateWIB(getTodayWIB(), 1), { ...GOOD_FORM, sesi: "1" });
-  await addPlain("lily", shiftDateWIB(getTodayWIB(), 9), { ...GOOD_FORM, sesi: "1" });
+  await addPlain("aralie", DATE, { ...GOOD_FORM, mulai: "11.45" });
+  await addPlain("lily", shiftDateWIB(DATE, 7), { ...GOOD_FORM, mulai: "11.45" });
   const text = summaryText();
-  assert.ok(text.indexOf("LILY") < text.indexOf("Aralie"), "Lily (prioritas, 9 hari lagi) di atas Aralie (biasa, besok)");
+  assert.ok(text.indexOf("LILY") < text.indexOf("Aralie"), "Lily (prioritas, seminggu lebih belakang) di atas Aralie (biasa, lebih dulu)");
   assert.match(text, /## 1\. 🚨✨🚨 LILY/);
   assert.match(text, /\*\*2\. Aralie\*\*/);
 });
@@ -486,14 +617,16 @@ test("ubah sesi & jam: modal terisi nilai sekarang; perubahan tersimpan, catatan
   assert.deepEqual(idsOf(entry.screen).slice(0, 4), [`vc_flow:eform:${id}`, `vc_flow:elink:${id}`, `vc_flow:enote:${id}`, `vc_flow:edel:${id}`]);
 
   const open = await btn(`vc_flow:eform:${id}`);
-  assert.deepEqual(modalValues(open.calls.modals[0]), { sesi: "2", tanggal: DATE, buka: "12.45", mulai: "13.00", tiket: "3" });
+  assert.deepEqual(modalValues(open.calls.modals[0]), { sesi: "2", tanggal: DATE, mulai: "13.15", tiket: "3" }, "tidak ada kolom jam buka");
 
-  const done = await mod(`vc_modal:eform:${id}`, { sesi: "5", tanggal: "besok", buka: "15.00", mulai: "15.30", tiket: "" });
+  const sunday = shiftDateWIB(DATE, 1);
+  const done = await mod(`vc_modal:eform:${id}`, { sesi: "5", tanggal: sunday, mulai: "18.00", tiket: "" });
   assert.match(done.screen.content, /✅ Diubah/);
+  assert.match(done.screen.content, /Buka 17\.45-18\.00/, "jam buka ikut sesi baru");
   const s = getVcSession(id);
   assert.deepEqual(
-    { session: s.session, date: s.date, open: s.open, start: s.start, tickets: s.tickets },
-    { session: 5, date: shiftDateWIB(getTodayWIB(), 1), open: "15:00", start: "15:30", tickets: null },
+    { session: s.session, date: s.date, open: s.open, openEnd: s.openEnd, start: s.start, tickets: s.tickets },
+    { session: 5, date: sunday, open: "17:45", openEnd: "18:00", start: "18:00", tickets: null },
   );
   assert.notEqual(s.note, oldNote, "catatan basi (menyebut 3 tiket/jeda lama) dibuat ulang");
   assert.match(summaryText(), /Sesi 5/);
@@ -501,30 +634,52 @@ test("ubah sesi & jam: modal terisi nilai sekarang; perubahan tersimpan, catatan
   assert.equal(dm.store.size, 1, "diedit di tempat, bukan pesan baru");
 });
 
-test("ubah sesi: kalau jam/tiket TIDAK berubah, catatannya dipertahankan", async () => {
+test("ubah sesi: kalau jam/tiket TIDAK berubah (cuma pindah ke Sabtu lain), catatannya dipertahankan", async () => {
   await addLilySession();
   const id = loadVc().sessions[0].id;
   const note = getVcSession(id).note;
-  await mod(`vc_modal:eform:${id}`, { sesi: "7", tanggal: DATE, buka: "12.45", mulai: "13.00", tiket: "3" });
+  const nextSaturday = shiftDateWIB(DATE, 7);
+  await mod(`vc_modal:eform:${id}`, { sesi: "2", tanggal: nextSaturday, mulai: "13.15", tiket: "3" });
   assert.equal(getVcSession(id).note, note);
-  assert.equal(getVcSession(id).session, 7);
+  assert.equal(getVcSession(id).date, nextSaturday);
+});
+
+test("ubah sesi: sesi 4-6 di hari kerja ditolak (tidak ada), termasuk saat tanggalnya dipindah ke hari kerja; sesi 1-3 boleh dan jam bukanya ikut", async () => {
+  await addLilySession({ ...GOOD_FORM, mulai: "18.00" }, {}, 5, DATE); // Sabtu sesi 5 (17.45-18.00)
+  const id = loadVc().sessions[0].id;
+
+  const moved = await mod(`vc_modal:eform:${id}`, { sesi: "5", tanggal: WEEKDAY, mulai: "18.00", tiket: "3" });
+  assert.match(moved.screen.content, /Ada yang belum bener/);
+  assert.match(moved.screen.content, /Sesi 5 gak ada di hari Senin - hari kerja cuma sesi 1-3/);
+  assert.deepEqual([getVcSession(id).session, getVcSession(id).date], [5, DATE], "tidak ada yang berubah");
+
+  const typed = await mod(`vc_modal:eform:${id}`, { sesi: "4", tanggal: "senin", mulai: "16.30", tiket: "3" });
+  assert.match(typed.screen.content, /gak ada di kalender|gak kebaca/, "kata 'senin' bukan tanggal");
+
+  const fixed = await mod(`vc_modal:eform:${id}`, { sesi: "3", tanggal: WEEKDAY, mulai: "19.30", tiket: "3" });
+  assert.match(fixed.screen.content, /✅ Diubah/);
+  const s = getVcSession(id);
+  assert.deepEqual([s.session, s.date, s.open, s.openEnd], [3, WEEKDAY, "19:15", "19:30"]);
+
+  const tooHigh = await mod(`vc_modal:eform:${id}`, { sesi: "7", tanggal: DATE, mulai: "19.30", tiket: "3" });
+  assert.match(tooHigh.screen.content, /Sesi 7 gak ada di hari Sabtu - akhir pekan cuma sesi 1-6/);
 });
 
 test("ubah sesi: salah isi -> daftar kesalahan + isian terakhir terisi lagi saat 'Perbaiki'; bentrok dengan sesi lain member itu ditolak", async () => {
   await addLilySession();
   await btn("vc_flow:again");
-  await sel("vc_select:date", [DATE]);
-  await mod("vc_modal:form", { ...GOOD_FORM, sesi: "3", buka: "14.15", mulai: "14.30" });
+  await sel("vc_select:session", ["3"]);
+  await mod("vc_modal:form", { ...GOOD_FORM, mulai: "14.45" });
   const [a, b] = loadVc().sessions;
 
-  const bad = await mod(`vc_modal:eform:${a.id}`, { sesi: "x", tanggal: "?", buka: "13.00", mulai: "12.00", tiket: "" });
+  const bad = await mod(`vc_modal:eform:${a.id}`, { sesi: "x", tanggal: "?", mulai: "12.00", tiket: "" });
   assert.match(bad.screen.content, /Ada yang belum bener/);
   assert.equal(getVcSession(a.id).session, 2, "tidak berubah");
   const reopen = await btn(`vc_flow:eform:${a.id}`);
   // tiket sengaja dikosongkan owner -> form dibuka dengan kolom tiket KOSONG (bukan kembali ke angka lama 3)
-  assert.deepEqual(modalValues(reopen.calls.modals[0]), { sesi: "x", tanggal: "?", buka: "13.00", mulai: "12.00", tiket: undefined });
+  assert.deepEqual(modalValues(reopen.calls.modals[0]), { sesi: "x", tanggal: "?", mulai: "12.00", tiket: undefined });
 
-  const clash = await mod(`vc_modal:eform:${a.id}`, { sesi: String(b.session), tanggal: DATE, buka: "12.45", mulai: "13.00", tiket: "3" });
+  const clash = await mod(`vc_modal:eform:${a.id}`, { sesi: String(b.session), tanggal: DATE, mulai: "14.45", tiket: "3" });
   assert.match(clash.screen.content, /udah dipakai sesi lain/);
   assert.equal(getVcSession(a.id).session, 2);
 });
@@ -905,6 +1060,7 @@ test("pesan rangkuman dikirim tanpa mention (allowedMentions kosong) walau nama/
   await mod("vc_modal:search", { member_query: "@everyone Bahaya" });
   await btn("vc_flow:manual");
   await sel("vc_select:date", [DATE]);
+  await sel("vc_select:session", ["2"]);
   await mod("vc_modal:form", GOOD_FORM);
   await handleVcCommand({ rawText: "julukan vc @everyone Bahaya = @here halo", commandText: "x", authorId: OWNER, isDm: true });
   assert.ok(sent.length >= 1);

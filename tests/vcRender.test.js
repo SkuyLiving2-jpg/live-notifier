@@ -70,6 +70,21 @@ test("render - member PRIORITAS: heading besar + sirens + blok kutipan + tiket t
   assert.match(msg, /^> 💬 _Catatan absurd\._$/m);
 });
 
+test("render - jendela jam buka tampil sebagai rentang (prioritas & biasa); data lama tanpa openEnd tetap tampil satu jam", () => {
+  const window = { open: "16:15", openEnd: "16:30", start: "16:40" };
+  const [msg] = renderVcMessages(
+    data([
+      session({ ...window, username: "jkt48_lily", name: "Lily JKT48" }),
+      session({ ...window, username: "jkt48_aralie", name: "Aralie JKT48" }),
+      session({ username: "jkt48_gracia", name: "Gracia JKT48", open: "12:45", start: "13:00" }), // data lama
+    ]),
+  );
+  assert.match(msg, /^> 🎬 \*\*Sesi 1\*\* · 🕐 Buka \*\*16\.15-16\.30\*\* · ▶️ Mulai \*\*16\.40\*\*$/m);
+  assert.match(msg, /^• Sesi 1 · Buka 16\.15-16\.30 · Mulai 16\.40$/m);
+  assert.match(msg, /^• Sesi 1 · Buka 12\.45 · Mulai 13\.00$/m, "tanpa openEnd -> satu jam, tidak ada 'undefined' atau tanda hubung menggantung");
+  assert.doesNotMatch(msg, /undefined|null|12\.45-/);
+});
+
 test("render - PRIORITAS SELALU di atas walau tanggalnya lebih belakang; di dalam kelompok urut tanggal lalu jam", () => {
   const sessions = [
     session({ username: "jkt48_aralie", name: "Aralie JKT48", date: "2026-10-10", start: "09:00", open: "08:30" }), // biasa, paling awal

@@ -132,8 +132,16 @@ test("backup: vcSchedule ikut di snapshot (termasuk link) dan bisa dipulihkan; b
     { sessions: [{ id: 1, name: "x", session: 1, date: "d", open: "12.00", start: "13:00", link: "l" }] },
     { sessions: [{ id: 1, name: "x", session: 1, date: "d", open: "12:00", start: "13:00" }] },
     { sessions: [], nicknames: { a: 5 } },
+    { sessions: [{ id: 1, name: "x", session: 1, date: "d", open: "12:00", openEnd: "12.15", start: "13:00", link: "l" }] },
+    { sessions: [{ id: 1, name: "x", session: 1, date: "d", open: "12:00", openEnd: 1215, start: "13:00", link: "l" }] },
   ];
   for (const vc of bad) assert.equal(planRestore({ vcSchedule: vc }).invalid.length, 1, JSON.stringify(vc).slice(0, 60));
+
+  // jendela jam buka: openEnd opsional (data lama tidak punya), boleh null atau HH:MM
+  const good = { id: 1, name: "x", session: 1, date: "d", open: "12:00", start: "13:00", link: "l" };
+  for (const extra of [{}, { openEnd: null }, { openEnd: "12:15" }]) {
+    assert.deepEqual(planRestore({ vcSchedule: { sessions: [{ ...good, ...extra }] } }).invalid, [], JSON.stringify(extra));
+  }
   assert.deepEqual(planRestore({ vcSchedule: { sessions: [], nicknames: {} } }).invalid, [], "periode kosong valid (volume baru)");
 });
 

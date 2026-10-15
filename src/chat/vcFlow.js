@@ -26,7 +26,8 @@ const { shiftDateWIB } = require("../streakMath");
 const { isOwner } = require("./replies");
 const { searchTargetCandidates } = require("./aliasFlow");
 const { deleteInteractionMessage } = require("./interactionHelpers");
-const { validateSessionForm, parseDateInput, formatDateDisplay, formatTime } = require("./vcInput");
+const { validateSessionForm, parseDateInput, formatDateDisplay, formatTime, formatOpenWindow } = require("./vcInput");
+const { slotsForDate, describeDayType, checkSession } = require("./vcSlots");
 const { renderVcMessages, buildGroups, memberKey, cleanName, escapeMd } = require("./vcRender");
 const { generateNote, generateOpener } = require("./vcAbsurd");
 
@@ -36,8 +37,9 @@ const { generateNote, generateOpener } = require("./vcAbsurd");
 //   - PESAN RANGKUMAN: hasil jadi (vcRender.js). SATU pesan yang di-edit terus tiap ada perubahan (pecah jadi
 //     beberapa pesan hanya kalau melewati batas 2000 karakter). ID-nya disimpan di storage/vcSchedule.js.
 //   - PANEL: pesan kontrol berisi tombol (tambah/ubah/hapus/judul/reset/tutup). Setiap "input vc" membuat panel baru.
-// Alur tambah sesi: Member (cari -> pilih) -> Tanggal (dropdown 25 hari / ketik) -> form (Sesi, Buka, Mulai, Link
-// [+ kode sandi], Tiket). Tiap layar punya "Menu" dan "Tutup" supaya salah pencet tidak menjebak.
+// Alur tambah sesi: Member (cari -> pilih) -> Tanggal (dropdown 25 hari / ketik) -> Sesi (dropdown; isinya mengikuti hari:
+// Senin-Jumat sesi 1-3, Sabtu-Minggu sesi 1-6, tiap opsi membawa JENDELA JAM BUKA-nya, lihat vcSlots.js) -> form (Mulai
+// manual, Link [+ kode sandi], Tiket). Tiap layar punya "Menu" dan "Tutup" supaya salah pencet tidak menjebak.
 // ---------------------------------------------------------------------------
 
 const DM_ONLY_NOTE = "Cok, input VC cuma bisa lewat DM bot ini (biar link Zoom-nya gak kebaca orang lain). Chat aku lewat DM ya.";
@@ -45,7 +47,7 @@ const NOT_OWNER_NOTE = "Cok, fitur ini cuma buat owner.";
 
 // ------------------------------ state sementara ------------------------------
 
-// "channelId:userId" -> { member, date, matches, manualName, lastForm, lastEdit, at }. Isian modal berisi teks bebas
+// "channelId:userId" -> { member, date, session, matches, manualName, lastForm, lastEdit, at }. Isian modal berisi teks bebas
 // (bisa mengandung ":") jadi tidak dititipkan lewat customId; hilang kalau bot restart (owner tinggal mulai lagi).
 const drafts = new Map();
 const DRAFT_TTL_MS = 30 * 60 * 1000;
@@ -67,7 +69,7 @@ function getDraft(interaction) {
 }
 
 function startDraft(interaction) {
-  const draft = { member: null, date: null, matches: [], manualName: null, lastForm: null, lastEdit: null, at: Date.now() };
+  const draft = { member: null, date: null, session: null, matches: [], manualName: null, lastForm: null, lastEdit: null, at: Date.now() };
   drafts.set(draftKey(interaction), draft);
   return draft;
 }
@@ -280,10 +282,22 @@ function buildDateStep(member, prefix = "") {
   };
 }
 
-function buildFormStep(member, date, prefix = "") {
+// Dropdown sesi: isinya tergantung hari (Senin-Jumat sesi 1-3, Sabtu-Minggu sesi 1-6) dan tiap opsi membawa jendela jam
+// bukanya - jadi memilih sesi = memilih jam buka, dan sesi yang tidak ada di hari itu memang tidak bisa dipilih.
+function buildSessionStep(member, date, prefix = "") {
+  const data = loadVc();
+  const options = slotsForDate(date).map((slot) => {
+    const taken = duplicateOf(data, member, date, slot.session);
+    return {
+      label: `Sesi ${slot.session} · Buka ${formatOpenWindow(slot.open, slot.openEnd)}`,
+      value: String(slot.session),
+      description: taken ? "Sudah ada untuk member ini (pakai Ubah / Hapus)" : undefined,
+    };
+  });
+  const select = new StringSelectMenuBuilder().setCustomId("vc_select:session").setPlaceholder("Pilih sesi...").addOptions(options);
   return {
-    content: `${prefix ? `${prefix}\n` : ""}Member: **${escapeMd(cleanName(member.name))}**\nTanggal: **${formatDateDisplay(date)}**\nLanjut isi detail sesinya.`,
-    components: [row(button("vc_flow:form", "✏️ Isi detail sesi", ButtonStyle.Success), button("vc_flow:date_other", "📅 Ganti tanggal")), navRow()],
+    content: `${prefix ? `${prefix}\n` : ""}Member: **${escapeMd(cleanName(member.name))}**\nTanggal: **${formatDateDisplay(date)}** - ${describeDayType(date)}\nSesi berapa, cok? (jam buka ikut sesinya)`,
+    components: [row(select), row(button("vc_flow:redate", "📅 Ganti tanggal")), navRow()],
   };
 }
 
@@ -299,7 +313,7 @@ const sessionLabel = (s) => `${cleanName(s.name)} · Sesi ${s.session} · ${s.da
 function describeSession(s) {
   const tickets = s.tickets ? ` · ${s.tickets} tiket` : "";
   const pass = s.passcode ? ` · sandi ${escapeMd(s.passcode)}` : "";
-  return `**${escapeMd(cleanName(s.name))}** · Sesi ${s.session} · ${formatDateDisplay(s.date)}\nBuka ${formatTime(s.open)} · Mulai ${formatTime(s.start)}${tickets}${pass}`;
+  return `**${escapeMd(cleanName(s.name))}** · Sesi ${s.session} · ${formatDateDisplay(s.date)}\nBuka ${formatOpenWindow(s.open, s.openEnd)} · Mulai ${formatTime(s.start)}${tickets}${pass}`;
 }
 
 function buildEntryScreen(session, prefix = "") {
@@ -339,21 +353,22 @@ const DATE_TEXT_MODAL = () =>
     textInput("date_text", "Tanggal", { placeholder: "18/10, 18 oktober, besok, atau 2026-10-18", max: 40 }),
   ]);
 
-function buildFormModal(prefill = {}) {
-  return modal("vc_modal:form", "Detail sesi VC", [
-    textInput("sesi", "Sesi ke berapa? (angka)", { placeholder: "2", value: prefill.sesi, max: 10 }),
-    textInput("buka", "Jam BUKA (siap-siap)", { placeholder: "12.45", value: prefill.buka, max: 10 }),
-    textInput("mulai", "Jam MULAI", { placeholder: "13.00", value: prefill.mulai, max: 10 }),
+// Sesi dan jam buka sudah dipilih di dropdown (judul form mengingatkannya); yang diketik tinggal jam MULAI (manual, jadi
+// dasar pengingat), link, dan tiket. Placeholder jam mulai = ujung jendela buka, hanya contoh - bukan isian otomatis.
+function buildFormModal(slot, prefill = {}) {
+  return modal("vc_modal:form", `Sesi ${slot.session} · Buka ${formatOpenWindow(slot.open, slot.openEnd)}`, [
+    textInput("mulai", "Jam MULAI", { placeholder: formatTime(slot.openEnd), value: prefill.mulai, max: 10 }),
     textInput("link", "Link Zoom (+ kode sandi, opsional)", { placeholder: "https://us02web.zoom.us/j/... 388756", value: prefill.link, max: 400 }),
     textInput("tiket", "Jumlah tiket (opsional)", { placeholder: "3", value: prefill.tiket, required: false, max: 10 }),
   ]);
 }
 
+// Jam buka tidak ada di form ubah: ia mengikuti (tanggal, sesi) - ganti sesi/tanggal = jam bukanya ikut berganti, dan sesi
+// yang tidak ada di hari itu (mis. sesi 5 di hari Senin) ditolak.
 function buildEditFormModal(session, prefill = {}) {
   return modal(`vc_modal:eform:${session.id}`, "Ubah sesi & jam", [
-    textInput("sesi", "Sesi ke berapa? (angka)", { value: prefill.sesi ?? session.session, max: 10 }),
+    textInput("sesi", "Sesi (hari kerja 1-3, akhir pekan 1-6)", { value: prefill.sesi ?? session.session, max: 10 }),
     textInput("tanggal", "Tanggal", { placeholder: "18/10 atau 2026-10-18", value: prefill.tanggal ?? session.date, max: 40 }),
-    textInput("buka", "Jam BUKA", { value: prefill.buka ?? formatTime(session.open), max: 10 }),
     textInput("mulai", "Jam MULAI", { value: prefill.mulai ?? formatTime(session.start), max: 10 }),
     textInput("tiket", "Jumlah tiket (kosong = tidak ada)", { required: false, value: prefill.tiket ?? (session.tickets || ""), max: 10 }),
   ]);
@@ -393,6 +408,8 @@ async function pickMember(interaction, member) {
   const draft = getDraft(interaction) || startDraft(interaction);
   draft.member = member;
   draft.date = null;
+  draft.session = null;
+  draft.lastForm = null;
   await interaction.update(safeReplyOptions(buildDateStep(member)));
 }
 
@@ -422,17 +439,28 @@ async function handleVcButton(interaction) {
       return pickMember(interaction, { username: null, name: draft.manualName });
     }
     case "again": {
+      // "Sesi lagi": member dan tanggal yang sama (beberapa sesi di hari yang sama itu umum), tinggal pilih sesi berikutnya.
+      const draft = getDraft(interaction);
+      if (!draft?.member || !draft.date) return interaction.update(safeReplyOptions(expiredPanel()));
+      draft.session = null;
+      draft.lastForm = null;
+      return interaction.update(safeReplyOptions(buildSessionStep(draft.member, draft.date)));
+    }
+    case "redate": {
       const draft = getDraft(interaction);
       if (!draft?.member) return interaction.update(safeReplyOptions(expiredPanel()));
       draft.date = null;
+      draft.session = null;
+      draft.lastForm = null;
       return interaction.update(safeReplyOptions(buildDateStep(draft.member)));
     }
     case "date_other":
       return interaction.showModal(DATE_TEXT_MODAL());
     case "form": {
       const draft = getDraft(interaction);
-      if (!draft?.member || !draft.date) return interaction.update(safeReplyOptions(expiredPanel()));
-      return interaction.showModal(buildFormModal(draft.lastForm || {}));
+      const slot = draft?.member && draft.date && draft.session ? checkSession(draft.date, draft.session) : null;
+      if (!slot?.ok) return interaction.update(safeReplyOptions(expiredPanel()));
+      return interaction.showModal(buildFormModal(slot.value, draft.lastForm || {}));
     }
     case "edit":
       return interaction.update(safeReplyOptions(buildEntryList()));
@@ -546,7 +574,20 @@ async function handleVcSelect(interaction) {
     const parsed = parseDateInput(value);
     if (!parsed.ok) return interaction.update(safeReplyOptions(buildDateStep(draft.member, parsed.error)));
     draft.date = parsed.value;
-    return interaction.showModal(buildFormModal(draft.lastForm || {}));
+    draft.session = null;
+    draft.lastForm = null;
+    return interaction.update(safeReplyOptions(buildSessionStep(draft.member, draft.date)));
+  }
+
+  if (action === "session") {
+    const draft = getDraft(interaction);
+    if (!draft?.member || !draft.date) return interaction.update(safeReplyOptions(expiredPanel()));
+    const slot = checkSession(draft.date, Number(value));
+    // Dropdown cuma berisi sesi yang ada di hari itu; ini menjaga kalau layar lama (tanggal sudah berganti) masih diklik.
+    if (!slot.ok) return interaction.update(safeReplyOptions(buildSessionStep(draft.member, draft.date, slot.error)));
+    draft.session = slot.value.session;
+    draft.lastForm = null;
+    return interaction.showModal(buildFormModal(slot.value));
   }
 
   if (action === "entry") {
@@ -586,33 +627,34 @@ async function handleDateTextSubmit(interaction) {
     );
   }
   draft.date = parsed.value;
-  return interaction.update(safeReplyOptions(buildFormStep(draft.member, draft.date)));
+  draft.session = null;
+  draft.lastForm = null;
+  return interaction.update(safeReplyOptions(buildSessionStep(draft.member, draft.date)));
 }
 
 async function handleFormSubmit(interaction) {
   await interaction.deferUpdate();
   const draft = getDraft(interaction);
-  if (!draft?.member || !draft.date) return interaction.editReply(safeReplyOptions(expiredPanel()));
+  if (!draft?.member || !draft.date || !draft.session) return interaction.editReply(safeReplyOptions(expiredPanel()));
 
   const raw = {
-    sesi: field(interaction, "sesi"),
-    buka: field(interaction, "buka"),
     mulai: field(interaction, "mulai"),
     link: field(interaction, "link"),
     tiket: field(interaction, "tiket"),
   };
   draft.lastForm = raw; // dipakai buat mengisi ulang form kalau ada yang salah - owner tidak mengetik dari nol
-  const result = validateSessionForm(raw);
+  // Sesi + tanggal dari dropdown sebelumnya ikut divalidasi: jam buka diturunkan dari sana, bukan diketik.
+  const result = validateSessionForm(raw, undefined, { date: draft.date, session: draft.session });
   if (!result.ok) return interaction.editReply(safeReplyOptions(buildErrorStep(result.errors, "vc_flow:form")));
 
   const data = ensurePeriod();
   const { value } = result;
-  const duplicate = duplicateOf(data, draft.member, draft.date, value.session);
+  const duplicate = duplicateOf(data, draft.member, draft.date, draft.session);
   if (duplicate) {
     return interaction.editReply(
       safeReplyOptions(
         buildErrorStep(
-          [`Sesi ${value.session} buat ${cleanName(draft.member.name)} di tanggal itu udah ada - pakai "Ubah / Hapus" kalau mau diganti.`],
+          [`Sesi ${draft.session} buat ${cleanName(draft.member.name)} di tanggal itu udah ada - pakai "Ubah / Hapus" kalau mau diganti.`],
           "vc_flow:form",
         ),
       ),
@@ -622,9 +664,10 @@ async function handleFormSubmit(interaction) {
   const session = addVcSession({
     username: draft.member.username,
     name: draft.member.name,
-    session: value.session,
+    session: draft.session,
     date: draft.date,
     open: value.open,
+    openEnd: value.openEnd,
     start: value.start,
     tickets: value.tickets,
     link: value.link,
@@ -632,7 +675,7 @@ async function handleFormSubmit(interaction) {
     note: generateNote({ name: draft.member.name, tickets: value.tickets, open: value.open, start: value.start }),
   });
   draft.lastForm = null;
-  draft.date = null;
+  draft.session = null; // tanggal dipertahankan: "Sesi lagi" lanjut ke sesi berikutnya di hari yang sama
   const sync = await syncSummary(interaction.user.id);
   await interaction.editReply(
     safeReplyOptions({
@@ -658,7 +701,6 @@ async function handleEditFormSubmit(interaction) {
   const raw = {
     sesi: field(interaction, "sesi"),
     tanggal: field(interaction, "tanggal"),
-    buka: field(interaction, "buka"),
     mulai: field(interaction, "mulai"),
     tiket: field(interaction, "tiket"),
   };
@@ -677,7 +719,7 @@ async function handleEditFormSubmit(interaction) {
 
   // Catatan absurd menyebut jumlah tiket / jeda jam: kalau itu berubah, catatannya dibuat ulang biar tidak basi.
   const timingChanged = value.open !== session.open || value.start !== session.start || value.tickets !== session.tickets;
-  const patch = { session: value.session, date: value.date, open: value.open, start: value.start, tickets: value.tickets };
+  const patch = { session: value.session, date: value.date, open: value.open, openEnd: value.openEnd, start: value.start, tickets: value.tickets };
   if (timingChanged) patch.note = generateNote({ name: session.name, tickets: value.tickets, open: value.open, start: value.start });
   const updated = updateVcSession(id, patch);
   draft.lastEdit = null;

@@ -10,10 +10,12 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 const { getTodayWIB } = require("../src/utils");
 const { shiftDateWIB } = require("../src/streakMath");
+const { dayOfWeek } = require("../src/chat/vcSlots");
 const { loadVc } = require("../src/storage/vcSchedule");
 
 const { FakeInteraction } = engine._internals;
-const DATE = shiftDateWIB(getTodayWIB(), 3);
+// Sabtu terdekat (2-8 hari lagi): aturan sesi bergantung pada hari, jadi tanggal uji harus pasti akhir pekan.
+const DATE = [2, 3, 4, 5, 6, 7, 8].map((n) => shiftDateWIB(getTodayWIB(), n)).find((d) => dayOfWeek(d) === 6);
 const ZOOM = "https://us02web.zoom.us/j/87197929985?pwd=abc";
 
 beforeEach(async () => {
@@ -158,13 +160,17 @@ test("engine: tambah sesi lengkap lewat tombol/dropdown/form - tersimpan, pesan 
   assert.match(lastBot().content, /Tanggal VC-nya kapan/);
 
   const picked = await engine.interact(owner({ kind: "select", customId: "vc_select:date", values: [DATE], messageId: panel.id }));
-  assert.equal(picked.modal.custom_id, "vc_modal:form");
+  assert.equal(picked.modal, null, "tanggal dipilih -> dropdown sesi dulu");
+  assert.match(lastBot().content, /Sesi berapa/);
+  const session = await engine.interact(owner({ kind: "select", customId: "vc_select:session", values: ["2"], messageId: panel.id }));
+  assert.equal(session.modal.custom_id, "vc_modal:form");
+  assert.equal(session.modal.title, "Sesi 2 · Buka 13.00-13.15");
 
   const saved = await engine.interact(
     owner({
       kind: "modal",
       customId: "vc_modal:form",
-      fields: { sesi: "2", buka: "12.45", mulai: "13.00", link: `${ZOOM} 388756`, tiket: "3" },
+      fields: { mulai: "13.15", link: `${ZOOM} 388756`, tiket: "3" },
       messageId: panel.id,
     }),
   );
@@ -175,6 +181,7 @@ test("engine: tambah sesi lengkap lewat tombol/dropdown/form - tersimpan, pesan 
   const summary = channel("dm-owner").messages.find((m) => m.id === summaryId);
   assert.ok(summary.edited, "pesan rangkuman yang sama di-edit, bukan pesan baru");
   assert.match(summary.content, /3 tiket/);
+  assert.match(summary.content, /Buka \*\*13\.00-13\.15\*\*/);
   assert.equal(engine.getState().log.filter((e) => e.issues.length > 0).length, 0);
 });
 

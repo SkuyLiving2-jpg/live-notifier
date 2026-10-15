@@ -73,9 +73,10 @@ function validateVcSchedule(v) {
       typeof s.date === "string" &&
       /^\d{2}:\d{2}$/.test(s.open) &&
       /^\d{2}:\d{2}$/.test(s.start) &&
+      (s.openEnd === undefined || s.openEnd === null || /^\d{2}:\d{2}$/.test(s.openEnd)) &&
       typeof s.link === "string",
   );
-  if (!ok) return "tiap sesi harus punya id, name, session (angka), date, open/start (HH:MM) dan link";
+  if (!ok) return "tiap sesi harus punya id, name, session (angka), date, open/start (HH:MM; openEnd opsional) dan link";
   if (v.nicknames !== undefined && !(isPlainObject(v.nicknames) && everyValue(v.nicknames, (x) => typeof x === "string")))
     return "nicknames harus object { kunci: julukan }";
   return null;

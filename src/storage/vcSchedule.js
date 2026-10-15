@@ -7,8 +7,10 @@ const { getTodayWIB, formatMonthLabel } = require("../utils");
 //   {
 //     title:    "VC Oktober 2026",
 //     opener:   kalimat pembuka absurd (digenerate sekali, disimpan supaya pesan tidak berubah tiap di-render),
-//     sessions: [{ id, username|null, name, session, date: "YYYY-MM-DD", open: "HH:MM", start: "HH:MM",
+//     sessions: [{ id, username|null, name, session, date: "YYYY-MM-DD", open: "HH:MM", openEnd: "HH:MM"|null, start: "HH:MM",
 //                  tickets: angka|null, link, passcode|null, note }],
+//                 (open-openEnd = jendela jam buka sesi, ditentukan chat/vcSlots.js dari tanggal+sesi; start diisi manual;
+//                  openEnd tidak ada di data lama dari sebelum jendela jam buka dikenal)
 //     nicknames: { <kunci member>: "julukan" },   // kunci = username, atau "name:<nama huruf kecil>" untuk member non-IDN
 //     nextId:   penghitung id sesi,
 //     message:  { channelId, ids: [id pesan rangkuman] } | null   // pesan yang di-edit terus di DM owner

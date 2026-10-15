@@ -9,7 +9,7 @@
 // jam mulai terawal. Satu member dengan beberapa sesi digabung di bawah SATU judul (sesinya diurutkan tanggal+jam).
 
 const { getPriorityConfig } = require("../priority");
-const { formatTime, formatDateDisplay, extractZoomId, formatZoomId } = require("./vcInput");
+const { formatTime, formatOpenWindow, formatDateDisplay, extractZoomId, formatZoomId } = require("./vcInput");
 
 const SEPARATOR = "━━━━━━━━━━━━━━━━━━━━";
 // Batas Discord 2000 karakter per pesan; disisakan selisih biar aman terhadap karakter multi-unit (emoji).
@@ -88,7 +88,7 @@ function renderSessionLines(sessions, fancy) {
       if (lines[lines.length - 1]?.startsWith(">")) lines.push(">");
       const tickets = ticketsText(s);
       lines.push(
-        `> 🎬 **Sesi ${s.session}** · 🕐 Buka **${formatTime(s.open)}** · ▶️ Mulai **${formatTime(s.start)}**${tickets ? ` · 🎟️ **${tickets}**` : ""}`,
+        `> 🎬 **Sesi ${s.session}** · 🕐 Buka **${formatOpenWindow(s.open, s.openEnd)}** · ▶️ Mulai **${formatTime(s.start)}**${tickets ? ` · 🎟️ **${tickets}**` : ""}`,
       );
       lines.push(`> 🔗 <${s.link}>`);
       const ids = idLine(s);
@@ -96,7 +96,7 @@ function renderSessionLines(sessions, fancy) {
       if (note) lines.push(`> 💬 _${note}_`);
     } else {
       const tickets = ticketsText(s);
-      lines.push(`• Sesi ${s.session} · Buka ${formatTime(s.open)} · Mulai ${formatTime(s.start)}${tickets ? ` · ${tickets}` : ""}`);
+      lines.push(`• Sesi ${s.session} · Buka ${formatOpenWindow(s.open, s.openEnd)} · Mulai ${formatTime(s.start)}${tickets ? ` · ${tickets}` : ""}`);
       const ids = idLine(s);
       lines.push(`  <${s.link}>${ids ? ` (${ids})` : ""}`);
       if (note) lines.push(`  ↳ _${note}_`);

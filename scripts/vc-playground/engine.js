@@ -235,6 +235,7 @@ const { shiftDateWIB } = require("../../src/streakMath");
 const { loadVc, addVcSession } = require("../../src/storage/vcSchedule");
 const { ensurePeriod, syncSummary } = require("../../src/chat/vcFlow");
 const { generateNote } = require("../../src/chat/vcAbsurd");
+const { slotsForDate } = require("../../src/chat/vcSlots");
 const { recordLiveCompleted } = require("../../src/storage/liveCount");
 const { getRegisteredStore } = require("../../src/storage/jsonStore");
 
@@ -518,15 +519,17 @@ seedKnownMembers();
 const fakeLink = (n) => `https://us02web.zoom.us/j/${String(81000000000 + n)}?pwd=contoh${n}`;
 const plus = (days) => shiftDateWIB(getTodayWIB(), days);
 
+// Baris contoh: sesi yang DIINGINKAN per hari; sesi sebenarnya diambil dari jadwal hari itu (vcSlots) supaya data contoh selalu
+// valid, apa pun hari saat dijalankan (hari kerja cuma punya sesi 1-3).
 function sampleRows(many) {
   if (!many) {
     return [
-      { m: 0, day: 3, session: 2, open: "12:45", start: "13:00", tickets: 3, pass: "388756" },
-      { m: 0, day: 3, session: 3, open: "14:15", start: "14:30", tickets: 5, pass: "087798" },
-      { m: 1, day: 4, session: 1, open: "19:45", start: "20:00", tickets: 2, pass: null },
-      { m: 2, day: 4, session: 1, open: "09:45", start: "10:00", tickets: null, pass: null },
-      { m: 3, day: 2, session: 1, open: "09:45", start: "10:00", tickets: null, pass: null },
-      { m: 4, day: 3, session: 3, open: "14:15", start: "14:30", tickets: 3, pass: "261337" },
+      { m: 0, day: 3, session: 2, tickets: 3, pass: "388756" },
+      { m: 0, day: 3, session: 3, tickets: 5, pass: "087798" },
+      { m: 1, day: 4, session: 1, tickets: 2, pass: null },
+      { m: 2, day: 4, session: 1, tickets: null, pass: null },
+      { m: 3, day: 2, session: 1, tickets: null, pass: null },
+      { m: 4, day: 3, session: 3, tickets: 3, pass: "261337" },
     ];
   }
   const rows = [];
@@ -534,9 +537,7 @@ function sampleRows(many) {
     rows.push({
       m: i % SAMPLE_MEMBERS.length,
       day: 1 + (i % 12),
-      session: 1 + (Math.floor(i / SAMPLE_MEMBERS.length) % 5),
-      open: "12:45",
-      start: "13:00",
+      session: 1 + (Math.floor(i / SAMPLE_MEMBERS.length) % 6),
       tickets: i % 4 === 0 ? null : (i % 6) + 1,
       pass: i % 3 === 0 ? String(100000 + i) : null,
     });
@@ -552,19 +553,23 @@ function seed({ many = false } = {}) {
     sampleRows(many).forEach((row, i) => {
       const member = SAMPLE_MEMBERS[row.m];
       const date = plus(row.day);
-      if (existing.some((s) => s.username === member.username && s.date === date && s.session === row.session)) return;
-      addVcSession({
+      const slots = slotsForDate(date);
+      const slot = slots[(row.session - 1) % slots.length];
+      if (existing.some((s) => s.username === member.username && s.date === date && s.session === slot.session)) return;
+      const created = addVcSession({
         username: member.username,
         name: member.name,
-        session: row.session,
+        session: slot.session,
         date,
-        open: row.open,
-        start: row.start,
+        open: slot.open,
+        openEnd: slot.openEnd,
+        start: slot.openEnd, // jam mulai contoh = ujung jendela buka
         tickets: row.tickets,
         link: fakeLink(i + 1),
         passcode: row.pass,
-        note: generateNote({ name: member.name, tickets: row.tickets, open: row.open, start: row.start }),
+        note: generateNote({ name: member.name, tickets: row.tickets, open: slot.open, start: slot.openEnd }),
       });
+      existing.push(created);
       added++;
     });
     const sync = await syncSummary(OWNER_ID);

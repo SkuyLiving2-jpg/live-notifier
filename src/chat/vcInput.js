@@ -4,6 +4,7 @@
 
 const { getTodayWIB, formatLongDateWIB, WEEKDAY_FORMATTER_WIB } = require("../utils");
 const { shiftDateWIB } = require("../streakMath");
+const { checkSession } = require("./vcSlots");
 
 const ok = (value) => ({ ok: true, value });
 const fail = (error) => ({ ok: false, error });
@@ -38,6 +39,9 @@ function parseTime(raw, label = "Jam") {
 
 // "12:45" -> "12.45" (gaya yang dipakai owner).
 const formatTime = (hhmm) => hhmm.replace(":", ".");
+
+// Jendela jam buka: "16:15","16:30" -> "16.15-16.30". Tanpa ujung (data lama / sesi tanpa jendela) -> "16.15".
+const formatOpenWindow = (open, openEnd) => (openEnd ? `${formatTime(open)}-${formatTime(openEnd)}` : formatTime(open));
 
 // ------------------------------- tanggal -------------------------------------
 
@@ -178,9 +182,11 @@ function formatZoomId(digits) {
 
 // ------------------------------- gabungan ------------------------------------
 
-// Validasi semua kolom sekaligus. `fields`: { sesi, buka, mulai, link?, tiket?, tanggal? } (teks mentah dari modal).
-// Kolom yang undefined dilewati (modal edit hanya sebagian). Balikin { ok, value, errors }.
-function validateSessionForm(fields, todayWIB = getTodayWIB()) {
+// Validasi semua kolom sekaligus. `fields`: { sesi?, tanggal?, mulai?, link?, tiket? } (teks mentah dari modal; kolom yang
+// undefined dilewati karena tiap modal hanya membawa sebagian). Jam BUKA tidak diketik: ia ditentukan oleh (tanggal, sesi)
+// lewat vcSlots - tanggal/sesi diambil dari `fields` kalau ada, kalau tidak dari `context` ({ date, session }, mis. pilihan
+// di dropdown sebelumnya). Sesi yang tidak ada di hari itu (mis. sesi 4 di hari Senin) jadi kesalahan. Balikin { ok, value, errors }.
+function validateSessionForm(fields, todayWIB = getTodayWIB(), context = {}) {
   const errors = [];
   const value = {};
   const take = (key, result, target = key) => {
@@ -189,7 +195,6 @@ function validateSessionForm(fields, todayWIB = getTodayWIB()) {
   };
   if (fields.sesi !== undefined) take("sesi", parseSessionNumber(fields.sesi), "session");
   if (fields.tanggal !== undefined) take("tanggal", parseDateInput(fields.tanggal, todayWIB), "date");
-  if (fields.buka !== undefined) take("buka", parseTime(fields.buka, "Jam buka"), "open");
   if (fields.mulai !== undefined) take("mulai", parseTime(fields.mulai, "Jam mulai"), "start");
   if (fields.tiket !== undefined) take("tiket", parseTickets(fields.tiket), "tickets");
   if (fields.link !== undefined) {
@@ -197,13 +202,27 @@ function validateSessionForm(fields, todayWIB = getTodayWIB()) {
     if (result.ok) Object.assign(value, result.value);
     else errors.push(result.error);
   }
-  if (value.open && value.start && value.open > value.start) errors.push("Jam buka gak boleh lebih telat dari jam mulai.");
+  const date = value.date ?? context.date;
+  const session = value.session ?? context.session;
+  if (date && session) {
+    const slot = checkSession(date, session);
+    if (slot.ok) {
+      value.open = slot.value.open;
+      value.openEnd = slot.value.openEnd;
+    } else {
+      errors.push(slot.error);
+    }
+  }
+  if (value.open && value.start && value.start < value.open) {
+    errors.push(`Jam mulai ${formatTime(value.start)} gak boleh lebih awal dari jam buka sesi ${session} (${formatTime(value.open)}).`);
+  }
   return { ok: errors.length === 0, value, errors };
 }
 
 module.exports = {
   parseTime,
   formatTime,
+  formatOpenWindow,
   parseDateInput,
   formatDateDisplay,
   parseSessionNumber,
