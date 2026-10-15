@@ -120,6 +120,12 @@ async function sendAll(dm, chunks) {
 // Edit pesan rangkuman yang sudah ada; yang hilang (dihapus manual) atau kelebihan ditangani. Kalau ada pesan lama yang
 // sudah dihapus, SEMUA dikirim ulang berurutan - mengedit sebagian bikin urutan potongan pesan tertukar.
 async function writeSummary(dm, chunks, existingIds) {
+  // Rangkuman membesar sampai butuh pesan tambahan: potongan baru akan mendarat di BAWAH panel tombol dan memisahkan dirinya
+  // dari potongan sebelumnya (ketahuan lewat playground). Kirim ulang semuanya supaya potongan tetap berurutan dan menyatu.
+  if (existingIds.length > 0 && chunks.length > existingIds.length) {
+    await deleteMessages(dm, existingIds);
+    return sendAll(dm, chunks);
+  }
   const ids = [];
   try {
     for (let i = 0; i < chunks.length; i++) {

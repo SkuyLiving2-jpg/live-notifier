@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="id" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VC Playground</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <strong>VC Playground</strong>
+        <span>uji fitur “input vc” tanpa membuka Discord</span>
+      </div>
+      <div
+        class="safe-badge"
+        id="safe-badge"
+        title="Server ini hanya mendengarkan 127.0.0.1, tidak login ke Discord, dan semua panggilan jaringan diblokir."
+      >
+        <i class="dot" aria-hidden="true"></i><span id="safe-text">Mode aman</span>
+      </div>
+      <button type="button" class="ghost" id="theme-btn" aria-label="Ganti tema tampilan">Tema</button>
+    </header>
+
+    <main class="layout">
+      <section class="chat" aria-label="Simulasi Discord">
+        <div class="chan-tabs" id="chan-tabs" role="tablist" aria-label="Channel simulasi"></div>
+
+        <div class="chat-head">
+          <div class="actor" role="radiogroup" aria-label="Bertindak sebagai">
+            <span class="muted">Bertindak sebagai</span>
+            <label><input type="radio" name="actor" value="owner" checked /> Owner</label>
+            <label><input type="radio" name="actor" value="other" /> Orang lain</label>
+          </div>
+          <div class="seg" role="radiogroup" aria-label="Tampilan pesan">
+            <label><input type="radio" name="view" value="rich" checked /> Rapi</label>
+            <label><input type="radio" name="view" value="raw" /> Teks mentah</label>
+          </div>
+        </div>
+
+        <div class="messages" id="messages" aria-live="polite"></div>
+        <div class="notice" id="notice" role="alert" hidden></div>
+
+        <div class="quick" id="quick" aria-label="Perintah cepat"></div>
+        <form class="composer" id="composer" autocomplete="off">
+          <input id="composer-input" type="text" placeholder="Ketik pesan ke bot… (coba: input vc)" maxlength="2000" aria-label="Pesan" />
+          <button type="submit" class="primary">Kirim</button>
+        </form>
+      </section>
+
+      <aside class="side" aria-label="Panel pengujian">
+        <div class="side-tabs" id="side-tabs" role="tablist">
+          <button type="button" role="tab" data-tab="log">Log</button>
+          <button type="button" role="tab" data-tab="data">Data VC</button>
+          <button type="button" role="tab" data-tab="tools">Alat uji</button>
+        </div>
+        <div class="side-body" id="side-body"></div>
+      </aside>
+    </main>
+
+    <dialog id="modal" aria-labelledby="modal-title">
+      <form id="modal-form" method="dialog" autocomplete="off">
+        <header>
+          <h2 id="modal-title"></h2>
+          <button type="button" class="ghost" id="modal-close" aria-label="Tutup form">✕</button>
+        </header>
+        <div id="modal-fields"></div>
+        <footer>
+          <button type="button" class="ghost" id="modal-cancel">Batal</button>
+          <button type="submit" class="primary" id="modal-submit">Kirim</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="markdown.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

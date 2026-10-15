@@ -20,6 +20,14 @@ module.exports = [
       "no-console": "off",
     },
   },
+  // Halaman web playground (scripts/vc-playground/public) jalan di browser, bukan Node; markdown.js juga di-require tes.
+  {
+    files: ["scripts/vc-playground/public/**/*.js"],
+    languageOptions: {
+      sourceType: "script",
+      globals: { ...globals.browser, ...globals.commonjs },
+    },
+  },
   // Harus PALING TERAKHIR - matiin rule stylistic ESLint yang bisa
   // bentrok/dobel sama apa yang Prettier udah urusin (indentasi, kutip,
   // dst). ESLint tetap ngurusin bug-class stuff (unused vars, undef, dll).

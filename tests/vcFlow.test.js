@@ -763,6 +763,34 @@ test("sync: rangkuman panjang jadi beberapa pesan; lalu menyusut -> pesan kelebi
   assert.equal(dm.store.size, loadVc().message.ids.length);
 });
 
+test("sync: rangkuman membesar jadi 2+ pesan -> potongannya tetap berurutan dan menyatu di BAWAH panel (bukan terpisah oleh panel)", async () => {
+  const { addVcSession } = require("../src/storage/vcSchedule");
+  await addLilySession();
+  assert.equal(loadVc().message.ids.length, 1);
+  const panel = await dm.send({ content: "PANEL TOMBOL" }); // panel dikirim sesudah rangkuman pertama, seperti "input vc"
+
+  for (let i = 0; i < 40; i++) {
+    addVcSession({
+      username: `jkt48_g${i}`,
+      name: `Tumbuh ${i} JKT48`,
+      session: 1,
+      date: DATE,
+      open: "10:00",
+      start: "10:30",
+      tickets: 5,
+      link: ZOOM,
+      passcode: "123456",
+      note: "Catatan absurd yang panjang supaya memenuhi pesan dengan cepat sekali.",
+    });
+  }
+  await syncSummary(OWNER);
+  const summaryIds = loadVc().message.ids;
+  assert.ok(summaryIds.length > 1);
+  const order = [...dm.store.keys()];
+  assert.deepEqual(order, [panel.id, ...summaryIds], "panel di atas, lalu semua potongan rangkuman berurutan tanpa disela pesan lain");
+  assert.match(dm.store.get(summaryIds[0]), /^# /, "potongan pertama membawa judul periode");
+});
+
 test("sync: DM gagal -> data TETAP tersimpan, dan layar menampilkan peringatan (bukan seolah gagal total)", async () => {
   failDm = true;
   const originalError = console.error;
