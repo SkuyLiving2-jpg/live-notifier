@@ -3,6 +3,7 @@ const { activeLives } = require("../storage/activeLives");
 const { getCompletedSessionsToday, getCompletedSessionsSince } = require("../storage/dailyLog");
 const { loadLiveCount } = require("../storage/liveCount");
 const { describeElapsed, safeReplyOptions } = require("../utils");
+const { SESSION_RETENTION_DAYS } = require("../retention");
 const { deleteInteractionMessage } = require("./interactionHelpers");
 const { buildRecapTablePage } = require("./replies");
 
@@ -101,12 +102,12 @@ function replyMemberLiveHistoryTable(username) {
     // ke-prune dari daily log (retensi 35 hari) - counter total-nya sendiri
     // gak pernah di-prune, jadi dua sumber ini bisa nyimpang buat member
     // yang udah lama banget gak ke-cek historinya.
-    return { content: `Cok, detail history **${name}** udah nggak kesimpen lagi (cuma nyimpen 35 hari terakhir).` };
+    return { content: `Cok, detail history **${name}** udah nggak kesimpen lagi (cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir).` };
   }
 
   const { text, hasMore } = buildRecapTablePage(sessions, 0);
   const moreNote = hasMore ? `\n_(cuma nunjukkin ${sessions.length > 20 ? 20 : sessions.length} sesi terbaru)_` : "";
-  return { content: `📊 History live **${name}** (35 hari terakhir):\n${text}${moreNote}` };
+  return { content: `📊 History live **${name}** (${SESSION_RETENTION_DAYS} hari terakhir):\n${text}${moreNote}` };
 }
 
 // Opsi 3: cek status live SEKARANG. Kalau lagi live, tawarin nonton lewat

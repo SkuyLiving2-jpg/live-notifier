@@ -3,6 +3,7 @@
 const { activeLives } = require("../../../storage/activeLives");
 const { getCompletedSessionsSince, getEarliestSessionDate, fetchExternalTodayLiveHistory } = require("../../../storage/dailyLog");
 const { formatDuration, formatClockWIB, getTodayWIB, getDateWIB, formatLongDateWIB, formatMonthLabel } = require("../../../utils");
+const { SESSION_RETENTION_DAYS } = require("../../../retention");
 
 const { buildRecapPageBlock, buildRecapMonthSelectRow, buildCloseOnlyRow, buildBackRow, buildWeekdayDateSelectRow } = require("./components");
 const { WEEKDAY_NAMES_ID } = require("./dateParsing");
@@ -136,23 +137,49 @@ async function replyRecapRange(daysBack, label, channelId, authorId, origin = ""
 // membantu daripada nyuruh user nebak-nebak lagi) - kalau cuma bulan ini
 // doang yang ada (kasus paling umum sekarang, arsipnya masih baru), gak ada
 // gunanya nawarin dropdown isi 1 opsi, jadi jatuh ke menu 4-opsi biasa.
+// Tanggal pertama / terakhir ("YYYY-MM-DD") dari bulan "YYYY-MM". Dibandingkan sebagai string dengan
+// getEarliestSessionDate, jadi formatnya harus sama (nol di depan).
+function monthBounds(monthWIB) {
+  const [year, month] = monthWIB.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { first: `${monthWIB}-01`, last: `${monthWIB}-${String(lastDay).padStart(2, "0")}` };
+}
+
+// Catatan kejujuran kalau arsip rekap gak nyakup awal bulan yang diminta: baik karena bot baru mulai
+// mantau di tengah bulan itu, MAUPUN karena sesi lamanya udah dipangkas (SESSION_RETENTION_DAYS).
+// Sebelumnya rekap bulan yang separuh-terpangkas tetap berjudul "Rekap bulan ..." dengan total yang
+// lebih kecil dari kenyataan, tanpa keterangan apa pun. Balikin null kalau bulannya tercakup penuh, selain itu { outside, text }: outside=true berarti SELURUH bulan di luar jangkauan arsip.
+function buildArchiveCoverageNote(monthWIB) {
+  const earliestDate = getEarliestSessionDate();
+  if (!earliestDate) return null;
+  const { first, last } = monthBounds(monthWIB);
+  if (earliestDate <= first) return null;
+  const archiveInfo = `arsip rekap baru mulai ${earliestDate}, dan cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir`;
+  return earliestDate > last
+    ? { outside: true, text: `Cok, gak ada data buat bulan ${formatMonthLabel(monthWIB)} (${archiveInfo}).` }
+    : { outside: false, text: `_(Catatan: ${archiveInfo}, jadi rekap bulan ini mungkin belum penuh.)_` };
+}
+
 async function replyRecapMonth(monthWIB, channelId, authorId, origin = "") {
   pendingRecapPage.delete(`${channelId}:${authorId}`);
   const label = formatMonthLabel(monthWIB);
   const sessions = getSessionsForRange(monthWIB);
+  const coverageNote = buildArchiveCoverageNote(monthWIB);
 
   if (sessions.length === 0) {
     const months = getAvailableRecapMonths();
+    // Bulan kosong GARA-GARA di luar jangkauan arsip: kasih tau itu, bukan "belum ada live" (menyiratkan emang gak ada).
+    const emptyText = coverageNote?.outside ? coverageNote.text : `Cok, belum ada live yang kecatet buat bulan ${label}.`;
     if (months.length > 1) {
       const rows = [buildRecapMonthSelectRow(months, monthWIB, origin), buildCloseOnlyRow()];
       if (origin) rows.push(buildBackRow(origin));
       return {
-        content: `Cok, belum ada live yang kecatet buat bulan ${label}. Coba bulan lain, cok:`,
+        content: `${emptyText} Coba bulan lain, cok:`,
         components: rows,
       };
     }
     const menu = replyRecapMenu();
-    return { content: `Cok, belum ada live yang kecatet buat bulan ${label}.\n\n${menu.content}`, components: menu.components };
+    return { content: `${emptyText}\n\n${menu.content}`, components: menu.components };
   }
 
   const completed = sessions.filter((s) => s.endedAtUnix !== null);
@@ -170,6 +197,8 @@ async function replyRecapMonth(monthWIB, channelId, authorId, origin = "") {
       `Total durasi gabungan: ${formatDuration(totalDurationMs)} | Paling lama: **${longest.name}** (${formatDuration(longest.durationMs)})`,
     );
   }
+
+  if (coverageNote && !coverageNote.outside) summaryLines.push(coverageNote.text);
 
   const block = buildRecapPageBlock(sessions, 0, channelId, authorId, monthWIB, origin);
   return { content: [summaryLines.join("\n"), block.content].join("\n"), components: block.components };

@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { SESSION_RETENTION_DAYS } = require("../src/retention");
 const { getTodayWIB, getDateWIB } = require("../src/utils");
 
 const DAILY_LOG_FILE = path.join(tempCacheDir, "daily-log.json");
@@ -144,7 +145,7 @@ test("loadDailyLog() migrasi otomatis - buang sesi lama yang masih ke-tag endedA
 test("recordLiveEnded motong sesi yang lebih tua dari retensi (SESSION_RETENTION_DAYS)", () => {
   const { loadDailyLog, recordLiveEnded } = freshDailyLog();
 
-  const veryOld = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000); // 40 hari lalu, ngelewatin retensi 35 hari
+  const veryOld = new Date(Date.now() - (SESSION_RETENTION_DAYS + 5) * 24 * 60 * 60 * 1000); // 5 hari melewati retensi
   recordLiveEnded("Old", "jkt48_old", new Date(veryOld.getTime() - 60_000), veryOld, 1);
 
   const recent = new Date();

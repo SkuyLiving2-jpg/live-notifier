@@ -25,6 +25,7 @@ const { activeLives, findMemberByNameFragment } = require("../storage/activeLive
 const { loadLiveCount } = require("../storage/liveCount");
 const { formatRelativeTime, formatDuration, safeReplyOptions, getTodayWIB } = require("../utils");
 const { withCloseButton } = require("./interactionHelpers");
+const { SESSION_RETENTION_DAYS } = require("../retention");
 const {
   replyListLive,
   replyBotStatus,
@@ -251,7 +252,9 @@ const BASE_COMMAND_DEFINITIONS = [
       .addSubcommand((sub) => sub.setName("hari-ini").setDescription("Rekap hari ini"))
       .addSubcommand((sub) => sub.setName("minggu-ini").setDescription("Rekap minggu ini (7 hari terakhir)"))
       .addSubcommand((sub) => sub.setName("bulan-ini").setDescription("Rekap bulan ini"))
-      .addSubcommand((sub) => addMemberOption(sub.setName("member").setDescription("Rekap semua sesi live 1 member (35 hari terakhir)")))
+      .addSubcommand((sub) =>
+        addMemberOption(sub.setName("member").setDescription(`Rekap semua sesi live 1 member (${SESSION_RETENTION_DAYS} hari terakhir)`)),
+      )
       .addSubcommand((sub) => sub.setName("menu").setDescription("Menu pilihan rekap (per tanggal/bulan lain/dst)")),
     handler: async (interaction) => {
       const sub = interaction.options.getSubcommand();

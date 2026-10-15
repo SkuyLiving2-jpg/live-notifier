@@ -7,6 +7,7 @@ const { getAllPriorityMembers } = require("../../priority");
 const { PRIORITY_PING_USER_ID, DAILY_RECAP_COLOR } = require("../../config");
 const { formatViewCount, formatClockWIB, describeElapsed } = require("../../utils");
 
+const { SESSION_RETENTION_DAYS } = require("../../retention");
 const { MAX_COMPARE_MEMBERS } = require("./compare");
 
 function replyListLive() {
@@ -84,7 +85,7 @@ function replyHelp() {
     '- "cok role" - tombol buat milih notif live: semua member atau member tertentu (owner: "cok pasang panel role", "cok tambah role <nama> @Role", "cok hapus role <nama>", "cok daftar role", "cok cek role")',
     '- "cok rekap hari ini" - rekap live yang udah selesai hari ini',
     '- "cok rekap minggu ini" (7 hari terakhir) / "cok rekap bulan ini" / "cok rekap <nama bulan>" / "cok rekap <tanggal>" / "cok rekap <nama hari>"',
-    '- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (35 hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"',
+    `- "cok rekap <nama member>" (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen di rekap (${SESSION_RETENTION_DAYS} hari terakhir). Bisa juga lewat tombol "Rekap member" di menu "cok rekap"`,
     '- "cok streak <nama member>" - lagi live berapa hari berturut-turut',
     '- "cok grafik <nama member>" (atau "cok chart <nama>") - bar chart durasi live 10 sesi terakhirnya (gambar, bukan teks)',
     '- "cok oshi <nama>" / "cok oshi saya" - member favoritmu (maks 5): profil, di-tag pas live, ringkasan mingguan lewat DM',

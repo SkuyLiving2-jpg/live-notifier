@@ -3,6 +3,7 @@ const { activeLives, getSortedActiveLives, findMemberByNameFragment } = require(
 const { getSortedGifterSnapshotMembers } = require("../storage/gifterSnapshot");
 const { loadAliases } = require("../storage/aliases");
 const { getGreeting, describeElapsed, YES_PATTERN, NO_PATTERN, safeReplyOptions } = require("../utils");
+const { SESSION_RETENTION_DAYS } = require("../retention");
 const { deleteInteractionMessage } = require("./interactionHelpers");
 const { buildAliasActionButtonsRow } = require("./aliasFlow");
 const { buildCatchup } = require("./personalFlow");
@@ -258,9 +259,8 @@ const EXTRA_FEATURES = [
   {
     value: "rekapmember",
     label: "📁 Rekap per member",
-    description: "Semua histori live 1 member (35 hari terakhir)",
-    detail:
-      'Ketik `cok rekap <nama member>` (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen (35 hari terakhir). Bisa juga ketik "cok rekap" polos, terus klik tombol "Rekap member".',
+    description: `Semua histori live 1 member (${SESSION_RETENTION_DAYS} hari terakhir)`,
+    detail: `Ketik \`cok rekap <nama member>\` (mis. "cok rekap aralie") - tabel semua live member itu yang masih kesimpen (${SESSION_RETENTION_DAYS} hari terakhir). Bisa juga ketik "cok rekap" polos, terus klik tombol "Rekap member".`,
   },
   {
     value: "streak",

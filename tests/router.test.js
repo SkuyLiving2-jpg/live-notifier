@@ -528,7 +528,7 @@ test("rekap minggu ini - dispatch ke replyRecapRange(7, ...), BUKAN rekap hari i
 test("rekap bulan ini - dispatch ke replyRecapMonth (bulan kalender berjalan), BUKAN rekap hari ini", async () => {
   const reply = await buildChatReply("cok rekap bulan ini");
   const content = textOf(reply);
-  assert.match(content, /Rekap bulan|belum ada live yang kecatet buat bulan/);
+  assert.match(content, /Rekap bulan|belum ada live yang kecatet buat bulan|gak ada data buat bulan/);
   assert.doesNotMatch(content, /Rekap live hari ini/);
 });
 
@@ -575,7 +575,7 @@ test("rekap <tanggal lengkap, mis. '25 september'> - dispatch ke replyRecapSpeci
 test("rekap <nama bulan tanpa angka hari, mis. 'september'> - dispatch ke replyRecapMonth, BUKAN menu 4-tombol polos", async () => {
   const reply = await buildChatReply("cok rekap september");
   const content = textOf(reply);
-  assert.match(content, /Rekap bulan|belum ada live yang kecatet buat bulan/);
+  assert.match(content, /Rekap bulan|belum ada live yang kecatet buat bulan|gak ada data buat bulan/);
 });
 
 // "rekap bulan" polos (TANPA nama bulan/"ini") - dropdown milih bulan, atau

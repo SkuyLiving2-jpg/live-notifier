@@ -2,6 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { SESSION_RETENTION_DAYS } = require("../src/retention");
 const { saveDurationHistory, recordLiveDurationAt } = require("../src/storage/durationHistory");
 const { recordLiveEnded } = require("../src/storage/dailyLog");
 const { recordLiveCompleted } = require("../src/storage/liveCount");
@@ -120,7 +121,7 @@ test("mergeChartEntries - DALAM jendela rekap arsip berlaku penuh, riwayat duras
     { name: "M", username: "u", endedAtUnix: Math.floor((now - 1 * DAY) / 1000), durationMs: 4 * HOUR },
   ];
   const history = [
-    { name: "M", durationMs: 9 * HOUR, at: new Date(now - 50 * DAY).toISOString() }, // lebih tua dari 35 hari -> ikut
+    { name: "M", durationMs: 9 * HOUR, at: new Date(now - (SESSION_RETENTION_DAYS + 15) * DAY).toISOString() }, // lebih tua dari jendela rekap -> ikut
     { name: "M", durationMs: 8 * HOUR, at: new Date(now - 10 * DAY).toISOString() }, // di jendela tapi gak ada di arsip -> diabaikan
     { name: "M", durationMs: 7 * HOUR, at: new Date(now - 2 * DAY).toISOString() }, // sesi yang sama kayak arsip -> gak dobel
   ];
@@ -173,11 +174,11 @@ test("replyDurationChart - SINKRON sama rekap member: jumlah sesi grafik = jumla
 
 test("replyDurationChart - ada sesi lebih tua dari jendela rekap di riwayat durasi -> ikut, dengan catatan jelas", async () => {
   for (let i = 3; i >= 1; i--) archiveSession("jkt48_chartold", "Chartold JKT48", i * DAY, i * HOUR);
-  recordLiveDurationAt("jkt48_chartold", "Chartold JKT48", 9 * HOUR, new Date(Date.now() - 60 * DAY));
+  recordLiveDurationAt("jkt48_chartold", "Chartold JKT48", 9 * HOUR, new Date(Date.now() - (SESSION_RETENTION_DAYS + 25) * DAY));
 
   const chart = await replyDurationChart("chartold");
   assert.match(chart.content, /(4 sesi terakhir yang udah selesai)/);
-  assert.match(chart.content, /1 sesi yang lebih tua dari 35 hari/);
+  assert.match(chart.content, new RegExp(`1 sesi yang lebih tua dari ${SESSION_RETENTION_DAYS} hari`));
 });
 
 test("replyDurationChart - nama cocok ke BEBERAPA member -> ditanyain balik (sama kayak rekap), bukan diem-diem milih yang pertama", async () => {

@@ -2,6 +2,7 @@ const path = require("path");
 const { CACHE_DIR } = require("../config");
 const { createJsonStore } = require("./jsonStore");
 const { getTodayWIB, getDateWIB } = require("../utils");
+const { SESSION_RETENTION_DAYS } = require("../retention");
 
 // --- Arsip sesi live yang UDAH SELESAI (append-only, dipangkas per SESSION_RETENTION_DAYS) ---
 //
@@ -20,12 +21,10 @@ const { getTodayWIB, getDateWIB } = require("../utils");
 const DAILY_LOG_FILE = path.join(CACHE_DIR, "daily-log.json");
 const store = createJsonStore(DAILY_LOG_FILE, { sessions: [], recapSentDate: null }, { errorLabel: "log harian" });
 
-// Berapa lama sesi yang udah selesai disimpen sebelum otomatis dibuang -
-// generous banget buat kebutuhan "hari ini"/beberapa minggu terakhir, tapi
-// tetep dibatesin biar file-nya nggak numpuk gede tanpa akhir selama
-// bot jalan bertahun-tahun (dulu ini otomatis "reset" tiap hari, sekarang
-// nggak lagi - jadi pruning ini gantiin peran itu).
-const SESSION_RETENTION_DAYS = 35;
+// Berapa lama sesi yang udah selesai disimpen sebelum otomatis dibuang (angka + alasannya ada di
+// ../retention.js) - tetep dibatesin biar file-nya nggak numpuk gede tanpa akhir selama bot jalan
+// bertahun-tahun (dulu ini otomatis "reset" tiap hari, sekarang nggak lagi - jadi pruning ini
+// gantiin peran itu).
 
 // Tanggal-tanggal (WIB) tempat tiap member PUNYA live selesai, disimpen TERPISAH
 // dari sesi lengkap di atas dan jauh lebih lama (400 hari) - ukurannya cuma

@@ -2,6 +2,7 @@ require("./helpers/setupTestEnv");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { SESSION_RETENTION_DAYS } = require("../src/retention");
 const { getTodayWIB } = require("../src/utils");
 const { shiftDateWIB } = require("../src/streakMath");
 const { activeLives } = require("../src/storage/activeLives");
@@ -163,7 +164,7 @@ test("pilih tanggal - tabel HANYA sesi member itu di tanggal itu; dropdown menan
   assert.match(view.content, /Total sesi: 2x \(2 udah selesai, 0 masih live\)/);
   assert.equal((view.content.match(/Selesai/g) || []).length, 2, "dua baris tabel, sesi member lain tidak ikut");
   assert.doesNotMatch(view.content, /Lcpickother/);
-  assert.doesNotMatch(view.content, /35 hari terakhir/, "catatan retensi hanya di tampilan semua sesi");
+  assert.doesNotMatch(view.content, new RegExp(`${SESSION_RETENTION_DAYS} hari terakhir`), "catatan retensi hanya di tampilan semua sesi");
 
   const select = selectJson(view);
   assert.equal(select.options.find((o) => o.default).value, daysAgo(3));
@@ -178,7 +179,7 @@ test("pilih 'Semua sesi' - kembali ke rekap lengkap member itu", async () => {
   const view = pick.updates[0];
   assert.match(view.content, /📋 \*\*Rekap live Lcall JKT48\*\*/);
   assert.match(view.content, /Total sesi: 2x/);
-  assert.match(view.content, /35 hari terakhir/);
+  assert.match(view.content, new RegExp(`${SESSION_RETENTION_DAYS} hari terakhir`));
   assert.equal(selectJson(view).options[0].default, true);
 });
 

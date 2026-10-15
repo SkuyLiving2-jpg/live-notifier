@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { SESSION_RETENTION_DAYS } = require("../src/retention");
 const { clearRepliesCache } = require("./helpers/clearRepliesCache");
 const { getTodayWIB, getDateWIB, WEEKDAY_FORMATTER_WIB } = require("../src/utils");
 const { tempCacheDir } = require("./helpers/setupTestEnv");
@@ -1800,10 +1801,61 @@ test("replyRecapMonth - bulan yang diminta kosong TAPI ada bulan LAIN yang punya
   fresh.recordLiveEnded("Oldmonth", "jkt48_oldmonth", new Date(otherMonthUnix * 1000), new Date((otherMonthUnix + 60) * 1000), 5);
 
   const reply = await fresh.replyRecapMonth("1999-01", "c-monthdropdown", "u-monthdropdown");
-  assert.match(reply.content, /Cok, belum ada live yang kecatet buat bulan/);
+  // Bulan ini SELURUHNYA sebelum data tertua di arsip: dijelaskan kenapa kosong (bukan "belum ada live" yang menyiratkan memang tak ada).
+  assert.match(reply.content, /Cok, gak ada data buat bulan Januari 1999 \(arsip rekap baru mulai \d{4}-\d{2}-\d{2}/);
+  assert.match(reply.content, new RegExp(`cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir`));
   assert.match(reply.content, /Coba bulan lain/);
   assert.equal(reply.components[0].components[0].data.custom_id, "recap_month_select");
   assert.equal(reply.components[1].components[0].data.custom_id, "recap_nav:close");
+});
+
+// Bulan kosong TAPI masih dalam jangkauan arsip (ada data lebih lama DAN lebih baru): memang belum ada yang live,
+// jadi kalimat lama dipertahankan - catatan "arsip baru mulai" di sini justru menyesatkan.
+test("replyRecapMonth - bulan kosong DI DALAM jangkauan arsip -> tetap 'belum ada live yang kecatet', tanpa catatan arsip", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const endedOld = new Date(Date.now() - 63 * DAY_MS); // bulan X, masih dalam retensi
+  fresh.recordLiveEnded("Gapold", "jkt48_gapold", new Date(endedOld.getTime() - 60_000), endedOld, 5);
+  const endedNow = new Date();
+  fresh.recordLiveEnded("Gapnow", "jkt48_gapnow", new Date(endedNow.getTime() - 60_000), endedNow, 5);
+  // 31 hari lalu SELALU bulan sebelum bulan berjalan, dan 63 hari lalu SELALU lebih awal lagi -> bulan itu kosong, di antara dua data.
+  const gapMonth = getDateWIB(new Date(Date.now() - 31 * DAY_MS)).slice(0, 7);
+
+  const reply = await fresh.replyRecapMonth(gapMonth, "c-gapmonth", "u-gapmonth");
+  assert.match(reply.content, /Cok, belum ada live yang kecatet buat bulan/);
+  assert.doesNotMatch(reply.content, /arsip rekap baru mulai/);
+});
+
+test("replyRecapMonth - arsip baru mulai di TENGAH bulan yang diminta -> ringkasan dikasih catatan 'mungkin belum penuh'", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  // Sesi 20 hari lalu - kecuali tanggal itu tanggal 1 (saat itu arsip justru mulai tepat di awal bulan), geser 2 hari lebih awal.
+  let offsetDays = 20;
+  if (getDateWIB(new Date(Date.now() - offsetDays * DAY_MS)).endsWith("-01")) offsetDays = 22;
+  const ended = new Date(Date.now() - offsetDays * DAY_MS);
+  fresh.recordLiveEnded("Partial", "jkt48_partial", new Date(ended.getTime() - 60_000), ended, 5);
+  const month = getDateWIB(ended).slice(0, 7);
+
+  const reply = await fresh.replyRecapMonth(month, "c-partialmonth", "u-partialmonth");
+  assert.match(reply.content, /📋 \*\*Rekap bulan/);
+  assert.match(
+    reply.content,
+    new RegExp(`Catatan: arsip rekap baru mulai ${getDateWIB(ended)}, dan cuma nyimpen ${SESSION_RETENTION_DAYS} hari terakhir`),
+  );
+  assert.match(reply.content, /mungkin belum penuh/);
+});
+
+test("replyRecapMonth - arsip sudah ada SEBELUM awal bulan yang diminta -> tidak ada catatan (bulan tercakup penuh)", async () => {
+  const fresh = freshRepliesForRecapRange();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const endedOld = new Date(Date.now() - 63 * DAY_MS); // jauh sebelum awal bulan berjalan
+  fresh.recordLiveEnded("Fullold", "jkt48_fullold", new Date(endedOld.getTime() - 60_000), endedOld, 5);
+  const endedNow = new Date();
+  fresh.recordLiveEnded("Fullnow", "jkt48_fullnow", new Date(endedNow.getTime() - 60_000), endedNow, 5);
+
+  const reply = await fresh.replyRecapMonth(getTodayWIB().slice(0, 7), "c-fullmonth", "u-fullmonth");
+  assert.match(reply.content, /📋 \*\*Rekap bulan/);
+  assert.doesNotMatch(reply.content, /arsip rekap baru mulai/);
 });
 
 test("replyRecapMonth - bulan BERJALAN (sekarang) ikut gabung sesi yang MASIH LIVE (activeLives), bulan LAIN yang udah lewat enggak", async () => {
@@ -2400,7 +2452,7 @@ test("replyRecapMember - tabel HANYA sesi member itu (member lain gak ikut), rin
   assert.match(reply.content, /📋 \*\*Rekap live Mrecbeta JKT48\*\*/);
   assert.match(reply.content, /Total sesi: 3x \(3 udah selesai, 0 masih live\)/);
   assert.match(reply.content, /Total durasi: 1j 30m \| Rata-rata: 30m \| Paling lama: 30m/);
-  assert.match(reply.content, /35 hari terakhir/);
+  assert.match(reply.content, new RegExp(`${SESSION_RETENTION_DAYS} hari terakhir`));
   assert.equal((reply.content.match(/Selesai/g) || []).length, 3, "3 baris tabel buat member ini (kolom nama dibuang di tampilan per member)");
   assert.doesNotMatch(reply.content, /Mrecother/);
   assert.match(reply.content, /Halaman 1\/1/);
@@ -2524,7 +2576,7 @@ test("replyRecapMember - member pernah live tapi gak ada sesi yang masih kesimpe
   recordLiveCompleted("jkt48_mrecold", "Mrecold JKT48");
   const reply = await replyRecapMember("mrecold", "c-mrec6", "u-mrec6");
   assert.match(reply.content, /\*\*Mrecold JKT48\*\* gak punya sesi live yang masih kesimpen.*total 1x live/);
-  assert.match(reply.content, /35 hari terakhir/);
+  assert.match(reply.content, new RegExp(`${SESSION_RETENTION_DAYS} hari terakhir`));
   assert.doesNotMatch(reply.content, /```/);
 });
 

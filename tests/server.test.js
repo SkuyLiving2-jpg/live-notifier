@@ -10,6 +10,7 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { SESSION_RETENTION_DAYS } = require("../src/retention");
 const { signPayload } = require("../src/security");
 const { tempCacheDir } = require("./helpers/setupTestEnv");
 const { startServer } = require("../src/server");
@@ -755,13 +756,20 @@ test("POST /api/repair-live-history - dryRun:false beneran buang sesi/entry dura
   }
 });
 
-test("POST /api/repair-live-history - arsip sudah mendekati batas retensi 35 hari: total live ALL-TIME TIDAK direbuild (dulu menghapus total lama), sesi implausible tetap dibersihkan", async () => {
+test("POST /api/repair-live-history - arsip sudah mendekati batas retensi: total live ALL-TIME TIDAK direbuild (dulu menghapus total lama), sesi implausible tetap dibersihkan", async () => {
   const startFn = freshStartServerForBackfillTest();
   const { recordLiveEnded } = require("../src/storage/dailyLog");
   const { saveLiveCount, loadLiveCount } = require("../src/storage/liveCount");
   const nowSec = Math.floor(Date.now() / 1000);
-  // Sesi tertua 34 hari lalu - arsip ini hampir pasti SUDAH memangkas sesi yang lebih tua.
-  recordLiveEnded("Veteran", "jkt48_repair3_veteran", new Date((nowSec - 34 * 86400 - 3600) * 1000), new Date((nowSec - 34 * 86400) * 1000), null);
+  // Sesi tertua 1 hari sebelum batas retensi - arsip ini hampir pasti SUDAH memangkas sesi yang lebih tua.
+  const oldestAgeSec = (SESSION_RETENTION_DAYS - 1) * 86400;
+  recordLiveEnded(
+    "Veteran",
+    "jkt48_repair3_veteran",
+    new Date((nowSec - oldestAgeSec - 3600) * 1000),
+    new Date((nowSec - oldestAgeSec) * 1000),
+    null,
+  );
   saveLiveCount({
     jkt48_repair3_veteran: { name: "Veteran", count: 80, firstLiveAt: "2026-01-01T00:00:00.000Z", lastLiveAt: "2026-09-30T00:00:00.000Z" },
   });
