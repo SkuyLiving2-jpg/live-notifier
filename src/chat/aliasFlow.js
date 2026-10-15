@@ -467,6 +467,7 @@ async function handleAliasFlowSelect(interaction) {
 }
 
 module.exports = {
+  searchTargetCandidates,
   buildAliasListBlock,
   buildAliasActionButtonsRow,
   handleAliasFlowButton,

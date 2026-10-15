@@ -4,6 +4,7 @@ const { handleComparePickButton, handleCompareModalSubmit, handleCompareSelect, 
 const { handleReplyCloseButton } = require("./interactionHelpers");
 const { handleRoleFlowButton, handleRoleFlowSelect } = require("./roleFlow");
 const { handleChartButton } = require("./chartReply");
+const { handleVcButton, handleVcSelect, handleVcModalSubmit } = require("./vcFlow");
 const { handleAliasFlowButton, handleAliasFlowModalSubmit, handleAliasFlowSelect } = require("./aliasFlow");
 const {
   handleRecapNavButton,
@@ -71,6 +72,9 @@ const INTERACTION_ROUTES = [
   { kind: "button", prefix: "alias_flow:", handler: handleAliasFlowButton },
   { kind: "modal", prefix: "alias_modal:", handler: handleAliasFlowModalSubmit },
   { kind: "select", prefix: "alias_select:", handler: handleAliasFlowSelect },
+  { kind: "button", prefix: "vc_flow:", handler: handleVcButton },
+  { kind: "select", prefix: "vc_select:", handler: handleVcSelect },
+  { kind: "modal", prefix: "vc_modal:", handler: handleVcModalSubmit },
 ];
 
 function matchesCustomId(route, customId) {

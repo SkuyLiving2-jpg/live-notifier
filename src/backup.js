@@ -17,6 +17,7 @@ const { loadRolePanelState } = require("./storage/rolePanelState");
 const { loadViewerTimelines } = require("./storage/viewerTimelines");
 const { loadAll: loadUserPrefs } = require("./storage/userPrefs");
 const { load: loadGuessGame } = require("./storage/guessGame");
+const { loadVc } = require("./storage/vcSchedule");
 
 // Backup = foto SEMUA data bot (dipakai /api/backup, backup mingguan ke DM owner) dan kebalikannya, pemulihan
 // (/api/restore). Satu daftar SECTIONS jadi sumber kebenaran buat keduanya, jadi section yang ditambahkan ke
@@ -59,6 +60,25 @@ function validateDailyLog(v) {
 function validateLiveCount(v) {
   if (!isPlainObject(v)) return "harus berupa object";
   return everyValue(v, (e) => isPlainObject(e) && Number.isFinite(e.count)) ? null : "tiap entri harus berupa object dengan count (angka)";
+}
+
+function validateVcSchedule(v) {
+  if (!isPlainObject(v) || !Array.isArray(v.sessions)) return "harus berupa object dengan array sessions";
+  const ok = v.sessions.every(
+    (s) =>
+      isPlainObject(s) &&
+      Number.isInteger(s.id) &&
+      typeof s.name === "string" &&
+      Number.isInteger(s.session) &&
+      typeof s.date === "string" &&
+      /^\d{2}:\d{2}$/.test(s.open) &&
+      /^\d{2}:\d{2}$/.test(s.start) &&
+      typeof s.link === "string",
+  );
+  if (!ok) return "tiap sesi harus punya id, name, session (angka), date, open/start (HH:MM) dan link";
+  if (v.nicknames !== undefined && !(isPlainObject(v.nicknames) && everyValue(v.nicknames, (x) => typeof x === "string")))
+    return "nicknames harus object { kunci: julukan }";
+  return null;
 }
 
 const SECTIONS = [
@@ -112,6 +132,7 @@ const SECTIONS = [
     validate: (v) => (isPlainObject(v) && everyValue(v, isPlainObject) ? null : "harus berupa object { userId: {preferensi} }"),
   },
   { key: "guessGame", file: "guess-game.json", load: loadGuessGame, validate: needObject },
+  { key: "vcSchedule", file: "vc-schedule.json", load: loadVc, validate: validateVcSchedule },
 ];
 
 // activeLives ikut dibackup (info), tapi TIDAK dipulihkan: itu state "siapa yang live sekarang" milik proses yang
@@ -131,7 +152,7 @@ function buildBackupSnapshot({ excludeSecrets = false } = {}) {
 }
 
 function summarize(key, value) {
-  if (key === "dailyLog") return `${value.sessions.length} sesi`;
+  if (key === "dailyLog" || key === "vcSchedule") return `${value.sessions.length} sesi`;
   if (Array.isArray(value)) return `${value.length} item`;
   return `${Object.keys(value).length} entri`;
 }

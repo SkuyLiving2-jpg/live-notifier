@@ -1,0 +1,885 @@
+require("./helpers/setupTestEnv");
+// Owner-nya di-set SESUDAH setupTestEnv (yang mengosongkannya) dan SEBELUM config.js dimuat.
+const OWNER = "owner-vc-test-id";
+process.env.PRIORITY_PING_USER_ID = OWNER;
+
+// --- Discord palsu: DM channel yang mencatat pesan; dipasang sebelum vcFlow di-require ---
+let dm;
+let failDm = false;
+function makeDm() {
+  const store = new Map();
+  const log = [];
+  let seq = 0;
+  const unknown = () => Object.assign(new Error("Unknown Message"), { code: 10008 });
+  return {
+    id: "dm-1",
+    store,
+    log,
+    messages: {
+      edit: async (id, payload) => {
+        if (!store.has(id)) throw unknown();
+        store.set(id, payload.content);
+        log.push(["edit", id]);
+      },
+      delete: async (id) => {
+        if (!store.has(id)) throw unknown();
+        store.delete(id);
+        log.push(["delete", id]);
+      },
+    },
+    send: async (payload) => {
+      const id = `m${++seq}`;
+      store.set(id, payload.content);
+      log.push(["send", id]);
+      return { id };
+    },
+  };
+}
+let clientEnabled = true;
+require("../src/discordClient").getDiscordClient = () =>
+  clientEnabled
+    ? {
+        users: {
+          fetch: async () => ({
+            createDM: async () => {
+              if (failDm) throw new Error("Cannot send messages to this user");
+              return dm;
+            },
+          }),
+        },
+      }
+    : null;
+
+const { test, beforeEach } = require("node:test");
+const assert = require("node:assert/strict");
+const { MessageFlags } = require("discord.js");
+const { handleVcButton, handleVcSelect, handleVcModalSubmit, handleVcCommand, syncSummary, DM_ONLY_NOTE } = require("../src/chat/vcFlow");
+const { buildChatReply } = require("../src/chat/router");
+const { findInteractionRoute } = require("../src/chat/interactionRoutes");
+const { loadVc, getVcSession } = require("../src/storage/vcSchedule");
+const { getRegisteredStore } = require("../src/storage/jsonStore");
+const { recordLiveCompleted } = require("../src/storage/liveCount");
+const { getTodayWIB } = require("../src/utils");
+const { shiftDateWIB } = require("../src/streakMath");
+const { MESSAGE_LIMIT } = require("../src/chat/vcRender");
+
+const IDN_NOT_FOUND = { ok: true, json: async () => ({ errors: [{ message: "IDNAccount: User Not found" }], data: null }) };
+const ZOOM = "https://us02web.zoom.us/j/87197929985?pwd=abc";
+const GOOD_FORM = { sesi: "2", buka: "12.45", mulai: "13.00", link: `${ZOOM} 388756`, tiket: "3" };
+const DATE = shiftDateWIB(getTodayWIB(), 3);
+
+let realFetch;
+beforeEach(() => {
+  dm = makeDm();
+  failDm = false;
+  clientEnabled = true;
+  getRegisteredStore("vc-schedule.json").store.save({ title: null, opener: null, sessions: [], nicknames: {}, nextId: 1, message: null });
+  realFetch = global.fetch;
+  global.fetch = async () => IDN_NOT_FOUND; // pencarian member tidak boleh menembak IDN sungguhan
+  recordLiveCompleted("jkt48_lily", "Lily JKT48");
+  recordLiveCompleted("jkt48_aralie", "Aralie JKT48");
+});
+test.afterEach(() => {
+  global.fetch = realFetch;
+});
+
+// --- interaksi palsu ---
+function fake({ customId, fields = {}, values = [], authorId = OWNER, channelId = "dm-chan" } = {}) {
+  const calls = { screens: [], modals: [], replies: [], deferred: 0, deleted: 0 };
+  // Setiap layar yang dikirim ke Discord divalidasi: isi <= 2000 karakter dan semua komponen bisa diserialisasi (label tombol
+  // <= 80, opsi dropdown <= 25, dst - discord.js melempar kalau melanggar). Pelanggaran = test gagal, bukan error di Discord.
+  const record = (p) => {
+    assert.ok((p.content || "").length <= 2000, `isi layar ${p.content.length} karakter`);
+    for (const r of p.components || []) {
+      const json = r.toJSON();
+      assert.ok(json.components.length >= 1 && json.components.length <= 5);
+    }
+    assert.ok((p.components || []).length <= 5, "maks 5 baris komponen");
+    calls.screens.push(p);
+  };
+  return {
+    customId,
+    channelId,
+    user: { id: authorId },
+    values,
+    fields: {
+      getTextInputValue: (id) => {
+        if (!(id in fields)) throw new Error(`field "${id}" tidak dikirim`);
+        return fields[id];
+      },
+    },
+    message: { id: "panel-1", delete: async () => calls.deleted++ },
+    update: async (p) => record(p),
+    editReply: async (p) => record(p),
+    reply: async (p) => calls.replies.push(p),
+    deferUpdate: async () => calls.deferred++,
+    showModal: async (m) => {
+      m.toJSON(); // validasi batas Discord (judul/label/panjang) lewat builder discord.js
+      calls.modals.push(m);
+    },
+    calls,
+    get screen() {
+      return calls.screens[calls.screens.length - 1];
+    },
+  };
+}
+const idsOf = (screen) => screen.components.flatMap((r) => r.components.map((c) => c.data.custom_id));
+const labelsOf = (screen) => screen.components.flatMap((r) => r.components.map((c) => c.data.label).filter(Boolean));
+const modalValues = (modal) => Object.fromEntries(modal.toJSON().components.map((r) => [r.components[0].custom_id, r.components[0].value]));
+
+async function btn(customId, opts) {
+  const i = fake({ customId, ...opts });
+  await handleVcButton(i);
+  return i;
+}
+async function sel(customId, values, opts) {
+  const i = fake({ customId, values, ...opts });
+  await handleVcSelect(i);
+  return i;
+}
+async function mod(customId, fields, opts) {
+  const i = fake({ customId, fields, ...opts });
+  await handleVcModalSubmit(i);
+  return i;
+}
+
+// Alur lengkap tambah sesi untuk "lily" (1 hasil pencarian). Balikin interaksi form terakhir.
+async function addLilySession(form = GOOD_FORM, opts = {}) {
+  await btn("vc_flow:add", opts);
+  await mod("vc_modal:search", { member_query: "lily" }, opts);
+  await btn("vc_flow:use", opts);
+  await sel("vc_select:date", [DATE], opts);
+  return mod("vc_modal:form", form, opts);
+}
+
+const summaryText = () => [...dm.store.values()].join("\n<<<>>>\n");
+
+// ---------------------------------------------------------------------------
+// Gerbang: hanya owner, hanya DM
+// ---------------------------------------------------------------------------
+
+test("'input vc' dari owner di DM -> panel + pesan rangkuman dikirim ke DM", async () => {
+  const reply = await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  assert.match(reply.content, /Input VC/);
+  assert.deepEqual(idsOf(reply), [
+    "vc_flow:add",
+    "vc_flow:edit",
+    "vc_flow:title",
+    "vc_flow:opener",
+    "vc_flow:repost",
+    "vc_flow:reset",
+    "vc_flow:close",
+  ]);
+  assert.equal(dm.store.size, 1, "satu pesan rangkuman");
+  assert.match(summaryText(), /# 🎬 VC /);
+  assert.match(summaryText(), /Belum ada sesi/);
+  assert.match(reply.content, /belum ada sesi/);
+});
+
+test("panel kosong: tombol Ubah/Hapus dan Reset dinonaktifkan (tidak ada yang bisa diubah)", async () => {
+  const reply = await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  const buttons = reply.components.flatMap((r) => r.components);
+  const disabled = Object.fromEntries(buttons.map((b) => [b.data.custom_id, Boolean(b.data.disabled)]));
+  assert.equal(disabled["vc_flow:edit"], true);
+  assert.equal(disabled["vc_flow:reset"], true);
+  assert.equal(disabled["vc_flow:add"], false);
+});
+
+test("owner di LUAR DM -> penjelasan 'cuma lewat DM', dan TIDAK ada pesan yang dikirim", async () => {
+  const reply = await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: false });
+  assert.equal(reply, DM_ONLY_NOTE);
+  assert.equal(dm.store.size, 0);
+  assert.equal(loadVc().sessions.length, 0);
+});
+
+test("BUKAN owner (DM maupun server) -> null: fitur seolah tidak ada, tidak ada yang dikirim", async () => {
+  for (const isDm of [true, false]) {
+    assert.equal(await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: "orang-lain", isDm }), null);
+    assert.equal(await handleVcCommand({ rawText: "julukan vc lily = x", commandText: "julukan vc lily = x", authorId: "orang-lain", isDm }), null);
+  }
+  assert.equal(dm.store.size, 0);
+});
+
+test("teks lain -> null (rute berikutnya jalan)", async () => {
+  for (const text of ["halo", "rekap hari ini", "vc", "input", "input video", "cok siapa yang live"]) {
+    assert.equal(await handleVcCommand({ rawText: text, commandText: text, authorId: OWNER, isDm: true }), null, text);
+  }
+});
+
+test("lewat router sungguhan: owner di DM dapat panel (dengan/tanpa 'cok', huruf besar, 'inputvc'); orang lain dapat balasan biasa", async () => {
+  for (const text of ["input vc", "Input VC", "cok input vc", "inputvc", "  input   vc  "]) {
+    const reply = await buildChatReply(text, { isBotChannel: true, isDm: true, channelId: "dm-1", authorId: OWNER });
+    assert.match(reply.content, /Input VC/, text);
+  }
+  const before = dm.store.size;
+  const other = await buildChatReply("input vc", { isBotChannel: true, isDm: true, channelId: "dm-2", authorId: "orang-lain" });
+  assert.doesNotMatch(JSON.stringify(other), /Input VC/);
+  assert.equal(dm.store.size, before, "orang lain tidak memicu pesan rangkuman");
+
+  const inServer = await buildChatReply("cok input vc", { isBotChannel: false, isDm: false, channelId: "ch-1", authorId: OWNER });
+  assert.equal(inServer, DM_ONLY_NOTE);
+  const noWake = await buildChatReply("input vc", { isBotChannel: false, isDm: false, channelId: "ch-1", authorId: OWNER });
+  assert.equal(noWake, null, "di channel tanpa 'cok' bot tidak menjawab sama sekali");
+});
+
+test("tombol, dropdown, dan form dari BUKAN owner ditolak ephemeral dan tidak mengubah apa pun", async () => {
+  const intruder = { authorId: "orang-lain" };
+  const attempts = [
+    await btn("vc_flow:add", intruder),
+    await btn("vc_flow:close", intruder),
+    await btn("vc_flow:resetok", intruder),
+    await sel("vc_select:date", [DATE], intruder),
+    await mod("vc_modal:form", GOOD_FORM, intruder),
+    await mod("vc_modal:title", { title: "diretas" }, intruder),
+  ];
+  for (const i of attempts) {
+    assert.equal(i.calls.replies.length, 1);
+    assert.equal(i.calls.replies[0].flags, MessageFlags.Ephemeral);
+    assert.match(i.calls.replies[0].content, /cuma buat owner/);
+    assert.equal(i.calls.screens.length, 0);
+    assert.equal(i.calls.modals.length, 0);
+    assert.equal(i.calls.deleted, 0);
+  }
+  assert.equal(loadVc().sessions.length, 0);
+  assert.equal(loadVc().title, null);
+});
+
+test("customId vc_* terdaftar di tabel interaksi (tombol/dropdown/form) ke handler VC", () => {
+  const kinds = { button: "isButton", select: "isStringSelectMenu", modal: "isModalSubmit" };
+  const make = (kind, customId) => ({ customId, ...Object.fromEntries(Object.values(kinds).map((m) => [m, () => m === kinds[kind]])) });
+  assert.equal(findInteractionRoute(make("button", "vc_flow:add")).handler, handleVcButton);
+  assert.equal(findInteractionRoute(make("select", "vc_select:date")).handler, handleVcSelect);
+  assert.equal(findInteractionRoute(make("modal", "vc_modal:form")).handler, handleVcModalSubmit);
+});
+
+// ---------------------------------------------------------------------------
+// Alur tambah sesi
+// ---------------------------------------------------------------------------
+
+test("tambah sesi (member dikenal, 1 hasil): modal cari -> pakai -> dropdown tanggal 25 hari -> modal detail -> tersimpan + rangkuman ter-update", async () => {
+  const add = await btn("vc_flow:add");
+  assert.equal(add.calls.modals[0].toJSON().custom_id, "vc_modal:search");
+  assert.equal(add.calls.screens.length, 0, "tombol yang membuka modal tidak boleh juga mengedit pesan");
+
+  const search = await mod("vc_modal:search", { member_query: "lily" });
+  assert.equal(search.calls.deferred, 1, "pencarian bisa lama - harus diakui dulu");
+  assert.match(search.screen.content, /Ketemu: \*\*Lily\*\*/);
+  assert.deepEqual(idsOf(search.screen).slice(0, 3), ["vc_flow:use", "vc_flow:manual", "vc_flow:add"]);
+
+  const use = await btn("vc_flow:use");
+  assert.match(use.screen.content, /Member: \*\*Lily\*\*/);
+  const dateSelect = use.screen.components[0].components[0];
+  assert.equal(dateSelect.data.custom_id, "vc_select:date");
+  assert.equal(dateSelect.options.length, 25);
+  assert.equal(dateSelect.options[0].data.value, getTodayWIB());
+  assert.equal(dateSelect.options[0].data.description, "hari ini");
+  assert.equal(dateSelect.options[1].data.description, "besok");
+  assert.equal(dateSelect.options[24].data.value, shiftDateWIB(getTodayWIB(), 24));
+
+  const picked = await sel("vc_select:date", [DATE]);
+  assert.equal(picked.calls.modals[0].toJSON().custom_id, "vc_modal:form", "memilih tanggal langsung membuka form");
+  const fields = Object.keys(modalValues(picked.calls.modals[0]));
+  assert.deepEqual(fields, ["sesi", "buka", "mulai", "link", "tiket"]);
+
+  const form = await mod("vc_modal:form", GOOD_FORM);
+  assert.match(form.screen.content, /✅ Tersimpan: \*\*Lily\*\* · Sesi 2/);
+  assert.deepEqual(idsOf(form.screen), ["vc_flow:again", "vc_flow:add", "vc_flow:edit", "vc_flow:menu", "vc_flow:close"]);
+
+  const [s] = loadVc().sessions;
+  assert.deepEqual(
+    {
+      username: s.username,
+      name: s.name,
+      session: s.session,
+      date: s.date,
+      open: s.open,
+      start: s.start,
+      tickets: s.tickets,
+      passcode: s.passcode,
+      link: s.link,
+    },
+    { username: "jkt48_lily", name: "Lily JKT48", session: 2, date: DATE, open: "12:45", start: "13:00", tickets: 3, passcode: "388756", link: ZOOM },
+  );
+  assert.ok(s.note && s.note.length > 10, "catatan absurd digenerate");
+
+  assert.equal(dm.store.size, 1);
+  const text = summaryText();
+  assert.match(text, /## 1\. 🚨✨🚨 LILY 🚨✨🚨/, "Lily = prioritas -> format spesial");
+  assert.match(text, /🆔 871 9792 9985 · 🔑 388756/, "ID Zoom otomatis dari link");
+  assert.match(text, /🎟️ \*\*3 tiket\*\*/);
+  assert.match(text, new RegExp(s.note.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "catatan yang tersimpan = yang tampil");
+});
+
+test("member tidak dikenal: pencarian kosong -> pakai nama apa adanya -> tersimpan tanpa username, format polos", async () => {
+  await btn("vc_flow:add");
+  const search = await mod("vc_modal:search", { member_query: "Zzqx Lepi" });
+  assert.match(search.screen.content, /gak nemu member/);
+  assert.ok(idsOf(search.screen).includes("vc_flow:manual"));
+  assert.ok(labelsOf(search.screen).some((l) => l.includes("Zzqx Lepi")));
+
+  await btn("vc_flow:manual");
+  await sel("vc_select:date", [DATE]);
+  const form = await mod("vc_modal:form", { ...GOOD_FORM, tiket: "" });
+  assert.match(form.screen.content, /Tersimpan/);
+
+  const [s] = loadVc().sessions;
+  assert.equal(s.username, null);
+  assert.equal(s.name, "Zzqx Lepi");
+  assert.equal(s.tickets, null);
+  assert.match(summaryText(), /\*\*1\. Zzqx Lepi\*\*/);
+  assert.doesNotMatch(summaryText(), /^## /m);
+});
+
+test("pencarian dengan banyak hasil: dropdown berisi semua + opsi 'pakai apa adanya'; memilih satu lanjut ke tanggal", async () => {
+  recordLiveCompleted("jkt48_nadia", "Nadia JKT48");
+  recordLiveCompleted("jkt48_nadine", "Nadine JKT48");
+  await btn("vc_flow:add");
+  const search = await mod("vc_modal:search", { member_query: "nad" });
+  const select = search.screen.components[0].components[0];
+  assert.equal(select.data.custom_id, "vc_select:member");
+  const values = select.options.map((o) => o.data.value);
+  assert.deepEqual(values.sort(), ["__manual__", "jkt48_nadia", "jkt48_nadine"].sort());
+
+  const picked = await sel("vc_select:member", ["jkt48_nadine"]);
+  assert.match(picked.screen.content, /Member: \*\*Nadine\*\*/);
+});
+
+test("pencarian: member dari IDN yang belum pernah live (neverLive) tetap bisa dipilih", async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ data: { getPublicProfileByUsername: { username: "jkt48_kimmy", name: "Kimmy JKT48", avatar: "x" } } }),
+  });
+  await btn("vc_flow:add");
+  const search = await mod("vc_modal:search", { member_query: "kimmy" });
+  assert.match(search.screen.content, /Ketemu: \*\*Kimmy\*\* \(belum pernah live/);
+  await btn("vc_flow:use");
+  await sel("vc_select:date", [DATE]);
+  await mod("vc_modal:form", GOOD_FORM);
+  assert.equal(loadVc().sessions[0].username, "jkt48_kimmy");
+});
+
+test("pencarian: IDN error -> tetap ada opsi pakai nama apa adanya (tidak buntu)", async () => {
+  global.fetch = async () => {
+    throw new Error("IDN down");
+  };
+  await btn("vc_flow:add");
+  const search = await mod("vc_modal:search", { member_query: "sesuatu" });
+  assert.match(search.screen.content, /IDN lagi gak bisa dicek/);
+  assert.ok(idsOf(search.screen).includes("vc_flow:manual"));
+});
+
+test("tanggal lain (ketik): valid -> layar 'isi detail'; tidak valid -> pesan + coba lagi; form yang dibuka dari situ tetap menyimpan tanggalnya", async () => {
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "lily" });
+  await btn("vc_flow:use");
+  const other = await btn("vc_flow:date_other");
+  assert.equal(other.calls.modals[0].toJSON().custom_id, "vc_modal:datetext");
+
+  const bad = await mod("vc_modal:datetext", { date_text: "31 februari" });
+  assert.match(bad.screen.content, /gak ada di kalender/);
+  assert.ok(idsOf(bad.screen).includes("vc_flow:date_other"));
+
+  const good = await mod("vc_modal:datetext", { date_text: "besok" });
+  assert.match(good.screen.content, /Tanggal: \*\*/);
+  assert.ok(idsOf(good.screen).includes("vc_flow:form"));
+  const openForm = await btn("vc_flow:form");
+  assert.equal(openForm.calls.modals[0].toJSON().custom_id, "vc_modal:form");
+
+  await mod("vc_modal:form", GOOD_FORM);
+  assert.equal(loadVc().sessions[0].date, shiftDateWIB(getTodayWIB(), 1));
+});
+
+test("form salah isi: SEMUA kesalahan ditampilkan, tidak ada yang tersimpan, 'Perbaiki' membuka form dengan isian terakhir (tidak mengetik dari nol)", async () => {
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "lily" });
+  await btn("vc_flow:use");
+  await sel("vc_select:date", [DATE]);
+
+  const bad = await mod("vc_modal:form", { sesi: "abc", buka: "14.00", mulai: "13.00", link: "bukan link", tiket: "x" });
+  assert.match(bad.screen.content, /Ada yang belum bener/);
+  assert.equal((bad.screen.content.match(/^• /gm) || []).length, 4, "sesi, link, tiket, dan buka>mulai");
+  assert.deepEqual(idsOf(bad.screen), ["vc_flow:form", "vc_flow:menu", "vc_flow:close"]);
+  assert.equal(loadVc().sessions.length, 0);
+  assert.equal(dm.store.size, 0, "tidak ada pesan rangkuman untuk input yang gagal");
+
+  const retry = await btn("vc_flow:form");
+  assert.deepEqual(modalValues(retry.calls.modals[0]), { sesi: "abc", buka: "14.00", mulai: "13.00", link: "bukan link", tiket: "x" });
+
+  const fixed = await mod("vc_modal:form", GOOD_FORM);
+  assert.match(fixed.screen.content, /Tersimpan/);
+  assert.equal(loadVc().sessions.length, 1);
+});
+
+test("sesi yang sama (member + tanggal + nomor sesi) ditolak sebagai duplikat; nomor sesi lain boleh", async () => {
+  await addLilySession();
+  assert.equal(loadVc().sessions.length, 1);
+
+  await btn("vc_flow:again");
+  await sel("vc_select:date", [DATE]);
+  const dup = await mod("vc_modal:form", GOOD_FORM);
+  assert.match(dup.screen.content, /udah ada/);
+  assert.equal(loadVc().sessions.length, 1);
+
+  const other = await mod("vc_modal:form", { ...GOOD_FORM, sesi: "3", buka: "14.15", mulai: "14.30" });
+  assert.match(other.screen.content, /Tersimpan/);
+  assert.equal(loadVc().sessions.length, 2);
+  assert.equal((summaryText().match(/^## /gm) || []).length, 1, "dua sesi Lily tetap SATU judul");
+});
+
+test("draft hilang (kelamaan/bot restart) -> layar 'ke-reset', tidak ada yang tersimpan", async () => {
+  const opts = { channelId: "dm-tidak-ada-draft" };
+  const form = await mod("vc_modal:form", GOOD_FORM, opts);
+  assert.match(form.screen.content, /kelamaan\/ke-reset/);
+  const use = await btn("vc_flow:use", opts);
+  assert.match(use.screen.content, /kelamaan\/ke-reset/);
+  const date = await sel("vc_select:date", [DATE], opts);
+  assert.match(date.screen.content, /kelamaan\/ke-reset/);
+  const manual = await btn("vc_flow:manual", opts);
+  assert.match(manual.screen.content, /kelamaan\/ke-reset/);
+  assert.equal(loadVc().sessions.length, 0);
+});
+
+test("'Tutup' menghapus pesan wizard; 'Menu' kembali ke panel dan membuang draft", async () => {
+  await btn("vc_flow:add", { channelId: "dm-nav" });
+  const menu = await btn("vc_flow:menu", { channelId: "dm-nav" });
+  assert.match(menu.screen.content, /Input VC/);
+  const stale = await btn("vc_flow:use", { channelId: "dm-nav" });
+  assert.match(stale.screen.content, /kelamaan\/ke-reset/, "draft sudah dibuang oleh Menu");
+
+  const close = await btn("vc_flow:close", { channelId: "dm-nav" });
+  assert.equal(close.calls.deleted, 1);
+  assert.equal(close.calls.deferred, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Urutan & tampilan di rangkuman (end-to-end lewat flow)
+// ---------------------------------------------------------------------------
+
+test("urutan di rangkuman: prioritas selalu paling atas walau diinput terakhir dan tanggalnya paling belakang", async () => {
+  const addPlain = async (query, date, form) => {
+    await btn("vc_flow:add");
+    await mod("vc_modal:search", { member_query: query });
+    await btn("vc_flow:use");
+    await sel("vc_select:date", [date]);
+    await mod("vc_modal:form", form);
+  };
+  await addPlain("aralie", shiftDateWIB(getTodayWIB(), 1), { ...GOOD_FORM, sesi: "1" });
+  await addPlain("lily", shiftDateWIB(getTodayWIB(), 9), { ...GOOD_FORM, sesi: "1" });
+  const text = summaryText();
+  assert.ok(text.indexOf("LILY") < text.indexOf("Aralie"), "Lily (prioritas, 9 hari lagi) di atas Aralie (biasa, besok)");
+  assert.match(text, /## 1\. 🚨✨🚨 LILY/);
+  assert.match(text, /\*\*2\. Aralie\*\*/);
+});
+
+// ---------------------------------------------------------------------------
+// Ubah / hapus
+// ---------------------------------------------------------------------------
+
+test("ubah sesi & jam: modal terisi nilai sekarang; perubahan tersimpan, catatan dibuat ulang bila jam/tiket berubah, rangkuman ter-update", async () => {
+  await addLilySession();
+  const id = loadVc().sessions[0].id;
+  const oldNote = getVcSession(id).note;
+
+  const list = await btn("vc_flow:edit");
+  assert.equal(list.screen.components[0].components[0].data.custom_id, "vc_select:entry");
+  const entry = await sel("vc_select:entry", [String(id)]);
+  assert.deepEqual(idsOf(entry.screen).slice(0, 4), [`vc_flow:eform:${id}`, `vc_flow:elink:${id}`, `vc_flow:enote:${id}`, `vc_flow:edel:${id}`]);
+
+  const open = await btn(`vc_flow:eform:${id}`);
+  assert.deepEqual(modalValues(open.calls.modals[0]), { sesi: "2", tanggal: DATE, buka: "12.45", mulai: "13.00", tiket: "3" });
+
+  const done = await mod(`vc_modal:eform:${id}`, { sesi: "5", tanggal: "besok", buka: "15.00", mulai: "15.30", tiket: "" });
+  assert.match(done.screen.content, /✅ Diubah/);
+  const s = getVcSession(id);
+  assert.deepEqual(
+    { session: s.session, date: s.date, open: s.open, start: s.start, tickets: s.tickets },
+    { session: 5, date: shiftDateWIB(getTodayWIB(), 1), open: "15:00", start: "15:30", tickets: null },
+  );
+  assert.notEqual(s.note, oldNote, "catatan basi (menyebut 3 tiket/jeda lama) dibuat ulang");
+  assert.match(summaryText(), /Sesi 5/);
+  assert.doesNotMatch(summaryText(), /Sesi 2/);
+  assert.equal(dm.store.size, 1, "diedit di tempat, bukan pesan baru");
+});
+
+test("ubah sesi: kalau jam/tiket TIDAK berubah, catatannya dipertahankan", async () => {
+  await addLilySession();
+  const id = loadVc().sessions[0].id;
+  const note = getVcSession(id).note;
+  await mod(`vc_modal:eform:${id}`, { sesi: "7", tanggal: DATE, buka: "12.45", mulai: "13.00", tiket: "3" });
+  assert.equal(getVcSession(id).note, note);
+  assert.equal(getVcSession(id).session, 7);
+});
+
+test("ubah sesi: salah isi -> daftar kesalahan + isian terakhir terisi lagi saat 'Perbaiki'; bentrok dengan sesi lain member itu ditolak", async () => {
+  await addLilySession();
+  await btn("vc_flow:again");
+  await sel("vc_select:date", [DATE]);
+  await mod("vc_modal:form", { ...GOOD_FORM, sesi: "3", buka: "14.15", mulai: "14.30" });
+  const [a, b] = loadVc().sessions;
+
+  const bad = await mod(`vc_modal:eform:${a.id}`, { sesi: "x", tanggal: "?", buka: "13.00", mulai: "12.00", tiket: "" });
+  assert.match(bad.screen.content, /Ada yang belum bener/);
+  assert.equal(getVcSession(a.id).session, 2, "tidak berubah");
+  const reopen = await btn(`vc_flow:eform:${a.id}`);
+  // tiket sengaja dikosongkan owner -> form dibuka dengan kolom tiket KOSONG (bukan kembali ke angka lama 3)
+  assert.deepEqual(modalValues(reopen.calls.modals[0]), { sesi: "x", tanggal: "?", buka: "13.00", mulai: "12.00", tiket: undefined });
+
+  const clash = await mod(`vc_modal:eform:${a.id}`, { sesi: String(b.session), tanggal: DATE, buka: "12.45", mulai: "13.00", tiket: "3" });
+  assert.match(clash.screen.content, /udah dipakai sesi lain/);
+  assert.equal(getVcSession(a.id).session, 2);
+});
+
+test("ubah link: terparse (+sandi), tersimpan, rangkuman ter-update; link salah ditolak dan isiannya dipertahankan", async () => {
+  await addLilySession();
+  const id = loadVc().sessions[0].id;
+  const open = await btn(`vc_flow:elink:${id}`);
+  assert.equal(modalValues(open.calls.modals[0]).link, `${ZOOM} 388756`);
+
+  const bad = await mod(`vc_modal:elink:${id}`, { link: "ngawur" });
+  assert.match(bad.screen.content, /Ada yang belum bener/);
+  assert.equal(getVcSession(id).link, ZOOM);
+  const reopen = await btn(`vc_flow:elink:${id}`);
+  assert.equal(modalValues(reopen.calls.modals[0]).link, "ngawur");
+
+  const ok = await mod(`vc_modal:elink:${id}`, { link: "https://us02web.zoom.us/j/81331441967?pwd=zzz sandi:Ab12" });
+  assert.match(ok.screen.content, /✅ Link diubah/);
+  assert.equal(getVcSession(id).passcode, "Ab12");
+  assert.match(summaryText(), /🆔 813 3144 1967 · 🔑 Ab12/);
+});
+
+test("catatan baru: berubah, tersimpan, tampil di rangkuman", async () => {
+  await addLilySession();
+  const id = loadVc().sessions[0].id;
+  const seen = new Set([getVcSession(id).note]);
+  for (let i = 0; i < 5; i++) {
+    await btn(`vc_flow:enote:${id}`);
+    seen.add(getVcSession(id).note);
+  }
+  assert.ok(seen.size > 1, "catatan berganti");
+  assert.ok(summaryText().includes(getVcSession(id).note.replace(/([\\*_~`|>#@])/g, "\\$1")));
+});
+
+test("hapus sesi: konfirmasi dulu; Batal tidak menghapus; Ya menghapus dan merapikan rangkuman; sesi yang sudah hilang tidak bikin error", async () => {
+  await addLilySession();
+  const id = loadVc().sessions[0].id;
+
+  const ask = await btn(`vc_flow:edel:${id}`);
+  assert.match(ask.screen.content, /Yakin hapus/);
+  const cancel = await btn(`vc_flow:eback:${id}`);
+  assert.match(cancel.screen.content, /Sesi 2/);
+  assert.equal(loadVc().sessions.length, 1);
+
+  const del = await btn(`vc_flow:edelok:${id}`);
+  assert.match(del.screen.content, /🗑️ Dihapus/);
+  assert.equal(loadVc().sessions.length, 0);
+  assert.match(summaryText(), /Belum ada sesi/);
+  assert.doesNotMatch(summaryText(), /LILY/);
+
+  const again = await btn(`vc_flow:edelok:${id}`);
+  assert.match(again.screen.content, /udah gak ada/);
+  const gone = await btn(`vc_flow:eform:${id}`);
+  assert.match(gone.screen.content, /udah gak ada/);
+  const gone2 = await sel("vc_select:entry", [String(id)]);
+  assert.match(gone2.screen.content, /udah gak ada/);
+});
+
+test("daftar ubah/hapus: urut seperti di rangkuman (prioritas dulu), dibatasi 25 dengan catatan jumlah", async () => {
+  const { addVcSession } = require("../src/storage/vcSchedule");
+  for (let i = 0; i < 30; i++) {
+    addVcSession({
+      username: `jkt48_m${i}`,
+      name: `Member ${i} JKT48`,
+      session: 1,
+      date: DATE,
+      open: "10:00",
+      start: "10:30",
+      tickets: null,
+      link: ZOOM,
+      passcode: null,
+      note: "n",
+    });
+  }
+  addVcSession({
+    username: "jkt48_lily",
+    name: "Lily JKT48",
+    session: 1,
+    date: shiftDateWIB(DATE, 5),
+    open: "10:00",
+    start: "10:30",
+    tickets: null,
+    link: ZOOM,
+    passcode: null,
+    note: "n",
+  });
+  const list = await btn("vc_flow:edit");
+  const select = list.screen.components[0].components[0];
+  assert.equal(select.options.length, 25);
+  assert.match(select.options[0].data.label, /^Lily/, "prioritas di urutan pertama");
+  assert.match(list.screen.content, /25 dari 31/);
+});
+
+// ---------------------------------------------------------------------------
+// Judul, pembuka, kirim ulang, reset
+// ---------------------------------------------------------------------------
+
+test("judul: modal terisi judul sekarang; diubah -> tersimpan + rangkuman; kosong ditolak; dipotong 60 karakter", async () => {
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  const open = await btn("vc_flow:title");
+  assert.match(modalValues(open.calls.modals[0]).title, /^VC /);
+
+  const ok = await mod("vc_modal:title", { title: "  VC   Spesial  Natal " });
+  assert.match(ok.screen.content, /Judul diubah/);
+  assert.equal(loadVc().title, "VC Spesial Natal");
+  assert.match(summaryText(), /# 🎬 VC Spesial Natal/);
+
+  const empty = await mod("vc_modal:title", { title: "   " });
+  assert.match(empty.screen.content, /gak boleh kosong/);
+  assert.equal(loadVc().title, "VC Spesial Natal");
+
+  await mod("vc_modal:title", { title: "x".repeat(100) });
+  assert.equal(loadVc().title.length, 60);
+});
+
+test("acak pembuka: berganti dan tampil di rangkuman", async () => {
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  const seen = new Set([loadVc().opener]);
+  for (let i = 0; i < 6; i++) {
+    const r = await btn("vc_flow:opener");
+    assert.match(r.screen.content, /Pembuka baru/);
+    seen.add(loadVc().opener);
+  }
+  assert.ok(seen.size > 1);
+  assert.ok(summaryText().includes(loadVc().opener));
+});
+
+test("kirim ulang di bawah: pesan lama dihapus dan yang baru dikirim (id berganti), isi sama", async () => {
+  await addLilySession();
+  const [oldId] = loadVc().message.ids;
+  const before = summaryText();
+  const r = await btn("vc_flow:repost");
+  assert.match(r.screen.content, /dikirim ulang/);
+  const [newId] = loadVc().message.ids;
+  assert.notEqual(newId, oldId);
+  assert.equal(dm.store.has(oldId), false);
+  assert.equal(summaryText(), before);
+  assert.equal(dm.store.size, 1);
+});
+
+test("reset periode: konfirmasi dulu; setelahnya sesi kosong, judul kembali ke bulan ini, julukan TETAP, rangkuman 'belum ada sesi'", async () => {
+  await addLilySession();
+  await handleVcCommand({
+    rawText: "julukan vc lily = Cece Adik Aing",
+    commandText: "julukan vc lily = cece adik aing",
+    authorId: OWNER,
+    isDm: true,
+  });
+  await mod("vc_modal:title", { title: "Judul Lama" });
+
+  const ask = await btn("vc_flow:reset");
+  assert.match(ask.screen.content, /Yakin mau kosongkan/);
+  assert.equal(loadVc().sessions.length, 1, "belum dihapus sebelum dikonfirmasi");
+
+  const done = await btn("vc_flow:resetok");
+  assert.match(done.screen.content, /Periode baru/);
+  const data = loadVc();
+  assert.equal(data.sessions.length, 0);
+  assert.match(data.title, /^VC /);
+  assert.notEqual(data.title, "Judul Lama");
+  assert.deepEqual(data.nicknames, { jkt48_lily: "Cece Adik Aing" });
+  assert.match(summaryText(), /Belum ada sesi/);
+});
+
+// ---------------------------------------------------------------------------
+// Sinkron pesan rangkuman
+// ---------------------------------------------------------------------------
+
+test("sync: perubahan berikutnya MENGEDIT pesan yang sama (tidak menambah pesan)", async () => {
+  await addLilySession();
+  const sends = () => dm.log.filter(([op]) => op === "send").length;
+  assert.equal(sends(), 1);
+  await mod("vc_modal:title", { title: "Judul Baru" });
+  await mod("vc_modal:title", { title: "Judul Lebih Baru" });
+  assert.equal(sends(), 1);
+  assert.ok(dm.log.filter(([op]) => op === "edit").length >= 2);
+});
+
+test("sync: pesan rangkuman dihapus manual -> dikirim ulang otomatis (tidak error, tidak dobel)", async () => {
+  await addLilySession();
+  const [oldId] = loadVc().message.ids;
+  dm.store.delete(oldId); // owner menghapus pesannya di Discord
+  const r = await mod("vc_modal:title", { title: "Setelah Dihapus" });
+  assert.doesNotMatch(r.screen.content, /gagal/);
+  assert.equal(dm.store.size, 1);
+  assert.match(summaryText(), /Setelah Dihapus/);
+  assert.notEqual(loadVc().message.ids[0], oldId);
+});
+
+test("sync: rangkuman panjang jadi beberapa pesan; lalu menyusut -> pesan kelebihan dihapus; membesar lagi -> pesan baru", async () => {
+  const { addVcSession, removeVcSession } = require("../src/storage/vcSchedule");
+  const ids = [];
+  for (let i = 0; i < 40; i++) {
+    ids.push(
+      addVcSession({
+        username: `jkt48_p${i}`,
+        name: `Panjang ${i} JKT48`,
+        session: 1,
+        date: DATE,
+        open: "10:00",
+        start: "10:30",
+        tickets: 5,
+        link: ZOOM,
+        passcode: "123456",
+        note: "Catatan absurd yang panjang supaya memenuhi pesan dengan cepat sekali.",
+      }).id,
+    );
+  }
+  assert.deepEqual(await syncSummary(OWNER), { ok: true });
+  const many = loadVc().message.ids.length;
+  assert.ok(many > 1);
+  for (const text of dm.store.values()) assert.ok(text.length <= MESSAGE_LIMIT);
+
+  for (const id of ids.slice(5)) removeVcSession(id);
+  await syncSummary(OWNER);
+  const fewer = loadVc().message.ids.length;
+  assert.ok(fewer < many);
+  assert.equal(dm.store.size, fewer, "pesan kelebihan dihapus dari DM");
+
+  for (let i = 0; i < 40; i++) {
+    addVcSession({
+      username: `jkt48_q${i}`,
+      name: `Lagi ${i} JKT48`,
+      session: 1,
+      date: DATE,
+      open: "10:00",
+      start: "10:30",
+      tickets: 5,
+      link: ZOOM,
+      passcode: "123456",
+      note: "Catatan absurd yang panjang supaya memenuhi pesan dengan cepat sekali.",
+    });
+  }
+  await syncSummary(OWNER);
+  assert.ok(loadVc().message.ids.length > fewer);
+  assert.equal(dm.store.size, loadVc().message.ids.length);
+});
+
+test("sync: DM gagal -> data TETAP tersimpan, dan layar menampilkan peringatan (bukan seolah gagal total)", async () => {
+  failDm = true;
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const form = await addLilySession();
+    assert.match(form.screen.content, /✅ Tersimpan/);
+    assert.match(form.screen.content, /pesan rangkuman gagal di-update \(Cannot send messages/);
+    assert.equal(loadVc().sessions.length, 1, "data aman");
+
+    const panel = await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+    assert.match(panel.content, /Gagal update pesan rangkuman/);
+
+    failDm = false;
+    assert.deepEqual(await syncSummary(OWNER), { ok: true }, "pulih begitu DM bisa lagi");
+    assert.match(summaryText(), /LILY/);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("sync: bot belum login (client null) -> {ok:false} tanpa melempar", async () => {
+  clientEnabled = false;
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const result = await syncSummary(OWNER);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /belum login/);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("sync: dua perubahan bersamaan tidak membuat dua pesan rangkuman (antrean)", async () => {
+  const { ensurePeriod } = require("../src/chat/vcFlow");
+  ensurePeriod();
+  const results = await Promise.all([syncSummary(OWNER), syncSummary(OWNER), syncSummary(OWNER)]);
+  assert.ok(results.every((r) => r.ok));
+  assert.equal(dm.store.size, 1);
+  assert.equal(dm.log.filter(([op]) => op === "send").length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Julukan
+// ---------------------------------------------------------------------------
+
+test("julukan: dipasang ke member yang sudah punya sesi -> rangkuman ter-update (priority = JULUKAN (NAMA)); dihapus -> kembali", async () => {
+  await addLilySession();
+  const set = await handleVcCommand({
+    rawText: "julukan vc lily = Cece Adik Aing",
+    commandText: "julukan vc lily = cece adik aing",
+    authorId: OWNER,
+    isDm: true,
+  });
+  assert.match(set, /Julukan buat \*\*Lily\*\*: "Cece Adik Aing"/);
+  assert.equal(loadVc().nicknames.jkt48_lily, "Cece Adik Aing", "huruf besar/kecil dipertahankan");
+  assert.match(summaryText(), /## 1\. 🚨✨🚨 CECE ADIK AING \(LILY\) 🚨✨🚨/);
+
+  const clear = await handleVcCommand({ rawText: "hapus julukan vc lily", commandText: "hapus julukan vc lily", authorId: OWNER, isDm: true });
+  assert.match(clear, /dihapus/);
+  assert.deepEqual(loadVc().nicknames, {});
+  assert.match(summaryText(), /## 1\. 🚨✨🚨 LILY 🚨✨🚨/);
+});
+
+test("julukan: member belum punya sesi -> dikenali lewat data bot; nama tak dikenal -> disimpan per nama; ambigu -> diminta lebih spesifik; terlalu panjang -> ditolak", async () => {
+  const known = await handleVcCommand({
+    rawText: "julukan vc aralie = Si Kalem",
+    commandText: "julukan vc aralie = si kalem",
+    authorId: OWNER,
+    isDm: true,
+  });
+  assert.match(known, /Aralie/);
+  assert.equal(loadVc().nicknames.jkt48_aralie, "Si Kalem");
+
+  await handleVcCommand({ rawText: "julukan vc Zzqx Lepi = My Pumpkin", commandText: "x", authorId: OWNER, isDm: true });
+  assert.equal(loadVc().nicknames["name:zzqx lepi"], "My Pumpkin");
+
+  recordLiveCompleted("jkt48_nadia", "Nadia JKT48");
+  recordLiveCompleted("jkt48_nadine", "Nadine JKT48");
+  const ambiguous = await handleVcCommand({ rawText: "julukan vc nad = X", commandText: "x", authorId: OWNER, isDm: true });
+  assert.match(ambiguous, /cocok ke beberapa member \(Nadia, Nadine\)/);
+  assert.equal(loadVc().nicknames.jkt48_nadia, undefined);
+
+  const long = await handleVcCommand({ rawText: `julukan vc lily = ${"x".repeat(61)}`, commandText: "x", authorId: OWNER, isDm: true });
+  assert.match(long, /kepanjangan/);
+  assert.equal(loadVc().nicknames.jkt48_lily, undefined);
+});
+
+test("julukan: bukan owner / di server -> diabaikan / dijelaskan; lewat router juga jalan", async () => {
+  assert.equal(await handleVcCommand({ rawText: "julukan vc lily = X", commandText: "x", authorId: "orang-lain", isDm: true }), null);
+  assert.equal(await handleVcCommand({ rawText: "julukan vc lily = X", commandText: "x", authorId: OWNER, isDm: false }), DM_ONLY_NOTE);
+  assert.deepEqual(loadVc().nicknames, {});
+
+  const viaRouter = await buildChatReply("Julukan VC Lily = Cece Mantap", { isBotChannel: true, isDm: true, channelId: "dm-1", authorId: OWNER });
+  assert.match(viaRouter, /Cece Mantap/);
+  assert.equal(loadVc().nicknames.jkt48_lily, "Cece Mantap");
+});
+
+// ---------------------------------------------------------------------------
+// Keamanan keluaran
+// ---------------------------------------------------------------------------
+
+test("pesan rangkuman dikirim tanpa mention (allowedMentions kosong) walau nama/julukan memuat @everyone", async () => {
+  const sent = [];
+  const realSend = dm.send;
+  dm.send = async (payload) => {
+    sent.push(payload);
+    return realSend(payload);
+  };
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "@everyone Bahaya" });
+  await btn("vc_flow:manual");
+  await sel("vc_select:date", [DATE]);
+  await mod("vc_modal:form", GOOD_FORM);
+  await handleVcCommand({ rawText: "julukan vc @everyone Bahaya = @here halo", commandText: "x", authorId: OWNER, isDm: true });
+  assert.ok(sent.length >= 1);
+  assert.ok(sent.every((p) => p.allowedMentions && p.allowedMentions.parse.length === 0));
+  assert.ok(!/(^|[^\\])@(everyone|here)/.test(summaryText()), "tidak ada @everyone/@here yang aktif di teks");
+});

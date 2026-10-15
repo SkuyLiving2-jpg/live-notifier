@@ -31,6 +31,10 @@ npm start
 | `npm run register-slash-commands`        | Daftarin slash command ("/live", "/rekap", dst) ke SERVER - jalanin ulang tiap kali daftar command-nya berubah. Tidak muncul di DM                                 |
 | `npm run register-slash-commands:global` | Sama, tapi GLOBAL: command muncul di server DAN di DM dengan bot (butuh sampai ~1 jam; command per-server lama otomatis dikosongkan)                               |
 
+## Rangkuman VC (khusus owner, lewat DM)
+
+Chat bot lewat **DM** dan ketik `input vc`. Bot mengirim satu pesan rangkuman Video Call (di-update otomatis) plus panel tombol buat tambah/ubah/hapus sesi, ganti judul, dan reset periode. Member prioritas selalu di atas dengan format spesial; catatan absurdnya digenerate otomatis. `julukan vc <nama> = <julukan>` buat julukan di judul member. Orang lain gak dapat respons apa pun, dan di channel server fitur ini cuma menjawab "pakai DM".
+
 ## Backup
 
 Bot ngirim **backup mingguan otomatis ke DM owner** (file `.json`, tanpa webhook channel; matikan dengan `WEEKLY_BACKUP_DM=off`). Kalau data di Railway hilang: `npm run restore-data -- backup-xxxx.json` buat lihat pratinjau, lalu tambah `--apply`. Webhook channel khusus di-push ulang lewat `npm run set-channel-routing`.

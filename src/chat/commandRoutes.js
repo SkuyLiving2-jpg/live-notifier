@@ -27,6 +27,7 @@ const { replyWrapped } = require("./wrappedCard");
 const { touchLastSeen } = require("../storage/userPrefs");
 const { replyCekMember } = require("./slashCommands");
 const { buildAliasListBlock } = require("./aliasFlow");
+const { handleVcCommand } = require("./vcFlow");
 const {
   replyListLive,
   replyLongestLive,
@@ -156,6 +157,8 @@ function buildContext(rawContent, { isBotChannel = false, channelId = null, auth
   const text = (rawContent || "").toLowerCase().trim();
   return {
     text,
+    // Teks asli (huruf besar/kecil dipertahankan) - dipakai perintah yang menyimpan teks ketikan apa adanya (julukan VC).
+    rawText: String(rawContent || "").trim(),
     // Wake-word "cok" dibuang dari AWAL kalimat buat pola-pola yang nempatin
     // nama member DULUAN (mis. "lily berapa kali live?") - tanpa ini, capture
     // group yang gak dianchor bisa "kebablasan" ngambil "cok" juga jadi bagian
@@ -244,6 +247,13 @@ function routePeriodGuards({ text }) {
   if (relative?.kind === "unsupported") return replyUnsupportedPeriod(relative.shown);
   const impossibleDate = findImpossibleDateInText(text);
   return impossibleDate ? replyImpossibleDate(impossibleDate) : NO_MATCH;
+}
+
+// "input vc" + julukan VC (chat/vcFlow.js): HANYA owner, HANYA di DM. Orang lain tidak mendapat jawaban apa pun
+// (null -> NO_MATCH), jadi perilaku untuk mereka sama persis seperti sebelum fitur ini ada.
+async function routeVc({ rawText, commandText, authorId, isDm }) {
+  const reply = await handleVcCommand({ rawText, commandText, authorId, isDm });
+  return reply === null ? NO_MATCH : reply;
 }
 
 // ===================== 2. Fitur personal & mini-game ========================
@@ -772,6 +782,7 @@ const ROUTES = [
   routeNotifAllLive,
   routeWakeGate,
   routePeriodGuards,
+  routeVc,
   // 2. Fitur personal & mini-game
   routePersonalCommand,
   routeGuessCommand,

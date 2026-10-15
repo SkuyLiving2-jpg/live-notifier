@@ -2904,3 +2904,12 @@ test("rekap per member dengan 20 baris dan nama sangat panjang tetap di bawah ba
   assert.match(short.text, /Nala JKT48 /);
   assert.doesNotMatch(short.text, /…/);
 });
+
+// Embed Discord menolak description > 4096 karakter (pesan bantuan gagal terkirim sama sekali). Daftar fitur terus bertambah,
+// jadi batas ini dijaga dengan sisa ruang yang wajar - kalau test ini gagal, persingkat baris bantuan, jangan naikkan batasnya.
+test("replyHelp - deskripsi embed muat di batas 4096 karakter Discord dengan sisa ruang", () => {
+  const { replyHelp } = require("../src/chat/replies");
+  const description = replyHelp().embeds[0].description;
+  assert.ok(description.length <= 4000, `deskripsi bantuan ${description.length} karakter (batas Discord 4096)`);
+  assert.match(description, /input vc/);
+});

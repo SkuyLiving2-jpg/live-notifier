@@ -100,6 +100,7 @@ function replyHelp() {
     '- "cok berhenti ingetin <nama member>" - matiin reminder itu',
     '- "cok reminder aku" - lihat kamu subscribe reminder siapa aja',
     '- (khusus owner) "cok tambah prioritas <nama>" / "cok hapus prioritas <nama>"',
+    '- (owner, lewat DM) "input vc" - rangkuman Video Call member; "julukan vc <nama> = <julukan>"',
     '- "cok alias" - lihat panggilan/nickname yang udah kedaftar (owner: tombol Tambah/Hapus di layar itu, atau "cok tambah alias <alias> = <nama asli>" / "cok hapus alias <alias>")',
     "",
     'Kalau abis muncul menu tombol, kamu juga bisa cukup balas angkanya doang (misal "1" atau "4 Nala") tanpa perlu klik.',
