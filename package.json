@@ -20,7 +20,7 @@
     "register-slash-commands:global": "node scripts/register-slash-commands.js --global"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.9",
