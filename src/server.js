@@ -3,20 +3,12 @@ const { requireSignedRequest } = require("./security");
 const { API_SECRET, PORT, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config");
 const { activeLives } = require("./storage/activeLives");
 const { pollHealth, evaluatePollHealth } = require("./pollHealth");
+const { buildBackupSnapshot, planRestore, applyRestore } = require("./backup");
 const { loadGifterSnapshot, saveGifterSnapshot } = require("./storage/gifterSnapshot");
 const { loadDurationHistory, saveDurationHistory, recordLiveDurationAt } = require("./storage/durationHistory");
 const { loadDailyLog, saveDailyLog, recordLiveEnded, SESSION_RETENTION_DAYS } = require("./storage/dailyLog");
-const { loadCustomPriorityMembers } = require("./storage/priorityStore");
-const { loadSubscriptions } = require("./storage/subscriptions");
-const { rebuildLiveCountFromSessions, loadLiveCount } = require("./storage/liveCount");
-const { loadAliases } = require("./storage/aliases");
-const { loadStreakAlerts } = require("./storage/streaks");
-const { loadMemberRoles } = require("./storage/memberRoles");
-const { loadRolePanelState } = require("./storage/rolePanelState");
-const { loadViewerTimelines } = require("./storage/viewerTimelines");
-const { loadAll: loadUserPrefs } = require("./storage/userPrefs");
-const { load: loadGuessGame } = require("./storage/guessGame");
-const { loadChannelRouting, saveChannelRouting } = require("./storage/channelRouting");
+const { rebuildLiveCountFromSessions } = require("./storage/liveCount");
+const { saveChannelRouting } = require("./storage/channelRouting");
 
 // Format webhook Discord yang valid - dipake buat nolak entry yang jelas
 // bukan webhook URL SEDINI mungkin (pas di-push), bukan nyoba kirim ke situ
@@ -165,29 +157,56 @@ function handleChannelRoutingUpload(req, res, body) {
 // murni agregasi apa yang udah ada.
 function handleBackupExport(req, res) {
   res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(
-    JSON.stringify({
-      exportedAt: new Date().toISOString(),
-      activeLives: Object.fromEntries(activeLives),
-      durationHistory: loadDurationHistory(),
-      dailyLog: loadDailyLog(),
-      customPriority: loadCustomPriorityMembers(),
-      subscriptions: loadSubscriptions(),
-      gifterSnapshot: loadGifterSnapshot(),
-      channelRouting: loadChannelRouting(),
-      // Ditambahin belakangan - dulu gak ikut ke-backup, padahal ilang sama
-      // parahnya (total live all-time, alias, milestone streak, daftar role
-      // notif + ID pesan panel role).
-      liveCount: loadLiveCount(),
-      aliases: loadAliases(),
-      streakAlerts: loadStreakAlerts(),
-      memberRoles: loadMemberRoles(),
-      rolePanel: loadRolePanelState(),
-      viewerTimelines: loadViewerTimelines(),
-      userPrefs: loadUserPrefs(),
-      guessGame: loadGuessGame(),
-    }),
+  res.end(JSON.stringify(buildBackupSnapshot()));
+}
+
+// Kebalikan /api/backup: memulihkan data dari file backup (scripts/restore-data.js). Berbahaya karena MENIMPA data,
+// jadi dibuat berlapis: (1) semua section divalidasi dulu - satu saja salah, tidak ada yang ditulis (400);
+// (2) dryRun:true cuma mengembalikan rencana (jumlah entri sekarang vs masuk), tanpa menulis; (3) sebelum menulis,
+// keadaan sekarang disalin ke pre-restore-*.json di folder data supaya pemulihan bisa dibatalkan;
+// (4) activeLives tidak pernah dipulihkan (lihat backup.js). Body: { backup, sections?: [..], dryRun?: bool }.
+function handleRestore(req, res, body) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed, pakai POST" }));
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Body bukan JSON valid" }));
+    return;
+  }
+
+  const plan = planRestore(payload?.backup, payload?.sections);
+  if (plan.error) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: plan.error }));
+    return;
+  }
+  if (plan.invalid.length > 0) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Ada section yang bentuknya salah - TIDAK ADA yang ditulis", invalid: plan.invalid }));
+    return;
+  }
+
+  const dryRun = payload.dryRun !== false; // default AMAN: pratinjau saja. Menulis butuh dryRun:false yang eksplisit.
+  if (dryRun) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ dryRun: true, sections: plan.sections, skipped: plan.skipped }));
+    return;
+  }
+
+  const result = applyRestore(
+    payload.backup,
+    plan.sections.map((s) => s.section),
   );
+  console.log(`Restore: ${result.restored.length} section dipulihkan, ${result.failed.length} gagal (salinan pengaman: ${result.safetyCopy})`);
+  res.writeHead(result.failed.length > 0 ? 500 : 200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ dryRun: false, ...result, skipped: plan.skipped }));
 }
 
 // Toleransi buat nganggep sesi backfill "udah ada" di daily-log - beda
@@ -495,6 +514,11 @@ function startServer() {
 
       if (pathname === "/api/backup") {
         signedEndpoint(handleBackupExport)(req, res);
+        return;
+      }
+
+      if (pathname === "/api/restore") {
+        signedEndpoint(handleRestore)(req, res);
         return;
       }
 

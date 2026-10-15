@@ -47,5 +47,8 @@ process.env.BOT_CHANNEL_ID = "";
 // awal file itu (sebelum src/config.js sempet ke-require), jadi gak
 // kesentuh/gak konflik sama pengosongan default ini.
 process.env.DASHBOARD_WEBHOOK_URL = "";
+// Backup mingguan ke DM owner dimatikan di semua test (kalau tidak, test yang memasang client palsu + PRIORITY_PING_USER_ID
+// dan menjalankan siklus polling ikut menghitung DM backup). tests/backupDm.test.js menyalakannya sendiri sebelum config dimuat.
+process.env.WEEKLY_BACKUP_DM = "off";
 
 module.exports = { tempCacheDir };

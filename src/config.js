@@ -252,6 +252,10 @@ const DAILY_RECAP_COLOR = 0x5865f2;
 // maksa salah satu.
 const DASHBOARD_WEBHOOK_URL = envStr("DASHBOARD_WEBHOOK_URL");
 
+// Backup mingguan semua data bot ke DM owner (notify/backupDm.js) - satu-satunya salinan di LUAR server Railway yang
+// otomatis. Default NYALA (butuh DISCORD_BOT_TOKEN + PRIORITY_PING_USER_ID); isi "off" untuk mematikan.
+const WEEKLY_BACKUP_DM = !["off", "0", "false", "no"].includes(envStr("WEEKLY_BACKUP_DM").toLowerCase());
+
 const PORT = process.env.PORT || 3000;
 
 module.exports = {
@@ -277,5 +281,6 @@ module.exports = {
   SCHEDULE_DIGEST_HOUR,
   DAILY_RECAP_COLOR,
   DASHBOARD_WEBHOOK_URL,
+  WEEKLY_BACKUP_DM,
   PORT,
 };

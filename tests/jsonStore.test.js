@@ -18,6 +18,16 @@ test("load() balikin defaultValue kalau file belum ada", () => {
   assert.deepEqual(store.load(), { hello: "default" });
 });
 
+test("memutasi hasil load() (pola load -> ubah -> save) TIDAK mencemari defaultValue yang dioper", () => {
+  const defaults = { items: [] };
+  const store = createJsonStore(tempFile("x.json"), defaults);
+  const data = store.load();
+  data.items.push("x");
+  data.extra = true;
+  store.save(data);
+  assert.deepEqual(defaults, { items: [] }, "defaultValue harus tetap kosong");
+});
+
 test("defaultValue boleh berupa function (lazy default)", () => {
   const store = createJsonStore(tempFile("x.json"), () => ({ n: 42 }));
   assert.deepEqual(store.load(), { n: 42 });

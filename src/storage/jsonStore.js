@@ -48,7 +48,9 @@ function createJsonStore(filePath, defaultValue, { errorLabel } = {}) {
         cache = JSON.parse(fs.readFileSync(filePath, "utf-8"));
       } catch (error) {
         preserveCorruptFile(filePath, error);
-        cache = typeof defaultValue === "function" ? defaultValue() : defaultValue;
+        // Salinan, BUKAN objek defaultValue itu sendiri: pemanggil memakai pola load() -> ubah -> save(), jadi
+        // objek yang dikembalikan DIMUTASI. Tanpa salinan, "nilai default" ikut tercemar data nyata sepanjang hidup proses.
+        cache = typeof defaultValue === "function" ? defaultValue() : structuredClone(defaultValue);
       }
       hasCache = true;
     }
@@ -73,7 +75,19 @@ function createJsonStore(filePath, defaultValue, { errorLabel } = {}) {
     }
   }
 
-  return { load, save };
+  const api = { load, save };
+  // Didaftarkan per NAMA FILE supaya pemulihan backup (src/backup.js) bisa menyimpan lewat store yang SAMA dengan
+  // yang dipakai bot - dengan begitu cache memorinya ikut ter-update, tanpa tiap modul storage harus ekspor fungsi
+  // "ganti seluruh isi". Pembuatan ulang store untuk file yang sama (hanya terjadi di test) menimpa entri lama.
+  registry.set(path.basename(filePath), { store: api, defaultValue });
+  return api;
 }
 
-module.exports = { createJsonStore, writeFileAtomic, preserveCorruptFile };
+const registry = new Map();
+
+// { store, defaultValue } untuk file bernama `fileName`, atau undefined kalau belum ada store yang membuatnya.
+function getRegisteredStore(fileName) {
+  return registry.get(fileName);
+}
+
+module.exports = { createJsonStore, getRegisteredStore, writeFileAtomic, preserveCorruptFile };

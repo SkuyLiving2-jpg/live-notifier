@@ -40,6 +40,9 @@ const BACKFILL_STORAGE_MODULE_PATHS = [
   require.resolve("../src/storage/dailyLog"),
   require.resolve("../src/storage/durationHistory"),
   require.resolve("../src/storage/liveCount"),
+  // backup.js (dipakai /api/backup) memegang referensi ke fungsi load storage di atas; kalau tidak ikut di-refresh,
+  // backup membaca instance LAMA. Di produksi cuma ada satu instance, jadi ini murni urusan harness test.
+  require.resolve("../src/backup"),
 ];
 const BACKFILL_STORAGE_FILES = ["daily-log.json", "live-duration-history.json", "live-count.json"];
 
