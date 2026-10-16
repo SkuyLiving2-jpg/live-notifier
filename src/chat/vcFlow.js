@@ -87,6 +87,35 @@ function startDraft(interaction) {
 
 const clearDraft = (interaction) => drafts.delete(draftKey(interaction));
 
+// ---------------------- sesi yang BELUM diselesaikan -------------------------
+// Sesi yang baru diinput lewat panel dianggap belum final sampai owner menekan "✅ Selesai". Tombol Tutup (customId
+// vc_flow:close) membuang sesi-sesi baru itu - dan kalau rangkumannya jadi kosong, pesan rangkumannya ikut dihapus. Sesi dari
+// periode/sitting sebelumnya (sudah Selesai, atau bot sempat restart, atau lewat SITTING_TTL_MS tanpa aktivitas) tidak pernah
+// disentuh. Hanya satu owner, jadi satu catatan global di memori.
+const SITTING_TTL_MS = 3 * 60 * 60 * 1000;
+const sitting = { ids: new Set(), at: 0 };
+
+function pendingSessionIds() {
+  if (sitting.ids.size > 0 && Date.now() - sitting.at > SITTING_TTL_MS) sitting.ids.clear();
+  if (sitting.ids.size === 0) return [];
+  const alive = new Set(loadVc().sessions.map((s) => s.id));
+  return [...sitting.ids].filter((id) => alive.has(id));
+}
+
+function markPending(id) {
+  if (sitting.ids.size === 0 || Date.now() - sitting.at > SITTING_TTL_MS) sitting.ids.clear();
+  sitting.ids.add(id);
+  sitting.at = Date.now();
+}
+
+const clearPending = () => sitting.ids.clear();
+
+// Buang semua state sementara di memori (draft + sesi tertunda). Dipakai test dan tombol reset playground; bukan bagian alur bot.
+function resetTransientState() {
+  drafts.clear();
+  clearPending();
+}
+
 // ------------------------- periode & pesan rangkuman -------------------------
 
 // Periode aktif selalu punya judul + pembuka (dibuat sekali, disimpan supaya pesan rangkuman stabil).
@@ -237,8 +266,20 @@ const button = (id, label, style = ButtonStyle.Secondary, disabled = false) =>
 const row = (...components) => new ActionRowBuilder().addComponents(components);
 // Layar konfirmasi sudah punya "Batal" (= vc_flow:menu), jadi cuma "Tutup" yang ditambah - dua komponen dengan custom_id sama
 // membuat Discord menolak seluruh pesannya ("Cok, ada error pas ngejalanin itu").
-const closeRow = () => row(button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger));
-const navRow = () => row(button("vc_flow:menu", "⬅️ Menu"), button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger));
+// Tombol keluar yang jujur: ada sesi baru yang belum diselesaikan -> "Tutup & buang" (membuangnya) + "Selesai" (menyimpannya).
+const closeButton = () => {
+  const pending = pendingSessionIds().length;
+  return pending > 0
+    ? button("vc_flow:close", `✖ Tutup & buang ${pending} sesi baru`, ButtonStyle.Danger)
+    : button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger);
+};
+const doneButtons = () => (pendingSessionIds().length > 0 ? [button("vc_flow:done", "✅ Selesai", ButtonStyle.Success)] : []);
+const closeRow = () => row(...doneButtons(), closeButton());
+const navRow = () => row(button("vc_flow:menu", "⬅️ Menu"), ...doneButtons(), closeButton());
+const pendingNote = () => {
+  const pending = pendingSessionIds().length;
+  return pending > 0 ? `⏳ ${pending} sesi baru belum diselesaikan: pencet ✅ Selesai buat menyimpannya, atau ✖ Tutup buat membuangnya.` : "";
+};
 
 function textInput(id, label, { placeholder, value, required = true, max } = {}) {
   const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(required);
@@ -263,8 +304,11 @@ function buildPanel(prefix = "") {
   const summary = data.sessions.length > 0 ? `${data.sessions.length} sesi dari ${members} member` : "belum ada sesi";
   const hasSessions = data.sessions.length > 0;
   const where = data.message ? "Rangkumannya ada di pesan yang di-update otomatis." : "Pesan rangkuman dibuat otomatis begitu ada perubahan.";
+  const lines = [`🎬 **Input VC** - ${escapeMd(data.title || defaultVcTitle())}`, `${summary}. ${where}`];
+  if (pendingNote()) lines.push(pendingNote());
+  lines.push("Mau ngapain, cok?");
   return {
-    content: `${prefix ? `${prefix}\n\n` : ""}🎬 **Input VC** - ${escapeMd(data.title || defaultVcTitle())}\n${summary}. ${where} Mau ngapain, cok?`,
+    content: `${prefix ? `${prefix}\n\n` : ""}${lines.join("\n")}`,
     components: [
       row(
         button("vc_flow:add", "➕ Tambah sesi", ButtonStyle.Success),
@@ -276,10 +320,7 @@ function buildPanel(prefix = "") {
         button("vc_flow:repost", "📌 Kirim ulang di bawah"),
         button("vc_flow:reset", "🧹 Reset periode", ButtonStyle.Danger, !hasSessions),
       ),
-      row(
-        button("vc_flow:wipe", "🗑️ Hapus rangkuman", ButtonStyle.Danger, !hasSessions && !data.message),
-        button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger),
-      ),
+      row(button("vc_flow:wipe", "🗑️ Hapus rangkuman", ButtonStyle.Danger, !hasSessions && !data.message), ...doneButtons(), closeButton()),
     ],
   };
 }
@@ -385,22 +426,41 @@ function buildEntryScreen(session, prefix = "") {
         button(`vc_flow:enote:${session.id}`, "🎲 Catatan baru"),
         button(`vc_flow:edel:${session.id}`, "🗑️ Hapus", ButtonStyle.Danger),
       ),
-      row(button("vc_flow:edit", "⬅️ Daftar sesi"), button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger)),
+      row(button("vc_flow:edit", "⬅️ Daftar sesi"), ...doneButtons(), closeButton()),
     ],
   };
 }
 
-function buildEntryList() {
+const ENTRY_PAGE_SIZE = 25; // batas opsi dropdown Discord
+
+// Daftar sesi buat Ubah / Hapus, per halaman (semua sesi harus bisa dijangkau - dropdown Discord cuma muat 25 opsi).
+function buildEntryList(page = 0) {
   const data = loadVc();
   const ordered = buildGroups(data.sessions).flatMap((g) => g.sessions);
   if (ordered.length === 0) return buildPanel("Belum ada sesi yang bisa diubah.");
-  const shown = ordered.slice(0, 25);
+  const pages = Math.ceil(ordered.length / ENTRY_PAGE_SIZE);
+  const current = Math.min(Math.max(Number.isInteger(page) ? page : 0, 0), pages - 1);
+  const shown = ordered.slice(current * ENTRY_PAGE_SIZE, (current + 1) * ENTRY_PAGE_SIZE);
   const select = new StringSelectMenuBuilder()
     .setCustomId("vc_select:entry")
     .setPlaceholder("Pilih sesi...")
     .addOptions(shown.map((s) => ({ label: sessionLabel(s).slice(0, 100), value: String(s.id) })));
-  const note = ordered.length > shown.length ? `\n_(cuma nunjukkin ${shown.length} dari ${ordered.length} sesi)_` : "";
-  return { content: `Sesi yang mana, cok?${note}`, components: [row(select), navRow()] };
+  const rows = [row(select)];
+  if (pages > 1) {
+    rows.push(
+      row(
+        button(`vc_flow:elist:${current - 1}`, "◀ Sebelumnya", ButtonStyle.Secondary, current === 0),
+        button("vc_flow:elist_info", `Hal ${current + 1}/${pages}`, ButtonStyle.Secondary, true),
+        button(`vc_flow:elist:${current + 1}`, "Berikutnya ▶", ButtonStyle.Secondary, current === pages - 1),
+      ),
+    );
+  }
+  rows.push(navRow());
+  const note =
+    pages > 1
+      ? `\n_(sesi ${current * ENTRY_PAGE_SIZE + 1}-${current * ENTRY_PAGE_SIZE + shown.length} dari ${ordered.length}, halaman ${current + 1}/${pages})_`
+      : "";
+  return { content: `Sesi yang mana, cok?${note}`, components: rows };
 }
 
 // ---------------------------------- modal ------------------------------------
@@ -413,10 +473,15 @@ const DATE_TEXT_MODAL = () =>
   ]);
 
 // Sesi dan jam buka sudah dipilih di dropdown (judul form mengingatkannya); yang diketik tinggal jam MULAI (manual, jadi
-// dasar pengingat), link, dan tiket. Placeholder jam mulai = ujung jendela buka, hanya contoh - bukan isian otomatis.
+// dasar pengingat), link, dan tiket. Jam mulai harus 15 menit sebelum jam buka sampai jam buka: rentangnya tertulis di label
+// dan placeholder-nya cuma contoh (awal rentang) - bukan isian otomatis.
 function buildFormModal(slot, prefill = {}) {
   return modal("vc_modal:form", `Sesi ${slot.session} · Buka ${formatOpenWindow(slot.open, slot.openEnd)}`, [
-    textInput("mulai", "Jam MULAI", { placeholder: formatTime(slot.openEnd), value: prefill.mulai, max: 10 }),
+    textInput("mulai", `Jam MULAI (${formatTime(slot.startFrom)}-${formatTime(slot.startTo)})`, {
+      placeholder: formatTime(slot.startFrom),
+      value: prefill.mulai,
+      max: 10,
+    }),
     textInput("link", "Link Zoom (+ kode sandi, opsional)", { placeholder: "https://us02web.zoom.us/j/... 388756", value: prefill.link, max: 400 }),
     textInput("tiket", "Jumlah tiket (opsional)", { placeholder: "3", value: prefill.tiket, required: false, max: 10 }),
   ]);
@@ -428,7 +493,7 @@ function buildEditFormModal(session, prefill = {}) {
   return modal(`vc_modal:eform:${session.id}`, "Ubah sesi & jam", [
     textInput("sesi", "Sesi (hari kerja 1-3, akhir pekan 1-6)", { value: prefill.sesi ?? session.session, max: 10 }),
     textInput("tanggal", "Tanggal", { placeholder: "18/10 atau 2026-10-18", value: prefill.tanggal ?? session.date, max: 40 }),
-    textInput("mulai", "Jam MULAI", { value: prefill.mulai ?? formatTime(session.start), max: 10 }),
+    textInput("mulai", "Jam MULAI (15 mnt sebelum buka s/d buka)", { value: prefill.mulai ?? formatTime(session.start), max: 10 }),
     textInput("tiket", "Jumlah tiket (kosong = tidak ada)", { required: false, value: prefill.tiket ?? (session.tickets || ""), max: 10 }),
   ]);
 }
@@ -505,10 +570,28 @@ async function handleVcButton(interaction) {
     case "menu":
       clearDraft(interaction);
       return interaction.update(safeReplyOptions(buildPanel()));
-    case "close":
+    case "close": {
+      // Ada sesi baru yang belum "Selesai" -> dibuang (rangkuman ikut disesuaikan / dihapus kalau jadi kosong).
       clearDraft(interaction);
+      const pending = pendingSessionIds();
+      clearPending();
       await deleteInteractionMessage(interaction);
+      for (const id of pending) removeVcSession(id);
+      if (pending.length > 0 && loadVc().sessions.length > 0) return syncSummary(interaction.user.id);
       return discardEmptySummary(interaction.user.id);
+    }
+    case "done": {
+      clearDraft(interaction);
+      const count = pendingSessionIds().length;
+      clearPending();
+      const total = loadVc().sessions.length;
+      return interaction.update(
+        safeReplyOptions({
+          content: `✅ Selesai. ${count > 0 ? `${count} sesi baru` : "Sesinya"} tersimpan - total ${total} sesi di pesan rangkuman.`,
+          components: [],
+        }),
+      );
+    }
     case "add":
       startDraft(interaction);
       return interaction.showModal(MEMBER_QUERY_MODAL());
@@ -557,6 +640,10 @@ async function handleVcButton(interaction) {
     }
     case "edit":
       return interaction.update(safeReplyOptions(buildEntryList()));
+    case "elist":
+      return interaction.update(safeReplyOptions(buildEntryList(Number(arg))));
+    case "elist_info": // label halaman (tombol mati) - tidak terkirim, jaga-jaga
+      return interaction.deferUpdate();
     case "eform": {
       const session = getVcSession(arg);
       if (!session) return interaction.update(safeReplyOptions(buildPanel("Cok, sesi itu udah gak ada.")));
@@ -633,6 +720,7 @@ async function handleVcButton(interaction) {
       );
     case "resetok": {
       await interaction.deferUpdate();
+      clearPending();
       resetVcPeriod(generateOpener({ title: defaultVcTitle() }));
       const sync = await syncSummary(interaction.user.id);
       return interaction.editReply(safeReplyOptions(buildPanel(`🧹 Periode baru dimulai.${syncWarning(sync)}`)));
@@ -656,6 +744,7 @@ async function handleVcButton(interaction) {
           safeReplyOptions(buildPanel(`⚠️ Gagal menghapus rangkuman (${wiped.reason}). Datanya belum diubah, coba lagi.`)),
         );
       }
+      clearPending();
       return interaction.editReply(safeReplyOptions(buildPanel("🗑️ Rangkuman dihapus: sesi dikosongkan dan pesan rangkuman hilang dari DM.")));
     }
     default:
@@ -791,13 +880,14 @@ async function handleFormSubmit(interaction) {
     passcode: value.passcode,
     note: generateNote({ name: draft.member.name, tickets: value.tickets, open: value.open, start: value.start }),
   });
+  markPending(session.id);
   draft.lastForm = null;
   draft.lastSession = draft.session; // buat "Member lain (sesi sama)"
   draft.session = null; // tanggal dipertahankan: "Sesi lagi" lanjut ke sesi berikutnya di hari yang sama
   const sync = await syncSummary(interaction.user.id);
   await interaction.editReply(
     safeReplyOptions({
-      content: `✅ Tersimpan: ${describeSession(session)}${syncWarning(sync)}`,
+      content: `✅ Tersimpan: ${describeSession(session)}${syncWarning(sync)}\n${pendingNote()}`,
       components: [
         row(
           button("vc_flow:same", `👥 Member lain (Sesi ${draft.lastSession} sama)`, ButtonStyle.Success),
@@ -947,4 +1037,14 @@ async function handleVcCommand({ rawText, commandText, authorId, isDm }) {
   return buildPanel(sync.ok ? "" : `⚠️ Gagal update pesan rangkuman (${sync.reason}).`);
 }
 
-module.exports = { handleVcCommand, handleVcButton, handleVcSelect, handleVcModalSubmit, syncSummary, buildPanel, ensurePeriod, DM_ONLY_NOTE };
+module.exports = {
+  handleVcCommand,
+  handleVcButton,
+  handleVcSelect,
+  handleVcModalSubmit,
+  syncSummary,
+  buildPanel,
+  ensurePeriod,
+  resetTransientState,
+  DM_ONLY_NOTE,
+};

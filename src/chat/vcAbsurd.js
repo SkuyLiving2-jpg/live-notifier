@@ -105,7 +105,7 @@ const SCRAMBLES = [
 
 const SNACKS = ["pisang goreng", "kerupuk", "cilok", "klepon", "bakwan", "tahu isi"];
 
-// Kegiatan di jeda antara jam BUKA dan jam MULAI.
+// Kegiatan di jeda antara jam MULAI dan jam BUKA.
 const WAITING_ACTIVITIES = [
   "ngelap layar sampai kinclong",
   "latihan menyapa tanpa gugup",
@@ -143,10 +143,7 @@ function firstName(name) {
     .filter(Boolean)[0];
 }
 
-function minutesBetween(open, start) {
-  const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
-  return toMin(start) - toMin(open);
-}
+const toMinutes = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 
 function ticketNote(tickets, rng) {
   if (tickets === 1) return "Cuma 1 tiket. Satu. Sendirian. Seperti kopi hitam tanpa gula.";
@@ -158,9 +155,13 @@ function ticketNote(tickets, rng) {
   return pick(forms, rng)();
 }
 
+// Aturan sesi: jam MULAI jatuh 0-15 menit SEBELUM jam buka (vcSlots.js). Data lama (sebelum aturan itu) bisa punya mulai
+// setelah buka; itu tetap dapat kalimat yang benar.
 function timeNote(open, start, rng) {
-  const gap = minutesBetween(open, start);
-  if (gap <= 0) return "Buka dan mulai jam yang sama. Tidak ada waktu untuk napas. Selamat berjuang.";
+  const lead = toMinutes(open) - toMinutes(start); // menit mulai mendahului buka (negatif = mulai setelah buka)
+  if (lead > 0) return `Mulai ${lead} menit sebelum buka: waktu yang pas buat ${pick(WAITING_ACTIVITIES, rng)}.`;
+  if (lead === 0) return "Mulai dan buka di menit yang sama. Tidak ada waktu untuk napas. Selamat berjuang.";
+  const gap = -lead;
   if (gap >= 60) return `Jeda ${gap} menit antara buka dan mulai, cukup untuk mandi, makan, dan galau tiga kali.`;
   return `Buka dulu, ${gap} menit kemudian mulai: waktu yang pas buat ${pick(WAITING_ACTIVITIES, rng)}.`;
 }

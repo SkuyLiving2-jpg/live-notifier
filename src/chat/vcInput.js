@@ -151,6 +151,7 @@ function parseLinkField(raw) {
   }
   if (!/^https?:$/.test(url.protocol)) return fail("Link harus diawali http:// atau https://");
   if (link.length > 300) return fail("Link kepanjangan (maks 300 karakter).");
+  if (/[<>]/.test(link)) return fail("Link gak boleh mengandung tanda < atau > (merusak tampilan rangkuman).");
 
   let passcode = null;
   if (tokens[1]) {
@@ -215,6 +216,7 @@ function validateSessionForm(fields, todayWIB = getTodayWIB(), context = {}) {
     if (result.ok) Object.assign(value, result.value);
     else errors.push(result.error);
   }
+  let range = null;
   const date = value.date ?? context.date;
   const session = value.session ?? context.session;
   if (date && session) {
@@ -222,12 +224,16 @@ function validateSessionForm(fields, todayWIB = getTodayWIB(), context = {}) {
     if (slot.ok) {
       value.open = slot.value.open;
       value.openEnd = slot.value.openEnd;
+      range = slot.value;
     } else {
       errors.push(slot.error);
     }
   }
-  if (value.open && value.start && value.start < value.open) {
-    errors.push(`Jam mulai ${formatTime(value.start)} gak boleh lebih awal dari jam buka sesi ${session} (${formatTime(value.open)}).`);
+  // Jam mulai = 15 menit sebelum jam buka sampai jam buka (sesi 2 Sabtu: buka 13.00-13.15 -> mulai 12.45-13.00).
+  if (range && value.start && (value.start < range.startFrom || value.start > range.startTo)) {
+    errors.push(
+      `Jam mulai ${formatTime(value.start)} di luar aturan sesi ${session}: harus ${formatTime(range.startFrom)}-${formatTime(range.startTo)} (15 menit sebelum jam buka sampai jam buka).`,
+    );
   }
   return { ok: errors.length === 0, value, errors };
 }

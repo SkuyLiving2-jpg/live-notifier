@@ -233,9 +233,9 @@ const { findInteractionRoute } = require("../../src/chat/interactionRoutes");
 const { safeReplyOptions, getTodayWIB } = require("../../src/utils");
 const { shiftDateWIB } = require("../../src/streakMath");
 const { loadVc, addVcSession } = require("../../src/storage/vcSchedule");
-const { ensurePeriod, syncSummary } = require("../../src/chat/vcFlow");
+const { ensurePeriod, syncSummary, resetTransientState } = require("../../src/chat/vcFlow");
 const { generateNote } = require("../../src/chat/vcAbsurd");
-const { slotsForDate } = require("../../src/chat/vcSlots");
+const { slotsForDate, startRange } = require("../../src/chat/vcSlots");
 const { recordLiveCompleted } = require("../../src/storage/liveCount");
 const { getRegisteredStore } = require("../../src/storage/jsonStore");
 
@@ -563,11 +563,11 @@ function seed({ many = false } = {}) {
         date,
         open: slot.open,
         openEnd: slot.openEnd,
-        start: slot.openEnd, // jam mulai contoh = ujung jendela buka
+        start: startRange(slot).startFrom, // jam mulai contoh = awal rentang mulai (15 menit sebelum buka)
         tickets: row.tickets,
         link: fakeLink(i + 1),
         passcode: row.pass,
-        note: generateNote({ name: member.name, tickets: row.tickets, open: slot.open, start: slot.openEnd }),
+        note: generateNote({ name: member.name, tickets: row.tickets, open: slot.open, start: startRange(slot).startFrom }),
       });
       existing.push(created);
       added++;
@@ -585,6 +585,7 @@ function seed({ many = false } = {}) {
 function reset() {
   return serial(async () => {
     getRegisteredStore("vc-schedule.json").store.save({ title: null, opener: null, sessions: [], nicknames: {}, nextId: 1, message: null });
+    resetTransientState();
     for (const channel of Object.values(channels)) channel.messages.length = 0;
     log.length = 0;
     stats.blockedFetch = 0;

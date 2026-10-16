@@ -170,7 +170,7 @@ test("engine: tambah sesi lengkap lewat tombol/dropdown/form - tersimpan, pesan 
     owner({
       kind: "modal",
       customId: "vc_modal:form",
-      fields: { mulai: "13.15", link: `${ZOOM} 388756`, tiket: "3" },
+      fields: { mulai: "13.00", link: `${ZOOM} 388756`, tiket: "3" },
       messageId: panel.id,
     }),
   );

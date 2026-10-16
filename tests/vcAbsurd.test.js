@@ -75,9 +75,15 @@ test("generateNote - templat jeda jam: menghitung menit buka->mulai dengan benar
     for (let i = 0; i < 400; i++) out.add(generateNote({ name: "Lily", open, start, rng: seeded(i) }));
     return [...out];
   };
-  assert.ok(notes("12:45", "13:00").some((n) => /15 menit/.test(n)));
+  // Aturan sekarang: mulai 0-15 menit SEBELUM buka (vcSlots.js)
+  assert.ok(notes("13:00", "12:45").some((n) => /Mulai 15 menit sebelum buka/.test(n)));
+  assert.ok(notes("13:00", "12:50").some((n) => /Mulai 10 menit sebelum buka/.test(n)));
+  assert.ok(notes("13:00", "13:00").some((n) => /Mulai dan buka di menit yang sama/.test(n)));
+  // Data lama (mulai SETELAH buka) tetap dapat kalimat yang benar
+  assert.ok(notes("12:45", "13:00").some((n) => /Buka dulu, 15 menit kemudian mulai/.test(n)));
   assert.ok(notes("12:00", "13:30").some((n) => /Jeda 90 menit/.test(n)));
-  assert.ok(notes("13:00", "13:00").some((n) => /jam yang sama/.test(n)));
+  // Tidak ada kalimat yang menyebut "kemudian mulai"/"jeda" untuk mulai-sebelum-buka (misinformasi)
+  for (const note of notes("13:00", "12:45")) assert.doesNotMatch(note, /kemudian mulai|Jeda \d+ menit|jam yang sama/, note);
 });
 
 test("generateOpener - memuat judul pada templat yang memakainya, satu baris, tanpa placeholder bocor, variasi tinggi", () => {

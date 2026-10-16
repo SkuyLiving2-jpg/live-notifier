@@ -178,13 +178,13 @@ const SATURDAY = "2026-10-17";
 const MONDAY = "2026-10-19";
 
 test("validateSessionForm - semua benar: nilai terparse lengkap; jam buka (jendela) diturunkan dari tanggal+sesi, bukan diketik", () => {
-  const result = validateSessionForm({ mulai: "13.15", link: "https://us02web.zoom.us/j/87197929985?pwd=abc 388756", tiket: "3" }, TODAY, {
+  const result = validateSessionForm({ mulai: "13.00", link: "https://us02web.zoom.us/j/87197929985?pwd=abc 388756", tiket: "3" }, TODAY, {
     date: SATURDAY,
     session: 2,
   });
   assert.equal(result.ok, true);
   assert.deepEqual(result.value, {
-    start: "13:15",
+    start: "13:00",
     link: "https://us02web.zoom.us/j/87197929985?pwd=abc",
     passcode: "388756",
     tickets: 3,
@@ -201,14 +201,19 @@ test("validateSessionForm - SEMUA kesalahan dilaporkan sekaligus, bukan satu-sat
 });
 
 test("validateSessionForm - sesi harus ada di hari itu: Senin-Jumat sesi 1-3, Sabtu-Minggu sesi 1-6", () => {
-  const form = (sesi, tanggal) => validateSessionForm({ sesi, tanggal, mulai: "23.00" }, TODAY);
+  const startFor = { 1: "16.00", 2: "17.30", 3: "19.00", 4: "16.00", 5: "17.30", 6: "19.00" }; // awal rentang sesi itu (sesi 1-3 akhir pekan beda: lihat di bawah)
+  const form = (sesi, tanggal) => validateSessionForm({ sesi, tanggal, mulai: startFor[sesi] }, TODAY);
   for (const sesi of ["1", "2", "3"]) assert.equal(form(sesi, MONDAY).ok, true, `Senin sesi ${sesi}`);
   for (const sesi of ["4", "5", "6"]) {
     const result = form(sesi, MONDAY);
     assert.equal(result.ok, false, `Senin sesi ${sesi} harus invalid`);
     assert.match(result.errors[0], new RegExp(`Sesi ${sesi} gak ada di hari Senin - hari kerja cuma sesi 1-3`));
   }
-  for (const sesi of ["1", "2", "3", "4", "5", "6"]) assert.equal(form(sesi, SATURDAY).ok, true, `Sabtu sesi ${sesi}`);
+  for (const sesi of ["4", "5", "6"]) assert.equal(form(sesi, SATURDAY).ok, true, `Sabtu sesi ${sesi}`);
+  const weekendStart = { 1: "11.15", 2: "12.45", 3: "14.15" };
+  for (const sesi of ["1", "2", "3"]) {
+    assert.equal(validateSessionForm({ sesi, tanggal: SATURDAY, mulai: weekendStart[sesi] }, TODAY).ok, true, `Sabtu sesi ${sesi}`);
+  }
   assert.equal(form("6", "2026-10-18").ok, true, "Minggu sesi 6");
   assert.match(form("7", SATURDAY).errors[0], /Sesi 7 gak ada di hari Sabtu - akhir pekan cuma sesi 1-6/);
   assert.match(form("4", "2026-10-16").errors[0], /hari Jumat/, "Jumat tetap hari kerja");
@@ -216,7 +221,7 @@ test("validateSessionForm - sesi harus ada di hari itu: Senin-Jumat sesi 1-3, Sa
 
 test("validateSessionForm - jam buka mengikuti sesi (weekday & weekend), termasuk sesi 4-6 akhir pekan = sesi 1-3 hari kerja", () => {
   const open = (date, session) => {
-    const { value } = validateSessionForm({ mulai: "23.00" }, TODAY, { date, session });
+    const { value } = validateSessionForm({}, TODAY, { date, session });
     return `${value.open}-${value.openEnd}`;
   };
   assert.deepEqual(
@@ -229,13 +234,21 @@ test("validateSessionForm - jam buka mengikuti sesi (weekday & weekend), termasu
   );
 });
 
-test("validateSessionForm - jam mulai tidak boleh lebih awal dari jam buka sesi (sama atau lebih telat boleh)", () => {
-  const form = (mulai) => validateSessionForm({ mulai }, TODAY, { date: SATURDAY, session: 2 }); // buka 13.00-13.15
-  assert.equal(form("12.59").ok, false);
-  assert.match(form("12.59").errors[0], /Jam mulai 12\.59 gak boleh lebih awal dari jam buka sesi 2 \(13\.00\)/);
+test("validateSessionForm - jam mulai harus 15 menit sebelum jam buka sampai jam buka (batas tepat boleh, di luarnya ditolak)", () => {
+  const form = (mulai) => validateSessionForm({ mulai }, TODAY, { date: SATURDAY, session: 2 }); // buka 13.00-13.15 -> mulai 12.45-13.00
+  assert.equal(form("12.45").ok, true);
+  assert.equal(form("12.50").ok, true);
   assert.equal(form("13.00").ok, true);
-  assert.equal(form("13.15").ok, true);
-  assert.equal(form("13.40").ok, true, "VC molor melewati ujung jendela itu wajar");
+  for (const bad of ["12.44", "12.00", "13.01", "13.15", "13.40"]) {
+    const result = form(bad);
+    assert.equal(result.ok, false, bad);
+    assert.equal(result.errors[0], `Jam mulai ${bad} di luar aturan sesi 2: harus 12.45-13.00 (15 menit sebelum jam buka sampai jam buka).`);
+  }
+  const weekday = (mulai) => validateSessionForm({ mulai }, TODAY, { date: MONDAY, session: 1 }); // buka 16.15-16.30 -> mulai 16.00-16.15
+  assert.equal(weekday("16.00").ok, true);
+  assert.equal(weekday("16.15").ok, true);
+  assert.equal(weekday("16.30").ok, false, "16.30 itu ujung jendela buka, bukan jam mulai");
+  assert.equal(weekday("15.59").ok, false);
 });
 
 test("validateSessionForm - kolom yang tidak dikirim dilewati (modal sebagian); tanggal+sesi dari kolom menang atas konteks", () => {
@@ -243,13 +256,13 @@ test("validateSessionForm - kolom yang tidak dikirim dilewati (modal sebagian); 
   assert.equal(onlyLink.ok, true);
   assert.deepEqual(Object.keys(onlyLink.value).sort(), ["link", "passcode"], "tanpa tanggal+sesi tidak ada jam buka");
 
-  const edit = validateSessionForm({ sesi: "2", tanggal: "lusa", mulai: "18.00", tiket: "" }, TODAY); // lusa = Sabtu 17/10
+  const edit = validateSessionForm({ sesi: "2", tanggal: "lusa", mulai: "12.50", tiket: "" }, TODAY); // lusa = Sabtu 17/10
   assert.equal(edit.ok, true);
   assert.equal(edit.value.date, SATURDAY);
   assert.equal(edit.value.tickets, null);
   assert.deepEqual([edit.value.open, edit.value.openEnd], ["13:00", "13:15"]);
 
-  const override = validateSessionForm({ sesi: "5", tanggal: "lusa", mulai: "18.00" }, TODAY, { date: MONDAY, session: 1 });
+  const override = validateSessionForm({ sesi: "5", tanggal: "lusa", mulai: "17.45" }, TODAY, { date: MONDAY, session: 1 });
   assert.deepEqual([override.value.date, override.value.session, override.value.open], [SATURDAY, 5, "17:45"]);
 });
 

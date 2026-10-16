@@ -2,7 +2,8 @@
 // Murni dan tanpa dependensi (tanggal "YYYY-MM-DD" kalender WIB, tidak ada zona waktu yang ikut campur).
 //   Hari kerja (Senin-Jumat): sesi 1-3.
 //   Akhir pekan (Sabtu-Minggu): sesi 1-6; sesi 4-6 memakai jendela yang sama dengan sesi 1-3 hari kerja.
-// Jam MULAI tidak ada di sini: itu diisi manual owner (dipakai sebagai dasar pengingat), bisa beda dari ujung jendela buka.
+// Jam MULAI diisi manual owner (dasar pengingat), tapi dibatasi RUMUS: dari 15 menit sebelum jam buka sampai jam buka
+// (jendela buka 16.15-16.30 -> mulai 16.00-16.15). Batasnya (startFrom/startTo) ikut dikembalikan checkSession.
 // Hari libur nasional tidak dikenali: kalau ada VC "hari kerja" di tanggal merah, pakai aturan Senin-Jumat apa adanya.
 
 const WEEKDAY_SLOTS = Object.freeze(
@@ -21,6 +22,17 @@ const WEEKEND_SLOTS = Object.freeze(
     ...WEEKDAY_SLOTS.map((slot) => ({ ...slot, session: slot.session + 3 })),
   ].map(Object.freeze),
 );
+
+const START_LEAD_MINUTES = 15;
+
+// "16:15" - 15 menit -> "16:00". Jendela buka paling awal 11:30, jadi tidak pernah melewati tengah malam.
+function minusMinutes(hhmm, minutes) {
+  const total = Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)) - minutes;
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+// Rentang jam MULAI yang sah untuk sebuah slot: [15 menit sebelum buka, jam buka].
+const startRange = (slot) => ({ startFrom: minusMinutes(slot.open, START_LEAD_MINUTES), startTo: slot.open });
 
 const DAY_NAMES = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 
@@ -51,16 +63,16 @@ function describeDayType(dateWIB) {
   return isWeekend(dateWIB) ? "akhir pekan (Sabtu-Minggu)" : "hari kerja (Senin-Jumat)";
 }
 
-// { ok: true, value: { session, open, openEnd } } atau { ok: false, error } - dipakai semua tempat yang menerima nomor sesi.
+// { ok: true, value: { session, open, openEnd, startFrom, startTo } } atau { ok: false, error } - dipakai semua tempat yang menerima nomor sesi.
 function checkSession(dateWIB, session) {
   const dow = dayOfWeek(dateWIB);
   if (dow === null) return { ok: false, error: `Tanggal "${dateWIB}" tidak valid, jadi sesinya tidak bisa dicek.` };
   const slots = slotsForDate(dateWIB);
   const slot = slots.find((s) => s.session === session);
-  if (slot) return { ok: true, value: { session: slot.session, open: slot.open, openEnd: slot.openEnd } };
+  if (slot) return { ok: true, value: { session: slot.session, open: slot.open, openEnd: slot.openEnd, ...startRange(slot) } };
   const last = slots[slots.length - 1].session;
   const hint = isWeekend(dateWIB) ? `akhir pekan cuma sesi 1-${last}` : `hari kerja cuma sesi 1-${last}; sesi 4-6 cuma ada di Sabtu-Minggu`;
   return { ok: false, error: `Sesi ${session} gak ada di hari ${DAY_NAMES[dow]} - ${hint}.` };
 }
 
-module.exports = { WEEKDAY_SLOTS, WEEKEND_SLOTS, dayOfWeek, isWeekend, slotsForDate, describeDayType, checkSession };
+module.exports = { START_LEAD_MINUTES, startRange, WEEKDAY_SLOTS, WEEKEND_SLOTS, dayOfWeek, isWeekend, slotsForDate, describeDayType, checkSession };
