@@ -120,6 +120,16 @@ function fake({ customId, fields = {}, values = [], authorId = OWNER, channelId 
       assert.ok(json.components.length >= 1 && json.components.length <= 5);
     }
     assert.ok((p.components || []).length <= 5, "maks 5 baris komponen");
+    // Tata letak seragam (seperti menu utama bot): baris tombol utama maks 3, baris terakhir (navigasi) maks 4.
+    const rows = (p.components || []).map((r) => r.toJSON().components);
+    rows.forEach((components, i) => {
+      if (components.some((c) => c.type !== 2)) return; // dropdown berdiri sendiri
+      const limit = i === rows.length - 1 ? 4 : 3;
+      assert.ok(
+        components.length <= limit,
+        `baris ${i + 1} berisi ${components.length} tombol (maks ${limit}): ${components.map((c) => c.label).join(" | ")}`,
+      );
+    });
     // Discord menolak seluruh pesan kalau ada dua komponen dengan custom_id sama (error "custom_id duplicated").
     const customIds = (p.components || []).flatMap((r) => r.toJSON().components.map((c) => c.custom_id));
     assert.equal(new Set(customIds).size, customIds.length, `custom_id ganda di satu layar: ${customIds.join(", ")}`);
@@ -190,29 +200,72 @@ const summaryText = () => [...dm.store.values()].join("\n<<<>>>\n");
 test("'input vc' dari owner di DM -> panel + pesan rangkuman dikirim ke DM", async () => {
   const reply = await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
   assert.match(reply.content, /Input VC/);
-  assert.deepEqual(idsOf(reply), [
-    "vc_flow:add",
-    "vc_flow:edit",
-    "vc_flow:title",
-    "vc_flow:opener",
-    "vc_flow:repost",
-    "vc_flow:reset",
-    "vc_flow:wipe",
-    "vc_flow:close",
-  ]);
+  // Panel berhalaman seperti menu utama bot: 3 tombol utama + baris navigasi (Tutup, Menu lainnya)
+  assert.deepEqual(idsOf(reply), ["vc_flow:add", "vc_flow:edit", "vc_flow:title", "vc_flow:close", "vc_flow:page:1"]);
   assert.equal(dm.store.size, 1, "satu pesan rangkuman");
   assert.match(summaryText(), /# 🎬 VC /);
   assert.match(summaryText(), /Belum ada sesi/);
   assert.match(reply.content, /belum ada sesi/);
 });
 
+const disabledMap = (screen) =>
+  Object.fromEntries(screen.components.flatMap((r) => r.components).map((b) => [b.data.custom_id, Boolean(b.data.disabled)]));
+
 test("panel kosong: tombol Ubah/Hapus dan Reset dinonaktifkan (tidak ada yang bisa diubah)", async () => {
   const reply = await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
-  const buttons = reply.components.flatMap((r) => r.components);
-  const disabled = Object.fromEntries(buttons.map((b) => [b.data.custom_id, Boolean(b.data.disabled)]));
-  assert.equal(disabled["vc_flow:edit"], true);
-  assert.equal(disabled["vc_flow:reset"], true);
-  assert.equal(disabled["vc_flow:add"], false);
+  const page0 = disabledMap(reply);
+  assert.equal(page0["vc_flow:edit"], true);
+  assert.equal(page0["vc_flow:add"], false);
+  const page2 = disabledMap((await btn("vc_flow:page:2")).screen);
+  assert.equal(page2["vc_flow:reset"], true);
+  assert.equal(page2["vc_flow:wipe"], false, "ada pesan rangkuman (judul) -> masih bisa dihapus");
+});
+
+test("panel berhalaman seperti menu utama bot: 3 halaman, tiap halaman maks 3 tombol utama + Tutup / Menu sebelumnya / Menu lainnya", async () => {
+  await addLilySession();
+  await btn("vc_flow:done");
+  const expected = [
+    { main: ["vc_flow:add", "vc_flow:edit", "vc_flow:title"], nav: ["vc_flow:close", "vc_flow:page:1"] },
+    { main: ["vc_flow:opener", "vc_flow:repost"], nav: ["vc_flow:close", "vc_flow:page:0", "vc_flow:page:2"] },
+    { main: ["vc_flow:reset", "vc_flow:wipe"], nav: ["vc_flow:close", "vc_flow:page:1"] },
+  ];
+  for (const [page, want] of expected.entries()) {
+    const screen = (await btn(`vc_flow:page:${page}`)).screen;
+    assert.equal(screen.components.length, 2, "baris tombol utama + baris navigasi, tidak bertumpuk");
+    assert.deepEqual(
+      screen.components[0].components.map((c) => c.data.custom_id),
+      want.main,
+      `halaman ${page + 1}`,
+    );
+    assert.deepEqual(
+      screen.components[1].components.map((c) => c.data.custom_id),
+      want.nav,
+      `navigasi halaman ${page + 1}`,
+    );
+    assert.ok(screen.components[0].components.length <= 3);
+  }
+  const labels = (await btn("vc_flow:page:1")).screen.components[1].components.map((c) => c.data.label);
+  assert.deepEqual(labels, ["✖ Tutup", "⬅️ Menu sebelumnya", "Menu lainnya ➡️"], "label sama dengan menu utama bot");
+  // halaman di luar rentang / sampah -> halaman pertama
+  for (const bad of ["9", "-1", "x", ""]) {
+    const screen = (await btn(`vc_flow:page:${bad}`)).screen;
+    assert.equal(screen.components[0].components[0].data.custom_id, "vc_flow:add", bad);
+  }
+});
+
+test("aksi di halaman 2/3 mengembalikan panel ke halaman yang sama (tidak lompat ke halaman 1)", async () => {
+  await addLilySession();
+  await btn("vc_flow:done");
+  const opener = await btn("vc_flow:opener");
+  assert.equal(opener.screen.components[0].components[0].data.custom_id, "vc_flow:opener");
+  const repost = await btn("vc_flow:repost");
+  assert.equal(repost.screen.components[0].components[0].data.custom_id, "vc_flow:opener");
+  const resetAsk = await btn("vc_flow:reset");
+  const cancel = await btn("vc_flow:page:2"); // tombol Batal di konfirmasi
+  assert.equal(cancel.screen.components[0].components[0].data.custom_id, "vc_flow:reset");
+  assert.ok(resetAsk.screen.content.includes("Yakin"));
+  const done = await btn("vc_flow:resetok");
+  assert.equal(done.screen.components[0].components[0].data.custom_id, "vc_flow:reset", "setelah reset tetap di halaman 3");
 });
 
 test("owner di LUAR DM -> penjelasan 'cuma lewat DM', dan TIDAK ada pesan yang dikirim", async () => {
@@ -337,15 +390,7 @@ test("tambah sesi (member dikenal, 1 hasil): modal cari -> pakai -> dropdown tan
   const form = await mod("vc_modal:form", GOOD_FORM);
   assert.match(form.screen.content, /✅ Tersimpan: \*\*Lily\*\* · Sesi 2/);
   assert.match(form.screen.content, /Buka 13\.00-13\.15 · Mulai 13\.00/);
-  assert.deepEqual(idsOf(form.screen), [
-    "vc_flow:same",
-    "vc_flow:again",
-    "vc_flow:add",
-    "vc_flow:edit",
-    "vc_flow:menu",
-    "vc_flow:done",
-    "vc_flow:close",
-  ]);
+  assert.deepEqual(idsOf(form.screen), ["vc_flow:same", "vc_flow:again", "vc_flow:add", "vc_flow:close", "vc_flow:done", "vc_flow:menu"]);
 
   const [s] = loadVc().sessions;
   assert.deepEqual(
@@ -565,7 +610,7 @@ test("form salah isi: SEMUA kesalahan ditampilkan, tidak ada yang tersimpan, 'Pe
   const bad = await mod("vc_modal:form", { mulai: "25.00", link: "bukan link", tiket: "x" });
   assert.match(bad.screen.content, /Ada yang belum bener/);
   assert.equal((bad.screen.content.match(/^• /gm) || []).length, 3, "mulai, link, dan tiket");
-  assert.deepEqual(idsOf(bad.screen), ["vc_flow:form", "vc_flow:menu", "vc_flow:close"]);
+  assert.deepEqual(idsOf(bad.screen), ["vc_flow:form", "vc_flow:close", "vc_flow:menu"]);
   assert.equal(loadVc().sessions.length, 0);
   assert.equal(dm.store.size, 0, "tidak ada pesan rangkuman untuk input yang gagal");
 
@@ -823,7 +868,16 @@ test("ubah sesi & jam: modal terisi nilai sekarang; perubahan tersimpan, catatan
   const list = await btn("vc_flow:edit");
   assert.equal(list.screen.components[0].components[0].data.custom_id, "vc_select:entry");
   const entry = await sel("vc_select:entry", [String(id)]);
-  assert.deepEqual(idsOf(entry.screen).slice(0, 4), [`vc_flow:eform:${id}`, `vc_flow:elink:${id}`, `vc_flow:enote:${id}`, `vc_flow:edel:${id}`]);
+  assert.deepEqual(idsOf(entry.screen), [
+    `vc_flow:eform:${id}`,
+    `vc_flow:elink:${id}`,
+    `vc_flow:enote:${id}`,
+    "vc_flow:close",
+    "vc_flow:done",
+    "vc_flow:edit",
+    `vc_flow:edel:${id}`,
+  ]);
+  assert.equal(entry.screen.components[0].components.length, 3, "3 tombol utama per baris");
 
   const open = await btn(`vc_flow:eform:${id}`);
   assert.deepEqual(modalValues(open.calls.modals[0]), { sesi: "2", tanggal: DATE, mulai: "13.00", tiket: "3" }, "tidak ada kolom jam buka");
@@ -1035,7 +1089,7 @@ test("layar konfirmasi reset & hapus rangkuman tidak punya custom_id ganda (Disc
     const ask = await btn(id); // fake() sudah menolak custom_id ganda di setiap layar
     const ids = idsOf(ask.screen);
     assert.equal(new Set(ids).size, ids.length, id);
-    assert.ok(ids.includes("vc_flow:menu") && ids.includes("vc_flow:close"), "tetap ada Batal dan Tutup");
+    assert.ok(ids.includes("vc_flow:page:2") && ids.includes("vc_flow:close"), "tetap ada Batal dan Tutup");
   }
 });
 
@@ -1060,7 +1114,7 @@ test("link Zoom yang sama dengan sesi lain ditolak (walau beda host/sandi/huruf/
   for (const link of variants) {
     const rejected = await attempt(link);
     assert.match(rejected.screen.content, /Link Zoom itu udah dipakai sesi lain: Lily · Sesi 2/, link);
-    assert.deepEqual(idsOf(rejected.screen), ["vc_flow:form", "vc_flow:menu", "vc_flow:done", "vc_flow:close"]);
+    assert.deepEqual(idsOf(rejected.screen), ["vc_flow:form", "vc_flow:close", "vc_flow:done", "vc_flow:menu"]);
     assert.equal(loadVc().sessions.length, before, "tidak ada sesi baru yang tersimpan");
   }
   const retry = await btn("vc_flow:form");
@@ -1282,7 +1336,7 @@ test("hapus rangkuman: konfirmasi dulu; setelahnya pesan rangkuman hilang dari D
 
   const ask = await btn("vc_flow:wipe");
   assert.match(ask.screen.content, /Yakin mau hapus 1 sesi dan pesan rangkumannya/);
-  assert.deepEqual(idsOf(ask.screen), ["vc_flow:wipeok", "vc_flow:menu", "vc_flow:done", "vc_flow:close"]);
+  assert.deepEqual(idsOf(ask.screen), ["vc_flow:wipeok", "vc_flow:page:2", "vc_flow:close", "vc_flow:done"]);
   assert.equal(loadVc().sessions.length, 1, "belum dihapus sebelum dikonfirmasi");
   assert.equal(dm.store.size, 1);
 

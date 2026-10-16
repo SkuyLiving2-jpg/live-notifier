@@ -274,8 +274,9 @@ const closeButton = () => {
     : button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger);
 };
 const doneButtons = () => (pendingSessionIds().length > 0 ? [button("vc_flow:done", "✅ Selesai", ButtonStyle.Success)] : []);
-const closeRow = () => row(...doneButtons(), closeButton());
-const navRow = () => row(button("vc_flow:menu", "⬅️ Menu"), ...doneButtons(), closeButton());
+const closeRow = () => row(closeButton(), ...doneButtons());
+// Baris navigasi seragam, urutannya sama dengan menu utama bot: Tutup (& Selesai kalau ada sesi tertunda), lalu kembali ke menu.
+const navRow = () => row(closeButton(), ...doneButtons(), button("vc_flow:menu", "⬅️ Menu"));
 const pendingNote = () => {
   const pending = pendingSessionIds().length;
   return pending > 0 ? `⏳ ${pending} sesi baru belum diselesaikan: pencet ✅ Selesai buat menyimpannya, atau ✖ Tutup buat membuangnya.` : "";
@@ -298,7 +299,30 @@ function modal(customId, title, inputs) {
 
 // ---------------------------------- layar ------------------------------------
 
-function buildPanel(prefix = "") {
+// Panel utama berhalaman, SAMA POLANYA dengan menu utama bot (chat/menu.js, buildFallbackMenuComponents): paling banyak 3
+// tombol utama per halaman, lalu satu baris navigasi - "Tutup", "⬅️ Menu sebelumnya" (kecuali halaman pertama), "Menu lainnya ➡️"
+// (kecuali halaman terakhir). Halaman dikirim lewat customId ("vc_flow:page:<n>"), jadi tidak ada state yang disimpan.
+const PANEL_PAGE_COUNT = 3;
+
+function panelPageButtons(page, { hasSessions }) {
+  if (page === 1) {
+    return [button("vc_flow:opener", "🎲 Acak pembuka"), button("vc_flow:repost", "📌 Kirim ulang di bawah")];
+  }
+  if (page === 2) {
+    return [
+      button("vc_flow:reset", "🧹 Reset periode", ButtonStyle.Danger, !hasSessions),
+      button("vc_flow:wipe", "🗑️ Hapus rangkuman", ButtonStyle.Danger, !hasSessions && !loadVc().message),
+    ];
+  }
+  return [
+    button("vc_flow:add", "➕ Tambah sesi", ButtonStyle.Success),
+    button("vc_flow:edit", "✏️ Ubah / Hapus", ButtonStyle.Primary, !hasSessions),
+    button("vc_flow:title", "📝 Judul"),
+  ];
+}
+
+function buildPanel(prefix = "", page = 0) {
+  const current = Number.isInteger(page) && page >= 0 && page < PANEL_PAGE_COUNT ? page : 0;
   const data = loadVc();
   const members = new Set(data.sessions.map(memberKey)).size;
   const summary = data.sessions.length > 0 ? `${data.sessions.length} sesi dari ${members} member` : "belum ada sesi";
@@ -310,17 +334,13 @@ function buildPanel(prefix = "") {
   return {
     content: `${prefix ? `${prefix}\n\n` : ""}${lines.join("\n")}`,
     components: [
+      row(...panelPageButtons(current, { hasSessions })),
       row(
-        button("vc_flow:add", "➕ Tambah sesi", ButtonStyle.Success),
-        button("vc_flow:edit", "✏️ Ubah / Hapus", ButtonStyle.Primary, !hasSessions),
-        button("vc_flow:title", "📝 Judul"),
+        closeButton(),
+        ...doneButtons(),
+        ...(current > 0 ? [button(`vc_flow:page:${current - 1}`, "⬅️ Menu sebelumnya")] : []),
+        ...(current < PANEL_PAGE_COUNT - 1 ? [button(`vc_flow:page:${current + 1}`, "Menu lainnya ➡️")] : []),
       ),
-      row(
-        button("vc_flow:opener", "🎲 Acak pembuka"),
-        button("vc_flow:repost", "📌 Kirim ulang di bawah"),
-        button("vc_flow:reset", "🧹 Reset periode", ButtonStyle.Danger, !hasSessions),
-      ),
-      row(button("vc_flow:wipe", "🗑️ Hapus rangkuman", ButtonStyle.Danger, !hasSessions && !data.message), ...doneButtons(), closeButton()),
     ],
   };
 }
@@ -424,9 +444,13 @@ function buildEntryScreen(session, prefix = "") {
         button(`vc_flow:eform:${session.id}`, "✏️ Sesi & jam", ButtonStyle.Primary),
         button(`vc_flow:elink:${session.id}`, "🔗 Link"),
         button(`vc_flow:enote:${session.id}`, "🎲 Catatan baru"),
-        button(`vc_flow:edel:${session.id}`, "🗑️ Hapus", ButtonStyle.Danger),
       ),
-      row(button("vc_flow:edit", "⬅️ Daftar sesi"), ...doneButtons(), closeButton()),
+      row(
+        closeButton(),
+        ...doneButtons(),
+        button("vc_flow:edit", "⬅️ Daftar sesi"),
+        button(`vc_flow:edel:${session.id}`, "🗑️ Hapus sesi ini", ButtonStyle.Danger),
+      ),
     ],
   };
 }
@@ -567,6 +591,8 @@ async function handleVcButton(interaction) {
   const [, action, arg] = interaction.customId.split(":");
 
   switch (action) {
+    case "page":
+      return interaction.update(safeReplyOptions(buildPanel("", Number(arg))));
     case "menu":
       clearDraft(interaction);
       return interaction.update(safeReplyOptions(buildPanel()));
@@ -701,21 +727,21 @@ async function handleVcButton(interaction) {
       data.opener = generateOpener({ title: data.title });
       saveVc(data);
       const sync = await syncSummary(interaction.user.id);
-      return interaction.editReply(safeReplyOptions(buildPanel(`🎲 Pembuka baru!${syncWarning(sync)}`)));
+      return interaction.editReply(safeReplyOptions(buildPanel(`🎲 Pembuka baru!${syncWarning(sync)}`, 1)));
     }
     case "repost": {
       await interaction.deferUpdate();
       ensurePeriod();
       const sync = await syncSummary(interaction.user.id, { repost: true });
       return interaction.editReply(
-        safeReplyOptions(buildPanel(sync.ok ? "📌 Rangkuman dikirim ulang di paling bawah." : `⚠️ Gagal kirim ulang (${sync.reason}).`)),
+        safeReplyOptions(buildPanel(sync.ok ? "📌 Rangkuman dikirim ulang di paling bawah." : `⚠️ Gagal kirim ulang (${sync.reason}).`, 1)),
       );
     }
     case "reset":
       return interaction.update(
         safeReplyOptions({
           content: "Yakin mau kosongkan SEMUA sesi dan mulai periode baru? Julukan member tetap disimpen.",
-          components: [row(button("vc_flow:resetok", "✅ Ya, kosongkan", ButtonStyle.Danger), button("vc_flow:menu", "❌ Batal")), closeRow()],
+          components: [row(button("vc_flow:resetok", "✅ Ya, kosongkan", ButtonStyle.Danger), button("vc_flow:page:2", "❌ Batal")), closeRow()],
         }),
       );
     case "resetok": {
@@ -723,7 +749,7 @@ async function handleVcButton(interaction) {
       clearPending();
       resetVcPeriod(generateOpener({ title: defaultVcTitle() }));
       const sync = await syncSummary(interaction.user.id);
-      return interaction.editReply(safeReplyOptions(buildPanel(`🧹 Periode baru dimulai.${syncWarning(sync)}`)));
+      return interaction.editReply(safeReplyOptions(buildPanel(`🧹 Periode baru dimulai.${syncWarning(sync)}`, 2)));
     }
     case "wipe": {
       const data = loadVc();
@@ -731,7 +757,7 @@ async function handleVcButton(interaction) {
       return interaction.update(
         safeReplyOptions({
           content: `Yakin mau hapus ${what} dari DM? Judul kembali ke awal, julukan member tetap disimpen. Ini gak bisa dibalikin.`,
-          components: [row(button("vc_flow:wipeok", "✅ Ya, hapus semua", ButtonStyle.Danger), button("vc_flow:menu", "❌ Batal")), closeRow()],
+          components: [row(button("vc_flow:wipeok", "✅ Ya, hapus semua", ButtonStyle.Danger), button("vc_flow:page:2", "❌ Batal")), closeRow()],
         }),
       );
     }
@@ -741,11 +767,11 @@ async function handleVcButton(interaction) {
       const wiped = await wipeSummary(interaction.user.id);
       if (!wiped.ok) {
         return interaction.editReply(
-          safeReplyOptions(buildPanel(`⚠️ Gagal menghapus rangkuman (${wiped.reason}). Datanya belum diubah, coba lagi.`)),
+          safeReplyOptions(buildPanel(`⚠️ Gagal menghapus rangkuman (${wiped.reason}). Datanya belum diubah, coba lagi.`, 2)),
         );
       }
       clearPending();
-      return interaction.editReply(safeReplyOptions(buildPanel("🗑️ Rangkuman dihapus: sesi dikosongkan dan pesan rangkuman hilang dari DM.")));
+      return interaction.editReply(safeReplyOptions(buildPanel("🗑️ Rangkuman dihapus: sesi dikosongkan dan pesan rangkuman hilang dari DM.", 2)));
     }
     default:
       return undefined;
@@ -893,7 +919,6 @@ async function handleFormSubmit(interaction) {
           button("vc_flow:same", `👥 Member lain (Sesi ${draft.lastSession} sama)`, ButtonStyle.Success),
           button("vc_flow:again", `➕ Sesi lagi (${cleanName(draft.member.name).slice(0, 30)})`, ButtonStyle.Success),
           button("vc_flow:add", "➕ Member & tanggal lain", ButtonStyle.Success),
-          button("vc_flow:edit", "✏️ Ubah / Hapus"),
         ),
         navRow(),
       ],
