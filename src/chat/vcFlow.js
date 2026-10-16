@@ -26,7 +26,7 @@ const { shiftDateWIB } = require("../streakMath");
 const { isOwner } = require("./replies");
 const { searchTargetCandidates } = require("./aliasFlow");
 const { deleteInteractionMessage } = require("./interactionHelpers");
-const { validateSessionForm, parseDateInput, formatDateDisplay, formatTime, formatOpenWindow } = require("./vcInput");
+const { validateSessionForm, parseDateInput, formatDateDisplay, formatTime, formatOpenWindow, linkKey } = require("./vcInput");
 const { slotsForDate, describeDayType, checkSession } = require("./vcSlots");
 const { renderVcMessages, buildGroups, memberKey, cleanName, escapeMd } = require("./vcRender");
 const { generateNote, generateOpener } = require("./vcAbsurd");
@@ -47,7 +47,7 @@ const NOT_OWNER_NOTE = "Cok, fitur ini cuma buat owner.";
 
 // ------------------------------ state sementara ------------------------------
 
-// "channelId:userId" -> { member, date, session, matches, manualName, lastForm, lastEdit, at }. Isian modal berisi teks bebas
+// "channelId:userId" -> { member, date, session, lastSession, carry, matches, manualName, lastForm, lastEdit, at }. Isian modal berisi teks bebas
 // (bisa mengandung ":") jadi tidak dititipkan lewat customId; hilang kalau bot restart (owner tinggal mulai lagi).
 const drafts = new Map();
 const DRAFT_TTL_MS = 30 * 60 * 1000;
@@ -69,7 +69,18 @@ function getDraft(interaction) {
 }
 
 function startDraft(interaction) {
-  const draft = { member: null, date: null, session: null, matches: [], manualName: null, lastForm: null, lastEdit: null, at: Date.now() };
+  const draft = {
+    member: null,
+    date: null,
+    session: null,
+    lastSession: null,
+    carry: null,
+    matches: [],
+    manualName: null,
+    lastForm: null,
+    lastEdit: null,
+    at: Date.now(),
+  };
   drafts.set(draftKey(interaction), draft);
   return draft;
 }
@@ -224,6 +235,9 @@ const syncWarning = (sync) =>
 const button = (id, label, style = ButtonStyle.Secondary, disabled = false) =>
   new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style).setDisabled(disabled);
 const row = (...components) => new ActionRowBuilder().addComponents(components);
+// Layar konfirmasi sudah punya "Batal" (= vc_flow:menu), jadi cuma "Tutup" yang ditambah - dua komponen dengan custom_id sama
+// membuat Discord menolak seluruh pesannya ("Cok, ada error pas ngejalanin itu").
+const closeRow = () => row(button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger));
 const navRow = () => row(button("vc_flow:menu", "⬅️ Menu"), button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger));
 
 function textInput(id, label, { placeholder, value, required = true, max } = {}) {
@@ -449,12 +463,37 @@ function duplicateOf(data, member, date, sessionNo, exceptId = null) {
   return data.sessions.find((s) => s.id !== exceptId && memberKey(s) === key && s.date === date && s.session === sessionNo) || null;
 }
 
+// Sesi lain yang sudah memakai link yang sama (satu link Zoom = satu VC, tidak boleh dipakai dua sesi). `exceptId`: sesi yang
+// sedang diubah sendiri. Balikin sesi itu atau null.
+function linkUsedBy(data, link, exceptId = null) {
+  const key = linkKey(link);
+  return data.sessions.find((s) => s.id !== exceptId && linkKey(s.link) === key) || null;
+}
+
+const linkTakenError = (other) =>
+  `Link Zoom itu udah dipakai sesi lain: ${cleanName(other.name)} · Sesi ${other.session} · ${formatDateDisplay(other.date)}. Satu link cuma buat satu sesi - cek lagi linknya.`;
+
 async function pickMember(interaction, member) {
   const draft = getDraft(interaction) || startDraft(interaction);
+  const carry = draft.carry; // diset tombol "Member lain (sesi sama)": tanggal + sesi dipertahankan, langsung ke form
+  draft.carry = null;
   draft.member = member;
   draft.date = null;
   draft.session = null;
   draft.lastForm = null;
+  if (carry) {
+    draft.date = carry.date;
+    if (duplicateOf(loadVc(), member, carry.date, carry.session)) {
+      const prefix = `${cleanName(member.name)} udah punya Sesi ${carry.session} di tanggal itu - pilih sesi lain, atau pakai "Ubah / Hapus".`;
+      return interaction.update(safeReplyOptions(buildSessionStep(member, carry.date, prefix)));
+    }
+    const slot = checkSession(carry.date, carry.session);
+    if (slot.ok) {
+      draft.session = carry.session;
+      return interaction.showModal(buildFormModal(slot.value));
+    }
+    return interaction.update(safeReplyOptions(buildSessionStep(member, carry.date)));
+  }
   await interaction.update(safeReplyOptions(buildDateStep(member)));
 }
 
@@ -491,6 +530,14 @@ async function handleVcButton(interaction) {
       draft.session = null;
       draft.lastForm = null;
       return interaction.update(safeReplyOptions(buildSessionStep(draft.member, draft.date)));
+    }
+    case "same": {
+      // "Member lain (sesi sama)": satu sesi biasanya diisi beberapa member sekaligus (masing-masing link sendiri), jadi cukup
+      // cari member berikutnya - tanggal dan sesi dibawa, langsung ke form.
+      const draft = getDraft(interaction);
+      if (!draft?.date || !draft.lastSession) return interaction.update(safeReplyOptions(expiredPanel()));
+      draft.carry = { date: draft.date, session: draft.lastSession };
+      return interaction.showModal(MEMBER_QUERY_MODAL());
     }
     case "redate": {
       const draft = getDraft(interaction);
@@ -581,7 +628,7 @@ async function handleVcButton(interaction) {
       return interaction.update(
         safeReplyOptions({
           content: "Yakin mau kosongkan SEMUA sesi dan mulai periode baru? Julukan member tetap disimpen.",
-          components: [row(button("vc_flow:resetok", "✅ Ya, kosongkan", ButtonStyle.Danger), button("vc_flow:menu", "❌ Batal")), navRow()],
+          components: [row(button("vc_flow:resetok", "✅ Ya, kosongkan", ButtonStyle.Danger), button("vc_flow:menu", "❌ Batal")), closeRow()],
         }),
       );
     case "resetok": {
@@ -596,7 +643,7 @@ async function handleVcButton(interaction) {
       return interaction.update(
         safeReplyOptions({
           content: `Yakin mau hapus ${what} dari DM? Judul kembali ke awal, julukan member tetap disimpen. Ini gak bisa dibalikin.`,
-          components: [row(button("vc_flow:wipeok", "✅ Ya, hapus semua", ButtonStyle.Danger), button("vc_flow:menu", "❌ Batal")), navRow()],
+          components: [row(button("vc_flow:wipeok", "✅ Ya, hapus semua", ButtonStyle.Danger), button("vc_flow:menu", "❌ Batal")), closeRow()],
         }),
       );
     }
@@ -728,6 +775,9 @@ async function handleFormSubmit(interaction) {
     );
   }
 
+  const linkOwner = linkUsedBy(data, value.link);
+  if (linkOwner) return interaction.editReply(safeReplyOptions(buildErrorStep([linkTakenError(linkOwner)], "vc_flow:form")));
+
   const session = addVcSession({
     username: draft.member.username,
     name: draft.member.name,
@@ -742,6 +792,7 @@ async function handleFormSubmit(interaction) {
     note: generateNote({ name: draft.member.name, tickets: value.tickets, open: value.open, start: value.start }),
   });
   draft.lastForm = null;
+  draft.lastSession = draft.session; // buat "Member lain (sesi sama)"
   draft.session = null; // tanggal dipertahankan: "Sesi lagi" lanjut ke sesi berikutnya di hari yang sama
   const sync = await syncSummary(interaction.user.id);
   await interaction.editReply(
@@ -749,8 +800,9 @@ async function handleFormSubmit(interaction) {
       content: `✅ Tersimpan: ${describeSession(session)}${syncWarning(sync)}`,
       components: [
         row(
+          button("vc_flow:same", `👥 Member lain (Sesi ${draft.lastSession} sama)`, ButtonStyle.Success),
           button("vc_flow:again", `➕ Sesi lagi (${cleanName(draft.member.name).slice(0, 30)})`, ButtonStyle.Success),
-          button("vc_flow:add", "➕ Member lain", ButtonStyle.Success),
+          button("vc_flow:add", "➕ Member & tanggal lain", ButtonStyle.Success),
           button("vc_flow:edit", "✏️ Ubah / Hapus"),
         ),
         navRow(),
@@ -806,6 +858,12 @@ async function handleLinkSubmit(interaction) {
     const draft = getDraft(interaction) || startDraft(interaction);
     draft.lastLink = { id, value: rawLink };
     return interaction.editReply(safeReplyOptions(buildErrorStep(result.errors, `vc_flow:elink:${id}`)));
+  }
+  const linkOwner = linkUsedBy(loadVc(), result.value.link, id);
+  if (linkOwner) {
+    const draft = getDraft(interaction) || startDraft(interaction);
+    draft.lastLink = { id, value: rawLink };
+    return interaction.editReply(safeReplyOptions(buildErrorStep([linkTakenError(linkOwner)], `vc_flow:elink:${id}`)));
   }
   const updated = updateVcSession(id, { link: result.value.link, passcode: result.value.passcode });
   const sync = await syncSummary(interaction.user.id);

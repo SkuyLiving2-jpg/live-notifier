@@ -79,6 +79,9 @@ function nextDow(dow) {
 const DATE = nextDow(6);
 const WEEKDAY = nextDow(1);
 // Sabtu sesi 2 = jendela buka 13.00-13.15 (vcSlots); jam mulai diisi manual.
+// Satu link Zoom = satu sesi (bot menolak link yang sama di sesi lain), jadi sesi kedua dst. di test pakai link baru.
+let linkSeq = 0;
+const freshLink = () => `https://us02web.zoom.us/j/${87197929985 + ++linkSeq}?pwd=abc 388756`;
 const GOOD_FORM = { mulai: "13.15", link: `${ZOOM} 388756`, tiket: "3" };
 
 let realFetch;
@@ -108,6 +111,9 @@ function fake({ customId, fields = {}, values = [], authorId = OWNER, channelId 
       assert.ok(json.components.length >= 1 && json.components.length <= 5);
     }
     assert.ok((p.components || []).length <= 5, "maks 5 baris komponen");
+    // Discord menolak seluruh pesan kalau ada dua komponen dengan custom_id sama (error "custom_id duplicated").
+    const customIds = (p.components || []).flatMap((r) => r.toJSON().components.map((c) => c.custom_id));
+    assert.equal(new Set(customIds).size, customIds.length, `custom_id ganda di satu layar: ${customIds.join(", ")}`);
     calls.screens.push(p);
   };
   return {
@@ -322,7 +328,7 @@ test("tambah sesi (member dikenal, 1 hasil): modal cari -> pakai -> dropdown tan
   const form = await mod("vc_modal:form", GOOD_FORM);
   assert.match(form.screen.content, /✅ Tersimpan: \*\*Lily\*\* · Sesi 2/);
   assert.match(form.screen.content, /Buka 13\.00-13\.15 · Mulai 13\.15/);
-  assert.deepEqual(idsOf(form.screen), ["vc_flow:again", "vc_flow:add", "vc_flow:edit", "vc_flow:menu", "vc_flow:close"]);
+  assert.deepEqual(idsOf(form.screen), ["vc_flow:same", "vc_flow:again", "vc_flow:add", "vc_flow:edit", "vc_flow:menu", "vc_flow:close"]);
 
   const [s] = loadVc().sessions;
   assert.deepEqual(
@@ -372,7 +378,7 @@ test("member tidak dikenal: pencarian kosong -> pakai nama apa adanya -> tersimp
   await btn("vc_flow:manual");
   await sel("vc_select:date", [DATE]);
   await sel("vc_select:session", ["2"]);
-  const form = await mod("vc_modal:form", { ...GOOD_FORM, tiket: "" });
+  const form = await mod("vc_modal:form", { ...GOOD_FORM, link: freshLink(), tiket: "" });
   assert.match(form.screen.content, /Tersimpan/);
 
   const [s] = loadVc().sessions;
@@ -471,8 +477,8 @@ test("dropdown sesi mengikuti hari: Senin-Jumat cuma sesi 1-3 (jendela buka 16.1
 });
 
 test("sesi dipilih -> jam buka mengikuti sesi (hari kerja sesi 3 = 19.15-19.30; Sabtu sesi 6 = sama dengan sesi 3 hari kerja)", async () => {
-  await addLilySession({ ...GOOD_FORM, mulai: "19.30" }, {}, 3, WEEKDAY);
-  await addLilySession({ ...GOOD_FORM, mulai: "19.30" }, {}, 6, DATE);
+  await addLilySession({ ...GOOD_FORM, link: freshLink(), mulai: "19.30" }, {}, 3, WEEKDAY);
+  await addLilySession({ ...GOOD_FORM, link: freshLink(), mulai: "19.30" }, {}, 6, DATE);
   const [weekday, weekend] = loadVc().sessions;
   assert.deepEqual([weekday.session, weekday.open, weekday.openEnd], [3, "19:15", "19:30"]);
   assert.deepEqual([weekend.session, weekend.open, weekend.openEnd], [6, "19:15", "19:30"]);
@@ -485,11 +491,11 @@ test("jam mulai lebih awal dari jam buka sesi ditolak (sama atau lebih telat bol
   await sel("vc_select:date", [DATE]);
   await sel("vc_select:session", ["2"]); // buka 13.00-13.15
 
-  const early = await mod("vc_modal:form", { ...GOOD_FORM, mulai: "12.59" });
+  const early = await mod("vc_modal:form", { ...GOOD_FORM, link: freshLink(), mulai: "12.59" });
   assert.match(early.screen.content, /Jam mulai 12\.59 gak boleh lebih awal dari jam buka sesi 2 \(13\.00\)/);
   assert.equal(loadVc().sessions.length, 0);
 
-  const late = await mod("vc_modal:form", { ...GOOD_FORM, mulai: "13.40" });
+  const late = await mod("vc_modal:form", { ...GOOD_FORM, link: freshLink(), mulai: "13.40" });
   assert.match(late.screen.content, /Tersimpan/);
   assert.equal(loadVc().sessions[0].start, "13:40");
 });
@@ -547,7 +553,7 @@ test("sesi yang sama (member + tanggal + nomor sesi) ditolak sebagai duplikat; n
 
   await btn("vc_flow:again");
   await sel("vc_select:session", ["3"]); // Sabtu sesi 3 = buka 14.30-14.45
-  const other = await mod("vc_modal:form", { ...GOOD_FORM, mulai: "14.45" });
+  const other = await mod("vc_modal:form", { ...GOOD_FORM, link: freshLink(), mulai: "14.45" });
   assert.match(other.screen.content, /Tersimpan/);
   assert.equal(loadVc().sessions.length, 2);
   assert.equal((summaryText().match(/^## /gm) || []).length, 1, "dua sesi Lily tetap SATU judul");
@@ -645,8 +651,8 @@ test("urutan di rangkuman: prioritas selalu paling atas walau diinput terakhir d
     await sel("vc_select:session", ["1"]);
     await mod("vc_modal:form", form);
   };
-  await addPlain("aralie", DATE, { ...GOOD_FORM, mulai: "11.45" });
-  await addPlain("lily", shiftDateWIB(DATE, 7), { ...GOOD_FORM, mulai: "11.45" });
+  await addPlain("aralie", DATE, { ...GOOD_FORM, link: freshLink(), mulai: "11.45" });
+  await addPlain("lily", shiftDateWIB(DATE, 7), { ...GOOD_FORM, link: freshLink(), mulai: "11.45" });
   const text = summaryText();
   assert.ok(text.indexOf("LILY") < text.indexOf("Aralie"), "Lily (prioritas, seminggu lebih belakang) di atas Aralie (biasa, lebih dulu)");
   assert.match(text, /## 1\. 🚨✨🚨 LILY/);
@@ -696,7 +702,7 @@ test("ubah sesi: kalau jam/tiket TIDAK berubah (cuma pindah ke Sabtu lain), cata
 });
 
 test("ubah sesi: sesi 4-6 di hari kerja ditolak (tidak ada), termasuk saat tanggalnya dipindah ke hari kerja; sesi 1-3 boleh dan jam bukanya ikut", async () => {
-  await addLilySession({ ...GOOD_FORM, mulai: "18.00" }, {}, 5, DATE); // Sabtu sesi 5 (17.45-18.00)
+  await addLilySession({ ...GOOD_FORM, link: freshLink(), mulai: "18.00" }, {}, 5, DATE); // Sabtu sesi 5 (17.45-18.00)
   const id = loadVc().sessions[0].id;
 
   const moved = await mod(`vc_modal:eform:${id}`, { sesi: "5", tanggal: WEEKDAY, mulai: "18.00", tiket: "3" });
@@ -720,7 +726,7 @@ test("ubah sesi: salah isi -> daftar kesalahan + isian terakhir terisi lagi saat
   await addLilySession();
   await btn("vc_flow:again");
   await sel("vc_select:session", ["3"]);
-  await mod("vc_modal:form", { ...GOOD_FORM, mulai: "14.45" });
+  await mod("vc_modal:form", { ...GOOD_FORM, link: freshLink(), mulai: "14.45" });
   const [a, b] = loadVc().sessions;
 
   const bad = await mod(`vc_modal:eform:${a.id}`, { sesi: "x", tanggal: "?", mulai: "12.00", tiket: "" });
@@ -871,6 +877,141 @@ test("kirim ulang di bawah: pesan lama dihapus dan yang baru dikirim (id bergant
   assert.equal(dm.store.size, 1);
 });
 
+test("layar konfirmasi reset & hapus rangkuman tidak punya custom_id ganda (Discord menolak pesan seperti itu)", async () => {
+  await addLilySession();
+  for (const id of ["vc_flow:reset", "vc_flow:wipe"]) {
+    const ask = await btn(id); // fake() sudah menolak custom_id ganda di setiap layar
+    const ids = idsOf(ask.screen);
+    assert.equal(new Set(ids).size, ids.length, id);
+    assert.ok(ids.includes("vc_flow:menu") && ids.includes("vc_flow:close"), "tetap ada Batal dan Tutup");
+  }
+});
+
+// --- satu link Zoom = satu sesi ---
+
+test("link Zoom yang sama dengan sesi lain ditolak (walau beda host/sandi/huruf/garis miring); 'Perbaiki' mengisi ulang isiannya", async () => {
+  await addLilySession();
+  const before = loadVc().sessions.length;
+  const attempt = async (link, date = DATE, sessionNo = "3", query = "aralie") => {
+    await btn("vc_flow:add");
+    await mod("vc_modal:search", { member_query: query });
+    await btn("vc_flow:use");
+    await sel("vc_select:date", [date]);
+    await sel("vc_select:session", [sessionNo]);
+    return mod("vc_modal:form", { mulai: "14.45", link, tiket: "" });
+  };
+  const variants = [
+    `${ZOOM} 388756`, // persis sama
+    "https://us02web.zoom.us/j/87197929985", // tanpa ?pwd
+    "https://zoom.us/j/87197929985?pwd=lain", // host & pwd beda, ID rapat sama
+  ];
+  for (const link of variants) {
+    const rejected = await attempt(link);
+    assert.match(rejected.screen.content, /Link Zoom itu udah dipakai sesi lain: Lily · Sesi 2/, link);
+    assert.deepEqual(idsOf(rejected.screen), ["vc_flow:form", "vc_flow:menu", "vc_flow:close"]);
+    assert.equal(loadVc().sessions.length, before, "tidak ada sesi baru yang tersimpan");
+  }
+  const retry = await btn("vc_flow:form");
+  assert.equal(modalValues(retry.calls.modals[0]).mulai, "14.45", "isian terakhir terisi lagi");
+
+  const fixed = await mod("vc_modal:form", { mulai: "14.45", link: "https://us02web.zoom.us/j/81111111111 111222", tiket: "" });
+  assert.match(fixed.screen.content, /✅ Tersimpan/);
+  assert.equal(loadVc().sessions.length, before + 1);
+});
+
+test("link non-Zoom: sama persis ditolak, beda path boleh", async () => {
+  await addLilySession({ ...GOOD_FORM, link: "https://meet.example.com/room/abc" });
+  const addAralie = async (link, sessionNo) => {
+    await btn("vc_flow:add");
+    await mod("vc_modal:search", { member_query: "aralie" });
+    await btn("vc_flow:use");
+    await sel("vc_select:date", [DATE]);
+    await sel("vc_select:session", [sessionNo]);
+    return mod("vc_modal:form", { mulai: "18.00", link, tiket: "" });
+  };
+  const same = await addAralie("https://MEET.example.com/room/abc/", "5");
+  assert.match(same.screen.content, /udah dipakai sesi lain/);
+  const other = await addAralie("https://meet.example.com/room/xyz", "5");
+  assert.match(other.screen.content, /✅ Tersimpan/);
+});
+
+test("ubah link: link sesi lain ditolak; link sendiri (tidak berubah) boleh; link baru yang unik tersimpan", async () => {
+  await addLilySession();
+  await addLilySession({ ...GOOD_FORM, mulai: "18.00", link: freshLink() }, {}, 5, DATE);
+  const [a, b] = loadVc().sessions;
+
+  const clash = await mod(`vc_modal:elink:${b.id}`, { link: `${a.link}` });
+  assert.match(clash.screen.content, /Link Zoom itu udah dipakai sesi lain: Lily · Sesi 2/);
+  assert.deepEqual(idsOf(clash.screen).slice(0, 1), [`vc_flow:elink:${b.id}`]);
+  assert.equal(getVcSession(b.id).link, b.link, "tidak berubah");
+
+  const own = await mod(`vc_modal:elink:${b.id}`, { link: `${b.link} 999888` });
+  assert.match(own.screen.content, /✅ Link diubah/, "link sendiri + ganti sandi tidak dianggap bentrok");
+  const fresh = await mod(`vc_modal:elink:${b.id}`, { link: freshLink() });
+  assert.match(fresh.screen.content, /✅ Link diubah/);
+});
+
+// --- banyak member di sesi yang sama ---
+
+test("beberapa member di sesi yang sama: 'Member lain (sesi N sama)' langsung ke form tanpa pilih tanggal/sesi lagi", async () => {
+  recordLiveCompleted("jkt48_nala", "Nala JKT48");
+  const saved = await addLilySession();
+  assert.ok(idsOf(saved.screen).includes("vc_flow:same"));
+  assert.ok(labelsOf(saved.screen).some((l) => /Member lain \(Sesi 2 sama\)/.test(l)));
+
+  const addSame = async (query, form) => {
+    const open = await btn("vc_flow:same");
+    assert.equal(open.calls.modals[0].toJSON().custom_id, "vc_modal:search");
+    await mod("vc_modal:search", { member_query: query });
+    const use = await btn("vc_flow:use");
+    assert.equal(use.calls.screens.length, 0, "tidak ada layar tanggal/sesi: langsung buka form");
+    const formModal = use.calls.modals[0].toJSON();
+    assert.equal(formModal.custom_id, "vc_modal:form");
+    assert.equal(formModal.title, "Sesi 2 · Buka 13.00-13.15");
+    return mod("vc_modal:form", form);
+  };
+  const aralie = await addSame("aralie", { mulai: "13.15", link: freshLink(), tiket: "2" });
+  assert.match(aralie.screen.content, /✅ Tersimpan: \*\*Aralie\*\* · Sesi 2/);
+  const nala = await addSame("nala", { mulai: "13.20", link: freshLink(), tiket: "" }); // rantai: member ketiga dst.
+  assert.match(nala.screen.content, /✅ Tersimpan: \*\*Nala\*\* · Sesi 2/);
+
+  const sessions = loadVc().sessions;
+  assert.equal(sessions.length, 3);
+  assert.ok(
+    sessions.every((s) => s.session === 2 && s.date === DATE),
+    "ketiganya di sesi & tanggal yang sama",
+  );
+  assert.equal(new Set(sessions.map((s) => s.link)).size, 3, "tiap member punya link sendiri");
+  const text = summaryText();
+  for (const name of ["LILY", "Aralie", "Nala"]) assert.match(text, new RegExp(name, "i"), name);
+});
+
+test("'Member lain (sesi sama)': member yang sudah punya sesi itu -> diarahkan pilih sesi lain; tanpa draft -> panel kedaluwarsa", async () => {
+  await addLilySession();
+  await btn("vc_flow:same");
+  await mod("vc_modal:search", { member_query: "lily" });
+  const use = await btn("vc_flow:use");
+  assert.equal(use.calls.modals.length, 0);
+  assert.match(use.screen.content, /Lily udah punya Sesi 2/);
+  assert.equal(idsOf(use.screen)[0], "vc_select:session");
+  const picked = await sel("vc_select:session", ["3"]);
+  assert.equal(picked.calls.modals[0].toJSON().title, "Sesi 3 · Buka 14.30-14.45");
+
+  const stale = await btn("vc_flow:same", { channelId: "dm-tanpa-draft" });
+  assert.match(stale.screen.content, /kelamaan\/ke-reset/);
+});
+
+test("'Member lain (sesi sama)' dibatalkan di tengah jalan: 'Sesi lagi' tetap jalan, dan 'Member & tanggal lain' mulai bersih", async () => {
+  await addLilySession();
+  await btn("vc_flow:same"); // modal pencarian dibuka lalu ditutup tanpa submit
+  const again = await btn("vc_flow:again");
+  assert.match(again.screen.content, /Sesi berapa/);
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "aralie" });
+  const use = await btn("vc_flow:use");
+  assert.match(use.screen.content, /Tanggal VC-nya kapan/, "alur biasa, tidak terbawa sesi sebelumnya");
+});
+
 test("reset periode: konfirmasi dulu; setelahnya sesi kosong, judul kembali ke bulan ini, julukan TETAP, rangkuman 'belum ada sesi'", async () => {
   await addLilySession();
   await handleVcCommand({
@@ -909,7 +1050,7 @@ test("hapus rangkuman: konfirmasi dulu; setelahnya pesan rangkuman hilang dari D
 
   const ask = await btn("vc_flow:wipe");
   assert.match(ask.screen.content, /Yakin mau hapus 1 sesi dan pesan rangkumannya/);
-  assert.deepEqual(idsOf(ask.screen), ["vc_flow:wipeok", "vc_flow:menu", "vc_flow:menu", "vc_flow:close"]);
+  assert.deepEqual(idsOf(ask.screen), ["vc_flow:wipeok", "vc_flow:menu", "vc_flow:close"]);
   assert.equal(loadVc().sessions.length, 1, "belum dihapus sebelum dikonfirmasi");
   assert.equal(dm.store.size, 1);
 

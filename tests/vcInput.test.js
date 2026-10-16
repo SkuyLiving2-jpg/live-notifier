@@ -11,6 +11,7 @@ const {
   parseTickets,
   parseLinkField,
   extractZoomId,
+  linkKey,
   formatZoomId,
   validateSessionForm,
 } = require("../src/chat/vcInput");
@@ -250,4 +251,16 @@ test("validateSessionForm - kolom yang tidak dikirim dilewati (modal sebagian); 
 
   const override = validateSessionForm({ sesi: "5", tanggal: "lusa", mulai: "18.00" }, TODAY, { date: MONDAY, session: 1 });
   assert.deepEqual([override.value.date, override.value.session, override.value.open], [SATURDAY, 5, "17:45"]);
+});
+
+test("linkKey: link Zoom disamakan lewat ID rapat; link lain lewat host+path+query (huruf besar & garis miring penutup diabaikan)", () => {
+  const base = linkKey("https://us02web.zoom.us/j/87197929985?pwd=abc");
+  assert.equal(base, "zoom:87197929985");
+  assert.equal(linkKey("https://zoom.us/j/87197929985"), base, "host & pwd beda");
+  assert.equal(linkKey("https://us06web.zoom.us/j/87197929985?pwd=zzz&from=x"), base);
+  assert.notEqual(linkKey("https://us02web.zoom.us/j/87197929986"), base, "ID beda = link beda");
+  assert.equal(linkKey("https://MEET.example.com/room/abc/"), linkKey("https://meet.example.com/room/abc"));
+  assert.notEqual(linkKey("https://meet.example.com/room/abc"), linkKey("https://meet.example.com/room/xyz"));
+  assert.notEqual(linkKey("https://meet.example.com/r?id=1"), linkKey("https://meet.example.com/r?id=2"), "query dibedakan untuk non-Zoom");
+  assert.equal(typeof linkKey("bukan url"), "string", "tidak melempar");
 });

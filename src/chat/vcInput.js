@@ -173,6 +173,19 @@ function extractZoomId(link) {
   return m ? m[1] : null;
 }
 
+// Kunci pembanding link buat cek "link ini sudah dipakai sesi lain": link Zoom dibandingkan lewat ID rapatnya (host us02web/zoom.us,
+// ada/tidaknya ?pwd=, garis miring penutup, huruf besar/kecil tidak membuatnya dianggap beda); link lain lewat host+path+query.
+function linkKey(link) {
+  const zoomId = extractZoomId(link);
+  if (zoomId) return `zoom:${zoomId}`;
+  try {
+    const url = new URL(link);
+    return `${url.hostname.toLowerCase()}${url.pathname.replace(/\/+$/, "")}${url.search}`;
+  } catch {
+    return String(link).trim().toLowerCase();
+  }
+}
+
 // "87197929985" -> "871 9792 9985" (11 digit: 3-4-4, 10 digit: 3-3-4, 9 digit: 3-3-3), format ID Rapat Zoom.
 function formatZoomId(digits) {
   if (digits.length === 11) return `${digits.slice(0, 3)} ${digits.slice(3, 7)} ${digits.slice(7)}`;
@@ -229,6 +242,7 @@ module.exports = {
   parseTickets,
   parseLinkField,
   extractZoomId,
+  linkKey,
   formatZoomId,
   validateSessionForm,
 };
