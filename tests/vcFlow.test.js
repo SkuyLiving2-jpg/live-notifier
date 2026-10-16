@@ -581,6 +581,54 @@ test("'Tutup' menghapus pesan wizard; 'Menu' kembali ke panel dan membuang draft
   assert.equal(close.calls.deferred, 1);
 });
 
+test("'Tutup' sebelum ada sesi tersimpan menghapus pesan rangkuman (judul + pembuka) juga", async () => {
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  assert.equal(dm.store.size, 1, "rangkuman berisi judul dibuat otomatis");
+  await btn("vc_flow:add"); // mulai mengisi tapi belum ada yang tersimpan
+
+  const close = await btn("vc_flow:close");
+  assert.equal(close.calls.deleted, 1, "panel dihapus");
+  assert.equal(dm.store.size, 0, "pesan rangkuman ikut hilang, tidak ada sisa judul di DM");
+  assert.equal(loadVc().message, null, "referensi pesan dibuang supaya 'input vc' berikutnya membuat pesan baru");
+
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  assert.equal(dm.store.size, 1, "'input vc' lagi membuat rangkuman baru");
+});
+
+test("'Tutup' di tengah pengisian tapi belum disimpan: tidak ada sesi, rangkuman kosong ikut dihapus", async () => {
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "lily" });
+  await btn("vc_flow:use");
+  await sel("vc_select:date", [DATE]);
+  await sel("vc_select:session", ["2"]);
+  await btn("vc_flow:close"); // form sudah terbuka, tapi belum di-submit
+  assert.equal(loadVc().sessions.length, 0);
+  assert.equal(dm.store.size, 0);
+});
+
+test("'Tutup' setelah ada sesi tersimpan: rangkuman (judul + sesi) dibiarkan", async () => {
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  const saved = await addLilySession();
+  assert.match(saved.screen.content, /Tersimpan/);
+
+  const close = await btn("vc_flow:close");
+  assert.equal(close.calls.deleted, 1, "panel tetap dihapus");
+  assert.equal(dm.store.size, 1, "rangkuman tetap ada");
+  assert.match(summaryText(), /LILY/);
+  assert.ok(loadVc().message, "referensi pesan rangkuman tetap tersimpan");
+});
+
+test("'Tutup' tetap beres (panel terhapus, tidak melempar) walau bot gagal menghapus rangkuman kosong", async () => {
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  assert.equal(dm.store.size, 1);
+  clientEnabled = false; // bot "belum login": penghapusan gagal tapi Tutup tetap beres
+  const close = await btn("vc_flow:close");
+  assert.equal(close.calls.deleted, 1);
+  clientEnabled = true;
+  assert.equal(dm.store.size, 1, "gagal hapus -> rangkuman masih ada, dan itu tidak merusak apa-apa");
+});
+
 // ---------------------------------------------------------------------------
 // Urutan & tampilan di rangkuman (end-to-end lewat flow)
 // ---------------------------------------------------------------------------

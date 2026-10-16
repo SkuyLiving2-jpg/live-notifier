@@ -175,6 +175,26 @@ function syncSummary(userId, { repost = false } = {}) {
   });
 }
 
+// Owner menutup panel sebelum satu sesi pun tersimpan: pesan rangkuman yang cuma berisi judul + pembuka (dibuat otomatis
+// waktu "input vc") dihapus juga, jadi tidak ada sisa di DM. Sudah ada sesi tersimpan -> rangkuman itu hasil kerjanya, dibiarkan.
+// Judul/pembuka yang tersimpan tidak dibuang (bukan pesan); "input vc" berikutnya membuat pesan baru dari situ. Tidak melempar.
+function discardEmptySummary(userId) {
+  return withLock(async () => {
+    try {
+      const data = loadVc();
+      if (data.sessions.length > 0 || !data.message) return;
+      const dm = await getOwnerDm(userId);
+      if (data.message.channelId === dm.id) await deleteMessages(dm, data.message.ids);
+      const fresh = loadVc();
+      if (fresh.sessions.length > 0) return; // ada sesi masuk selagi menunggu antrean
+      fresh.message = null;
+      saveVc(fresh);
+    } catch (error) {
+      console.error("Gagal menghapus rangkuman VC kosong:", error.message);
+    }
+  });
+}
+
 const syncWarning = (sync) =>
   sync.ok ? "" : `\n⚠️ Datanya sudah tersimpan, tapi pesan rangkuman gagal di-update (${sync.reason}). Coba lagi dari menu.`;
 
@@ -423,7 +443,8 @@ async function handleVcButton(interaction) {
       return interaction.update(safeReplyOptions(buildPanel()));
     case "close":
       clearDraft(interaction);
-      return deleteInteractionMessage(interaction);
+      await deleteInteractionMessage(interaction);
+      return discardEmptySummary(interaction.user.id);
     case "add":
       startDraft(interaction);
       return interaction.showModal(MEMBER_QUERY_MODAL());
