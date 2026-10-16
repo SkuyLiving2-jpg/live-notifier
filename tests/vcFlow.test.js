@@ -182,6 +182,7 @@ test("'input vc' dari owner di DM -> panel + pesan rangkuman dikirim ke DM", asy
     "vc_flow:opener",
     "vc_flow:repost",
     "vc_flow:reset",
+    "vc_flow:wipe",
     "vc_flow:close",
   ]);
   assert.equal(dm.store.size, 1, "satu pesan rangkuman");
@@ -242,6 +243,8 @@ test("tombol, dropdown, dan form dari BUKAN owner ditolak ephemeral dan tidak me
     await btn("vc_flow:add", intruder),
     await btn("vc_flow:close", intruder),
     await btn("vc_flow:resetok", intruder),
+    await btn("vc_flow:wipe", intruder),
+    await btn("vc_flow:wipeok", intruder),
     await sel("vc_select:date", [DATE], intruder),
     await mod("vc_modal:form", GOOD_FORM, intruder),
     await mod("vc_modal:title", { title: "diretas" }, intruder),
@@ -890,6 +893,88 @@ test("reset periode: konfirmasi dulu; setelahnya sesi kosong, judul kembali ke b
   assert.notEqual(data.title, "Judul Lama");
   assert.deepEqual(data.nicknames, { jkt48_lily: "Cece Adik Aing" });
   assert.match(summaryText(), /Belum ada sesi/);
+});
+
+test("hapus rangkuman: konfirmasi dulu; setelahnya pesan rangkuman hilang dari DM, sesi kosong, julukan TETAP", async () => {
+  await handleVcCommand({ rawText: "input vc", commandText: "input vc", authorId: OWNER, isDm: true });
+  await addLilySession();
+  await handleVcCommand({
+    rawText: "julukan vc lily = Cece Adik Aing",
+    commandText: "julukan vc lily = cece adik aing",
+    authorId: OWNER,
+    isDm: true,
+  });
+  await mod("vc_modal:title", { title: "Judul Lama" });
+  assert.equal(dm.store.size, 1);
+
+  const ask = await btn("vc_flow:wipe");
+  assert.match(ask.screen.content, /Yakin mau hapus 1 sesi dan pesan rangkumannya/);
+  assert.deepEqual(idsOf(ask.screen), ["vc_flow:wipeok", "vc_flow:menu", "vc_flow:menu", "vc_flow:close"]);
+  assert.equal(loadVc().sessions.length, 1, "belum dihapus sebelum dikonfirmasi");
+  assert.equal(dm.store.size, 1);
+
+  const done = await btn("vc_flow:wipeok");
+  assert.match(done.screen.content, /Rangkuman dihapus/);
+  assert.equal(dm.store.size, 0, "tidak ada pesan rangkuman tersisa di DM");
+  const data = loadVc();
+  assert.equal(data.sessions.length, 0);
+  assert.equal(data.message, null);
+  assert.match(data.title, /^VC /);
+  assert.deepEqual(data.nicknames, { jkt48_lily: "Cece Adik Aing" });
+  assert.match(done.screen.content, /belum ada sesi\. Pesan rangkuman dibuat otomatis/, "panel tidak lagi menyebut pesan yang sudah tidak ada");
+  const wipeBtn = done.screen.components.flatMap((r) => r.components).find((b) => b.data.custom_id === "vc_flow:wipe");
+  assert.equal(wipeBtn.data.disabled, true, "tidak ada lagi yang bisa dihapus");
+
+  await addLilySession(); // tetap bisa mulai lagi: rangkuman dibuat baru
+  assert.equal(dm.store.size, 1);
+  assert.match(summaryText(), /LILY/);
+});
+
+test("hapus rangkuman: sesi sudah banyak sampai rangkuman terpecah beberapa pesan -> semua pesannya hilang", async () => {
+  const data = loadVc();
+  for (let i = 0; i < 40; i++) {
+    data.sessions.push({
+      id: i + 1,
+      username: null,
+      name: `Member Nomor ${i} ${"x".repeat(20)}`,
+      session: 2,
+      date: DATE,
+      open: "13:00",
+      openEnd: "13:15",
+      start: "13:15",
+      tickets: 3,
+      link: `${ZOOM}`,
+      passcode: "123456",
+      note: "catatan panjang ".repeat(5),
+    });
+  }
+  data.nextId = 41;
+  getRegisteredStore("vc-schedule.json").store.save(data);
+  await syncSummary(OWNER);
+  assert.ok(dm.store.size > 1, `rangkuman terpecah (${dm.store.size} pesan)`);
+
+  await btn("vc_flow:wipeok");
+  assert.equal(dm.store.size, 0);
+  assert.equal(loadVc().sessions.length, 0);
+});
+
+test("hapus rangkuman: DM tidak terjangkau -> data DIBIARKAN (tidak setengah terhapus) dan owner diberi tahu", async () => {
+  await addLilySession();
+  clientEnabled = false;
+  const done = await btn("vc_flow:wipeok");
+  clientEnabled = true;
+  assert.match(done.screen.content, /Gagal menghapus rangkuman/);
+  assert.equal(loadVc().sessions.length, 1, "sesi masih ada, bisa dicoba lagi");
+  assert.ok(loadVc().message, "referensi pesan masih ada");
+  assert.equal(dm.store.size, 1);
+});
+
+test("hapus rangkuman: draft pengisian yang sedang berjalan ikut dibuang", async () => {
+  await btn("vc_flow:add");
+  await mod("vc_modal:search", { member_query: "lily" });
+  await btn("vc_flow:wipeok");
+  const stale = await btn("vc_flow:use");
+  assert.match(stale.screen.content, /kelamaan\/ke-reset/);
 });
 
 // ---------------------------------------------------------------------------

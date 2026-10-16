@@ -195,6 +195,27 @@ function discardEmptySummary(userId) {
   });
 }
 
+// "Hapus rangkuman": hapus pesan rangkuman di DM DAN kosongkan semua sesi (judul/pembuka kembali ke awal, julukan member
+// tetap). Kalau DM-nya tidak bisa dijangkau, datanya DIBIARKAN supaya owner bisa coba lagi - jangan sampai pesannya masih
+// ada tapi sesinya sudah hilang. Balikin { ok } atau { ok: false, reason }; tidak melempar.
+function wipeSummary(userId) {
+  return withLock(async () => {
+    try {
+      const dm = await getOwnerDm(userId);
+      const { message } = loadVc();
+      if (message && message.channelId === dm.id) await deleteMessages(dm, message.ids);
+      resetVcPeriod(generateOpener({ title: defaultVcTitle() }));
+      const fresh = loadVc();
+      fresh.message = null;
+      saveVc(fresh);
+      return { ok: true };
+    } catch (error) {
+      console.error("Gagal menghapus rangkuman VC:", error.message);
+      return { ok: false, reason: error.message };
+    }
+  });
+}
+
 const syncWarning = (sync) =>
   sync.ok ? "" : `\n⚠️ Datanya sudah tersimpan, tapi pesan rangkuman gagal di-update (${sync.reason}). Coba lagi dari menu.`;
 
@@ -227,8 +248,9 @@ function buildPanel(prefix = "") {
   const members = new Set(data.sessions.map(memberKey)).size;
   const summary = data.sessions.length > 0 ? `${data.sessions.length} sesi dari ${members} member` : "belum ada sesi";
   const hasSessions = data.sessions.length > 0;
+  const where = data.message ? "Rangkumannya ada di pesan yang di-update otomatis." : "Pesan rangkuman dibuat otomatis begitu ada perubahan.";
   return {
-    content: `${prefix ? `${prefix}\n\n` : ""}🎬 **Input VC** - ${escapeMd(data.title || defaultVcTitle())}\n${summary}. Rangkumannya ada di pesan yang di-update otomatis. Mau ngapain, cok?`,
+    content: `${prefix ? `${prefix}\n\n` : ""}🎬 **Input VC** - ${escapeMd(data.title || defaultVcTitle())}\n${summary}. ${where} Mau ngapain, cok?`,
     components: [
       row(
         button("vc_flow:add", "➕ Tambah sesi", ButtonStyle.Success),
@@ -240,7 +262,10 @@ function buildPanel(prefix = "") {
         button("vc_flow:repost", "📌 Kirim ulang di bawah"),
         button("vc_flow:reset", "🧹 Reset periode", ButtonStyle.Danger, !hasSessions),
       ),
-      row(button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger)),
+      row(
+        button("vc_flow:wipe", "🗑️ Hapus rangkuman", ButtonStyle.Danger, !hasSessions && !data.message),
+        button("vc_flow:close", "✖ Tutup", ButtonStyle.Danger),
+      ),
     ],
   };
 }
@@ -564,6 +589,27 @@ async function handleVcButton(interaction) {
       resetVcPeriod(generateOpener({ title: defaultVcTitle() }));
       const sync = await syncSummary(interaction.user.id);
       return interaction.editReply(safeReplyOptions(buildPanel(`🧹 Periode baru dimulai.${syncWarning(sync)}`)));
+    }
+    case "wipe": {
+      const data = loadVc();
+      const what = data.sessions.length > 0 ? `${data.sessions.length} sesi dan pesan rangkumannya` : "pesan rangkumannya";
+      return interaction.update(
+        safeReplyOptions({
+          content: `Yakin mau hapus ${what} dari DM? Judul kembali ke awal, julukan member tetap disimpen. Ini gak bisa dibalikin.`,
+          components: [row(button("vc_flow:wipeok", "✅ Ya, hapus semua", ButtonStyle.Danger), button("vc_flow:menu", "❌ Batal")), navRow()],
+        }),
+      );
+    }
+    case "wipeok": {
+      await interaction.deferUpdate();
+      clearDraft(interaction);
+      const wiped = await wipeSummary(interaction.user.id);
+      if (!wiped.ok) {
+        return interaction.editReply(
+          safeReplyOptions(buildPanel(`⚠️ Gagal menghapus rangkuman (${wiped.reason}). Datanya belum diubah, coba lagi.`)),
+        );
+      }
+      return interaction.editReply(safeReplyOptions(buildPanel("🗑️ Rangkuman dihapus: sesi dikosongkan dan pesan rangkuman hilang dari DM.")));
     }
     default:
       return undefined;
