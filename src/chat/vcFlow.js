@@ -348,7 +348,7 @@ function buildPanel(prefix = "", page = 0) {
 function buildSearchRetry(message, manualName) {
   const buttons = [];
   if (manualName) buttons.push(button("vc_flow:manual", `✍️ Pakai "${manualName.slice(0, 40)}" apa adanya`, ButtonStyle.Primary));
-  buttons.push(button("vc_flow:add", "🔍 Cari lagi"));
+  buttons.push(button("vc_flow:research", "🔍 Cari lagi"));
   return {
     content: `${message}\nBukan member IDN / belum pernah live? Kamu bisa pakai nama yang diketik apa adanya.`,
     components: [row(...buttons), navRow()],
@@ -363,7 +363,7 @@ function buildSingleMatch(match, query) {
       row(
         button("vc_flow:use", `✅ Pakai ${cleanName(match.name).slice(0, 40)}`, ButtonStyle.Success),
         button("vc_flow:manual", `✍️ Pakai "${query.slice(0, 40)}" apa adanya`),
-        button("vc_flow:add", "🔍 Cari lagi"),
+        button("vc_flow:research", "🔍 Cari lagi"),
       ),
       navRow(),
     ],
@@ -621,6 +621,12 @@ async function handleVcButton(interaction) {
     case "add":
       startDraft(interaction);
       return interaction.showModal(MEMBER_QUERY_MODAL());
+    case "research": {
+      // "Cari lagi" setelah pencarian gagal/salah: draft dipertahankan (termasuk tanggal+sesi dari "Member lain (sesi sama)"),
+      // beda dengan "add" yang selalu mulai dari nol.
+      if (!getDraft(interaction)) startDraft(interaction);
+      return interaction.showModal(MEMBER_QUERY_MODAL());
+    }
     case "use": {
       const draft = getDraft(interaction);
       const match = draft?.matches?.[0];
@@ -688,8 +694,10 @@ async function handleVcButton(interaction) {
       const session = getVcSession(arg);
       if (!session) return interaction.update(safeReplyOptions(buildPanel("Cok, sesi itu udah gak ada.")));
       await interaction.deferUpdate();
-      const updated = updateVcSession(session.id, {
-        note: generateNote({ name: session.name, tickets: session.tickets, open: session.open, start: session.start }),
+      const current = getVcSession(session.id); // sesi bisa terhapus selagi interaksi diakui
+      if (!current) return interaction.editReply(safeReplyOptions(buildPanel("Cok, sesi itu udah gak ada.")));
+      const updated = updateVcSession(current.id, {
+        note: generateNote({ name: current.name, tickets: current.tickets, open: current.open, start: current.start }),
       });
       const sync = await syncSummary(interaction.user.id);
       return interaction.editReply(safeReplyOptions(buildEntryScreen(updated, `🎲 Catatan baru!${syncWarning(sync)}`)));

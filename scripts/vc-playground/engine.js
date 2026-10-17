@@ -549,7 +549,7 @@ function seed({ many = false } = {}) {
   return serial(async () => {
     ensurePeriod();
     let added = 0;
-    const existing = loadVc().sessions;
+    const existing = [...loadVc().sessions]; // salinan: loadVc() mengembalikan objek cache yang sama dengan yang diubah addVcSession
     sampleRows(many).forEach((row, i) => {
       const member = SAMPLE_MEMBERS[row.m];
       const date = plus(row.day);

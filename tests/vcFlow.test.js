@@ -64,7 +64,7 @@ const {
 } = require("../src/chat/vcFlow");
 const { buildChatReply } = require("../src/chat/router");
 const { findInteractionRoute } = require("../src/chat/interactionRoutes");
-const { loadVc, getVcSession } = require("../src/storage/vcSchedule");
+const { loadVc, getVcSession, removeVcSession } = require("../src/storage/vcSchedule");
 const { getRegisteredStore } = require("../src/storage/jsonStore");
 const { recordLiveCompleted } = require("../src/storage/liveCount");
 const { getTodayWIB } = require("../src/utils");
@@ -349,7 +349,7 @@ test("tambah sesi (member dikenal, 1 hasil): modal cari -> pakai -> dropdown tan
   const search = await mod("vc_modal:search", { member_query: "lily" });
   assert.equal(search.calls.deferred, 1, "pencarian bisa lama - harus diakui dulu");
   assert.match(search.screen.content, /Ketemu: \*\*Lily\*\*/);
-  assert.deepEqual(idsOf(search.screen).slice(0, 3), ["vc_flow:use", "vc_flow:manual", "vc_flow:add"]);
+  assert.deepEqual(idsOf(search.screen).slice(0, 3), ["vc_flow:use", "vc_flow:manual", "vc_flow:research"]);
 
   const use = await btn("vc_flow:use");
   assert.match(use.screen.content, /Member: \*\*Lily\*\*/);
@@ -1218,6 +1218,38 @@ test("'Member lain (sesi sama)' dibatalkan di tengah jalan: 'Sesi lagi' tetap ja
   assert.match(use.screen.content, /Tanggal VC-nya kapan/, "alur biasa, tidak terbawa sesi sebelumnya");
 });
 
+test("'Cari lagi' setelah pencarian gagal mempertahankan 'Member lain (sesi sama)'; 'Member & tanggal lain' tetap mulai bersih", async () => {
+  await addLilySession();
+  await btn("vc_flow:same");
+  const miss = await mod("vc_modal:search", { member_query: "zzzzqq" });
+  assert.ok(idsOf(miss.screen).includes("vc_flow:research"), "tombol cari lagi pakai customId yang tidak mereset draft");
+  assert.ok(!idsOf(miss.screen).includes("vc_flow:add"));
+  const retry = await btn("vc_flow:research");
+  assert.equal(retry.calls.modals[0].toJSON().custom_id, "vc_modal:search");
+  await mod("vc_modal:search", { member_query: "aralie" });
+  const use = await btn("vc_flow:use");
+  assert.equal(use.calls.modals.length, 1, "langsung ke form: tanggal + sesi terbawa");
+  assert.equal(use.calls.modals[0].toJSON().title, "Sesi 2 · Buka 13.00-13.15");
+});
+
+test("'Cari lagi' tanpa draft (kedaluwarsa) tetap membuka modal pencarian", async () => {
+  const retry = await btn("vc_flow:research", { channelId: "dm-baru" });
+  assert.equal(retry.calls.modals[0].toJSON().custom_id, "vc_modal:search");
+});
+
+test("catatan baru: sesi terhapus selagi interaksi diakui -> panel 'udah gak ada', bukan error", async () => {
+  await addLilySession();
+  const id = loadVc().sessions[0].id;
+  const i = fake({ customId: `vc_flow:enote:${id}` });
+  const defer = i.deferUpdate;
+  i.deferUpdate = async () => {
+    await defer();
+    removeVcSession(id);
+  };
+  await handleVcButton(i);
+  assert.match(i.screen.content, /sesi itu udah gak ada/);
+});
+
 test("daftar Ubah/Hapus dipecah per halaman: SEMUA sesi (lebih dari 25) bisa dijangkau, tombol halaman benar", async () => {
   const data = loadVc();
   for (let i = 0; i < 60; i++) {
@@ -1430,7 +1462,7 @@ test("sync: pesan rangkuman dihapus manual -> dikirim ulang otomatis (tidak erro
 });
 
 test("sync: rangkuman panjang jadi beberapa pesan; lalu menyusut -> pesan kelebihan dihapus; membesar lagi -> pesan baru", async () => {
-  const { addVcSession, removeVcSession } = require("../src/storage/vcSchedule");
+  const { addVcSession } = require("../src/storage/vcSchedule");
   const ids = [];
   for (let i = 0; i < 40; i++) {
     ids.push(
