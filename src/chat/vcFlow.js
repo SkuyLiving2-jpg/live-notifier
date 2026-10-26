@@ -962,7 +962,12 @@ async function handleEditFormSubmit(interaction) {
   // Catatan absurd menyebut jumlah tiket / jeda jam: kalau itu berubah, catatannya dibuat ulang biar tidak basi.
   const timingChanged = value.open !== session.open || value.start !== session.start || value.tickets !== session.tickets;
   const patch = { session: value.session, date: value.date, open: value.open, openEnd: value.openEnd, start: value.start, tickets: value.tickets };
-  if (timingChanged) patch.note = generateNote({ name: session.name, tickets: value.tickets, open: value.open, start: value.start });
+  if (timingChanged) {
+    // Beda dari catatan lama (kebetulan sama = catatan basi yang menyebut tiket/jeda lama tetap tampil).
+    for (let attempt = 0; attempt < 5 && (!patch.note || patch.note === session.note); attempt++) {
+      patch.note = generateNote({ name: session.name, tickets: value.tickets, open: value.open, start: value.start });
+    }
+  }
   const updated = updateVcSession(id, patch);
   draft.lastEdit = null;
   const sync = await syncSummary(interaction.user.id);

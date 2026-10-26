@@ -23,6 +23,7 @@ const {
 const { sendOwnerDM } = require("./notify/ownerAlert");
 const { maybeSendOshiDigests } = require("./notify/oshiDigest");
 const { maybeSendWeeklyBackup } = require("./notify/backupDm");
+const { maybeSendVcReminders } = require("./notify/vcReminder");
 const { updateBotPresence } = require("./presence");
 const { maybeResolveDurationGuesses, maybeResolveNextStarter, discardDurationRound } = require("./notify/guessGame");
 const { pollHealth } = require("./pollHealth");
@@ -296,6 +297,7 @@ async function runPeriodicJobs() {
   await maybeSendHeadsUpAlerts();
   await maybeSendPublicHeadsUpAlerts();
   await safely("Ringkasan mingguan oshi", () => maybeSendOshiDigests()); // DM Minggu malam
+  await safely("Pengingat jam mulai VC", () => maybeSendVcReminders());
   await safely("Backup mingguan", () => maybeSendWeeklyBackup()); // salinan data di luar Railway (DM owner), 1x per 7 hari
   // BUG YANG DITEMUKAN (debug pass §10, live streak) - lihat komentar lengkap di notify/publicAlerts.js's
   // maybeCleanupBrokenStreaks: tanpa panggilan rutin terpisah ini, streak yang putus gara-gara member VAKUM

@@ -256,6 +256,10 @@ const DASHBOARD_WEBHOOK_URL = envStr("DASHBOARD_WEBHOOK_URL");
 // otomatis. Default NYALA (butuh DISCORD_BOT_TOKEN + PRIORITY_PING_USER_ID); isi "off" untuk mematikan.
 const WEEKLY_BACKUP_DM = !["off", "0", "false", "no"].includes(envStr("WEEKLY_BACKUP_DM").toLowerCase());
 
+// Pengingat jam mulai VC ke DM owner (notify/vcReminder.js). Default NYALA (butuh DISCORD_BOT_TOKEN + PRIORITY_PING_USER_ID);
+// isi "off" untuk mematikan.
+const VC_REMINDER_DM = !["off", "0", "false", "no"].includes(envStr("VC_REMINDER_DM").toLowerCase());
+
 const PORT = process.env.PORT || 3000;
 
 module.exports = {
@@ -282,5 +286,6 @@ module.exports = {
   DAILY_RECAP_COLOR,
   DASHBOARD_WEBHOOK_URL,
   WEEKLY_BACKUP_DM,
+  VC_REMINDER_DM,
   PORT,
 };

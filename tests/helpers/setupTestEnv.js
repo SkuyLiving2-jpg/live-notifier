@@ -50,5 +50,6 @@ process.env.DASHBOARD_WEBHOOK_URL = "";
 // Backup mingguan ke DM owner dimatikan di semua test (kalau tidak, test yang memasang client palsu + PRIORITY_PING_USER_ID
 // dan menjalankan siklus polling ikut menghitung DM backup). tests/backupDm.test.js menyalakannya sendiri sebelum config dimuat.
 process.env.WEEKLY_BACKUP_DM = "off";
+process.env.VC_REMINDER_DM = "off";
 
 module.exports = { tempCacheDir };
