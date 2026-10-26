@@ -717,6 +717,42 @@ test("POST /api/repair-live-history - dryRun:true cuma preview, gak beneran ngub
   }
 });
 
+test("POST /api/repair-live-history & backfill - body tanpa dryRun = pratinjau saja (default aman, sama seperti restore)", async () => {
+  const startFn = freshStartServerForBackfillTest();
+  const { recordLiveEnded } = require("../src/storage/dailyLog");
+  const nowSec = Math.floor(Date.now() / 1000);
+  recordLiveEnded("Ngaco", "jkt48_default_ngaco", new Date((nowSec - 122 * 60 * 60) * 1000), new Date(nowSec * 1000), null);
+
+  const server = await startTestServer(startFn);
+  try {
+    const { port } = server.address();
+    const post = async (path, body) => {
+      const { timestamp, signature } = sign(body);
+      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature, "Content-Type": "application/json" },
+        body,
+      });
+      return res.json();
+    };
+    for (const body of ["", "{}", "[]"]) {
+      const repair = await post("/api/repair-live-history", body);
+      assert.equal(repair.dryRun, true, `body "${body}"`);
+      assert.equal(repair.liveCountRebuilt, false);
+    }
+    const backfill = await post("/api/backfill-live-history", JSON.stringify({ sessions: [] }));
+    assert.equal(backfill.dryRun, true);
+
+    const { timestamp, signature } = sign("");
+    const backup = await (
+      await fetch(`http://127.0.0.1:${port}/api/backup`, { headers: { "X-Api-Timestamp": timestamp, "X-Api-Signature": signature } })
+    ).json();
+    assert.equal(backup.dailyLog.sessions.length, 1, "tanpa dryRun:false eksplisit tidak ada yang dihapus");
+  } finally {
+    server.close();
+  }
+});
+
 test("POST /api/repair-live-history - dryRun:false beneran buang sesi/entry durasi implausible, dan rebuild live-count dari sisanya", async () => {
   const startFn = freshStartServerForBackfillTest();
   const { recordLiveEnded } = require("../src/storage/dailyLog");

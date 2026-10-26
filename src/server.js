@@ -315,7 +315,7 @@ function handleBackfillLiveHistory(req, res, body) {
     endedAtByUsername.set(s.username, list);
   }
 
-  const dryRun = Boolean(payload.dryRun);
+  const dryRun = payload.dryRun !== false; // default AMAN (sama seperti restore): menulis butuh dryRun:false yang eksplisit
   let durationHistoryBackfilled = 0;
   if (!dryRun) {
     for (const s of accepted) {
@@ -391,7 +391,7 @@ function handleRepairLiveHistory(req, res, body) {
     res.end(JSON.stringify({ error: "Body bukan JSON valid" }));
     return;
   }
-  const dryRun = Boolean(payload?.dryRun);
+  const dryRun = payload?.dryRun !== false; // default AMAN (sama seperti restore): menulis butuh dryRun:false yang eksplisit
 
   const isImplausible = (durationMs) => !(durationMs > 0) || durationMs > MAX_PLAUSIBLE_LIVE_DURATION_MS;
 
