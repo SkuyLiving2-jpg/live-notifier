@@ -1,5 +1,5 @@
 const { fetchAllLivestreams, isJkt48Member } = require("./idnApi");
-const { activeLives, saveActiveLives } = require("./storage/activeLives");
+const { activeLives, saveActiveLives, ENDED_GRACE_POLLS } = require("./storage/activeLives");
 const { loadDurationHistory, recordLiveDuration } = require("./storage/durationHistory");
 const { recordLiveEnded } = require("./storage/dailyLog");
 const { recordLiveCompleted } = require("./storage/liveCount");
@@ -45,8 +45,13 @@ const { POLL_INTERVAL_MS, MAX_PLAUSIBLE_LIVE_DURATION_MS } = require("./config")
 // siklus = harus absen 2x BERTURUT-TURUT baru dianggap beneran selesai -
 // cukup buat nyaring glitch 1 siklus, tapi gak nunda notif "selesai" yang
 // beneran kelamaan (paling lama satu siklus tambahan lebih lambat dari
-// sebelumnya).
-const ENDED_GRACE_POLLS = 2;
+// sebelumnya). Konstantanya sendiri ada di storage/activeLives.js (daftar "lagi live" juga memakainya).
+
+// Batas menyerah kirim notif "selesai": notif yang gagal diulang tiap siklus, TAPI webhook yang rusak permanen
+// (dihapus, token dicabut) bikin entri nyangkut di activeLives selamanya - status bot/dashboard menampilkan
+// member yang sudah lama selesai sebagai live, dan live BARU member itu tidak pernah dinotif (dikira sesi lama).
+// Setelah ~15 menit (45 siklus x 20 dtk) absen terus-menerus, sesi tetap ditutup walau notif "selesai" gagal.
+const END_NOTIF_GIVE_UP_POLLS = 45;
 
 // Polling IDN yang gagal itu cuma masuk log - kalau IDN berubah skema atau
 // down lama, bot DIAM-DIAM berhenti nyium live baru dan gak ada yang tau
@@ -282,20 +287,28 @@ async function processEndedLives(currentLiveUsernames, durationHistory) {
     const terkirim = await sendDiscordNotif(memberData.name, memberData.username, memberData.slug, "end", memberData.imageUrl);
     if (terkirim) {
       await recordCompletedSession(username, memberData, durationHistory);
+    } else if (memberData.missingStreak >= END_NOTIF_GIVE_UP_POLLS) {
+      console.error(
+        `Notif selesai ${memberData.name} gagal terus ${memberData.missingStreak} siklus - sesi ditutup tanpa notif biar gak nyangkut sebagai "live".`,
+      );
+      await recordCompletedSession(username, memberData, durationHistory);
+    } else {
+      saveActiveLives(); // gagal kirim: entri dipertahankan (dicoba lagi siklus berikutnya) - simpan missingStreak-nya biar lanjut dihitung setelah restart
     }
-    // kalau gagal kirim, sengaja nggak dihapus dari cache biar dicoba lagi di polling berikutnya
   }
 }
 
 // Pekerjaan berkala yang dicek tiap siklus (rekap, heads-up, ringkasan, dashboard, status bot). Masing-masing
 // memutuskan sendiri apakah sudah waktunya.
 async function runPeriodicJobs() {
-  await maybeSendDailyRecap();
-  await maybeSendWeeklyRecap();
-  await maybeSendMonthlyRecap();
-  await maybeSendScheduleDigest();
-  await maybeSendHeadsUpAlerts();
-  await maybeSendPublicHeadsUpAlerts();
+  // Tiap pekerjaan dibungkus safely: satu yang error TIDAK boleh membatalkan sisanya (dulu error di salah satunya
+  // memotong semua yang di bawahnya, termasuk dashboard).
+  await safely("Rekap harian", () => maybeSendDailyRecap());
+  await safely("Rekap mingguan", () => maybeSendWeeklyRecap());
+  await safely("Rekap bulanan", () => maybeSendMonthlyRecap());
+  await safely("Prediksi jadwal harian", () => maybeSendScheduleDigest());
+  await safely("Heads-up prioritas", () => maybeSendHeadsUpAlerts());
+  await safely("Heads-up publik", () => maybeSendPublicHeadsUpAlerts());
   await safely("Ringkasan mingguan oshi", () => maybeSendOshiDigests()); // DM Minggu malam
   await safely("Pengingat jam mulai VC", () => maybeSendVcReminders());
   await safely("Backup mingguan", () => maybeSendWeeklyBackup()); // salinan data di luar Railway (DM owner), 1x per 7 hari
@@ -304,11 +317,10 @@ async function runPeriodicJobs() {
   // (gak live sama sekali, bukan gara-gara baru selesai live) gak pernah ke-deteksi, dan lastAlertedStreak-nya
   // nyangkut permanen - milestone yang sama di streak BARU jadi ke-skip diem-diem. Murah - cuma nyisir entry
   // streak-alerts.json yang jumlahnya kecil, gak ada network.
-  await maybeCleanupBrokenStreaks();
+  await safely("Bersihkan streak putus", () => maybeCleanupBrokenStreaks());
   // Dashboard live - dipanggil PALING TERAKHIR, setelah member baru mulai live/udah selesai beres semua buat
   // siklus ini, biar roster yang direnderin reflect state FINAL siklus ini, bukan state di tengah-tengah proses.
-  await maybeUpdateDashboard();
-  await safely("Status bot", () => updateBotPresence()); // "Watching 🔴 Nala (live)" di daftar anggota
+  await safely("Dashboard live", () => maybeUpdateDashboard());
 }
 
 // Satu siklus polling: ambil daftar live dari IDN, proses yang baru/masih jalan/selesai, lalu jalankan
@@ -323,6 +335,10 @@ async function checkLiveMembers() {
 
     const currentLiveUsernames = await processCurrentLives(currentLives, durationHistory);
     await processEndedLives(currentLiveUsernames, durationHistory);
+    // Status bot ("Watching 🔴 Nala (live)" di daftar anggota) langsung setelah roster final, SEBELUM pekerjaan
+    // berkala: dulu dipanggil paling akhir, jadi rekap/dashboard yang lambat atau error membuat status telat
+    // atau tidak pernah berubah (menampilkan member yang sudah selesai).
+    await safely("Status bot", () => updateBotPresence());
     await runPeriodicJobs();
   } catch (error) {
     console.error("Gagal ngecek IDN Live:", error.message);

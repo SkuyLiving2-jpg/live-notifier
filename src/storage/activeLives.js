@@ -39,8 +39,20 @@ function saveActiveLives() {
   }
 }
 
+// Berapa siklus polling BERTURUT-TURUT member harus absen dari respons IDN sebelum dianggap selesai (siklus 1
+// cuma "mungkin glitch IDN", lihat monitor.js processEndedLives). Dipasang di sini karena daftar "lagi live"
+// (status bot, dashboard, "cok siapa live") juga perlu tahu kapan entri sudah pasti selesai.
+const ENDED_GRACE_POLLS = 2;
+
+// Entri yang absen >= ENDED_GRACE_POLLS siklus = SUDAH selesai, tinggal menunggu notif "selesai"-nya
+// berhasil terkirim baru dihapus dari activeLives. Kalau pengiriman itu macet (webhook bermasalah) entrinya
+// nyangkut berjam-jam - tanpa filter ini status bot/dashboard terus menampilkan member yang sudah selesai sebagai live.
+function isConfirmedEnded(entry) {
+  return (entry?.missingStreak || 0) >= ENDED_GRACE_POLLS;
+}
+
 function getSortedActiveLives() {
-  return [...activeLives.values()].sort((a, b) => new Date(a.liveAt) - new Date(b.liveAt));
+  return [...activeLives.values()].filter((entry) => !isConfirmedEnded(entry)).sort((a, b) => new Date(a.liveAt) - new Date(b.liveAt));
 }
 
 // Nama akun IDN biasanya "Nala JKT48" atau "Piya | Karafuru Idol Group" -
@@ -67,4 +79,4 @@ function findMemberByNameFragment(fragment) {
   return null;
 }
 
-module.exports = { activeLives, saveActiveLives, getSortedActiveLives, findMemberByNameFragment };
+module.exports = { activeLives, saveActiveLives, getSortedActiveLives, findMemberByNameFragment, isConfirmedEnded, ENDED_GRACE_POLLS };
